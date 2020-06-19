@@ -64,7 +64,7 @@ Window::Window(OnWindowResize on_window_resize_)
     KeyTarget t;
     t.per_frame = [] (KeyArg a)
     {
-        printf("%f ms\n", a.dt);
+        printf("%fs\n", a.dt);
         return true;
     };
     add_key_target("forward", t);
@@ -108,6 +108,7 @@ bool Window::update_swap_buffers(int64_t min_ms)
     for (; dt_ms < min_ms; SDL_Delay(1)) {
         dt_ms = SDL_GetTicks() - previous_update_ms;
     }
+    previous_update_ms += dt_ms;
     float dt = 1/1000.f * dt_ms;
 
     // Swap buffers as promised.
