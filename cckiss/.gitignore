@@ -1,0 +1,14 @@
+#Unix backups
+*~
+*\#
+
+# cckiss compiler intermediate files
+*.i
+*.ii
+*-deps.txt
+*.s
+*.o
+
+# cckiss executables
+cckiss
+cckiss_EXAMPLE/main
