@@ -114,7 +114,8 @@ class Window
     // Make the OpenGL context of this window current.
     void gl_make_current();
 
-    // Name a KeyTarget for this window to call with key bindings.
+    // Provide a name for the given key target. Physical keys can then
+    // be bound to this name.
     void add_key_target(std::string target_name, KeyTarget key_target)
     {
         key_target_map.emplace(

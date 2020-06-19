@@ -61,6 +61,7 @@
 #include <utility>
 #include <vector>
 
+#include "chunk.hh"
 #include "window.hh"
 
 namespace myricube {
