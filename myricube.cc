@@ -61,6 +61,8 @@
 #include <utility>
 #include <vector>
 
+#include "window.hh"
+
 namespace myricube {
 
 // Absolute path of the executable, minus the -bin, plus -data/
@@ -102,7 +104,10 @@ int Main(std::vector<std::string> args)
     }
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
-    printf("%s\n", expand_filename("hello.txt").c_str());
+
+    Window window([] (int x, int y) { printf("%i %i\n", x, y); });
+    while (window.update_swap_buffers(10)) continue;
+
     return 0;
 }
 

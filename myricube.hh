@@ -8,6 +8,7 @@
 #include "glm/gtc/matrix_transform.hpp"
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <string>
 
@@ -47,6 +48,18 @@ inline bool is_real(glm::vec3 v)
 inline bool is_real(glm::dvec3 v)
 {
     return v - v == glm::dvec3(0, 0, 0);
+}
+
+inline void panic(const std::string& reason)
+{
+    fprintf(stderr, "%s\n", reason.c_str());
+    exit(1);
+}
+
+inline void panic(const char* a, const char* b)
+{
+    std::string reason = a + std::string("\n") + b;
+    panic(reason);
 }
 
 } // end namespace
