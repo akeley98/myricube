@@ -4,6 +4,8 @@
 
 namespace myricube {
 
+// For now I'm just indicating mouse buttons with negative numbers.
+// I'm using the X11 numbers I'm used to.
 int keycode_from_button_event(const SDL_MouseButtonEvent& e)
 {
     switch (e.button) {
@@ -37,7 +39,7 @@ Window::Window(OnWindowResize on_window_resize_)
     if (!gladLoadGL()) {
         panic("gladLoadGL failure", "gladLoadGL failure");
     }
-    
+
     // Temporary
     keycode_map[SDL_SCANCODE_W].emplace_back("forward");
     keycode_map[SDL_SCANCODE_W].emplace_back("woo");
@@ -45,7 +47,7 @@ Window::Window(OnWindowResize on_window_resize_)
     keycode_map[SDL_SCANCODE_E].emplace_back("toggle_woo");
     keycode_map[-1].emplace_back("left");
     keycode_map[-4].emplace_back("woo");
-    
+
     static bool woo_enabled;
     KeyTarget woo;
     woo.down = [] (KeyArg a)
@@ -60,16 +62,16 @@ Window::Window(OnWindowResize on_window_resize_)
         return true;
     };
     add_key_target("woo", woo);
-    
+
     KeyTarget t;
     t.per_frame = [] (KeyArg a)
     {
-        printf("%fs\n", a.dt);
+        printf("%fs [%f, %f]\n", a.dt, a.mouse_rel_x, a.mouse_rel_y);
         return true;
     };
     add_key_target("forward", t);
     add_key_target("left", t);
-    
+
     KeyTarget toggle;
     toggle.down = [] (KeyArg a)
     {
@@ -86,7 +88,7 @@ Window::Window(OnWindowResize on_window_resize_)
 
 Window::~Window()
 {
-    fprintf(stderr, "Maybe I should write a destructor...\n");
+    fprintf(stderr, "Maybe I should write a destructor for Window...\n");
 }
 
 void Window::set_title(const std::string& title)
@@ -189,9 +191,15 @@ void Window::handle_down(int keycode, float dt, float amount)
         }
     }
 
-    // If there is a successful bind, remember it in the pressed_keys
-    // dictionary.
-    if (target) pressed_keys_map[keycode] = target;
+    // As per the comment about the pressed_keys_map, only if there is
+    // a successful bind, remember it in the pressed_keys
+    // dictionary. Also, we have to reset the mouse_rel_x/y counter,
+    // which is slimily hidden in the KeyTarget as well.
+    if (target) {
+        target->mouse_rel_x = 0;
+        target->mouse_rel_y = 0;
+        pressed_keys_map[keycode] = target;
+    }
 }
 
 // Look in the pressed keys map for the correct "on key up" callback to
@@ -235,6 +243,7 @@ void Window::handle_mouse_up(const SDL_MouseButtonEvent& e)
 
 void Window::handle_mouse_wheel(const SDL_MouseWheelEvent& e)
 {
+    // Again I'm just using the Unix mouse numbers I know.
     if (e.x < 0) {
         handle_down(-7, 0, e.x);
         handle_up(-7);

@@ -24,7 +24,8 @@ using OnWindowResize = std::function<void(int,int)>;
 
 struct KeyArg;
 
-// Collection of callbacks that can be bound to a key.
+// Collection of callbacks that can be bound to a key. The KeyArg
+// gives additional information.
 struct KeyTarget
 {
     // Called when the key is pressed. Return value is "success", if
@@ -49,9 +50,17 @@ struct KeyTarget
 
 struct KeyArg
 {
+    // Indicates key repeat if true.
     bool repeat = false;
+    // When applicable, seconds since the previous frame (subject to
+    // the max_dt cap).
     float dt = 0.0f;
+    // Mystery amount, might be more useful later. Sort of intended to
+    // indicate the "strength" of this operation.
     float amount = 1.0f;
+
+    // Relative position of the mouse cursor compared to where it was
+    // when this key was first pressed.
     float mouse_rel_x = 0;
     float mouse_rel_y = 0;
 };

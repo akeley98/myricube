@@ -106,6 +106,7 @@ int Main(std::vector<std::string> args)
     data_directory += "-data/";
 
     Window window([] (int x, int y) { printf("%i %i\n", x, y); });
+    window.set_title("Myricube");
     while (window.update_swap_buffers(5)) continue;
 
     return 0;
