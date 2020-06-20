@@ -1,6 +1,7 @@
 #include "myricube.hh"
 
 #include <stdio.h>
+#include <utility>
 #include <vector>
 
 #include "chunk.hh"
@@ -43,10 +44,14 @@ struct ChunkMesh
     GLsizeiptr vbo_byte_offset;
 
     // Number of bytes reserved in the VBO for this chunk.
-    GLsizeiptr vbo_byte_reserved;
+    GLsizeiptr vbo_bytes_reserved;
 };
 
-// Handle for GPU resources for the mesh of one chunk group.
+// Handle for GPU resources for the mesh of one chunk group.  The
+// CPU-side state of this MeshEntry should always accurately describe
+// the state of the copy of this data on the GPU and GL. (i.e. if you
+// modify the data within, it is your responsibility to update the GPU
+// state at the same time).
 struct MeshEntry
 {
     // World ID and group coordinate of the chunk group this mesh is
@@ -69,10 +74,13 @@ struct MeshEntry
     // written to the vbo).
     GLsizeiptr bytes_used = 0;
 
+    MeshEntry() = default;
+
     // Get some RAII going.
     ~MeshEntry()
     {
         glDeleteBuffers(1, &vbo_name);
+        vbo_name = 0;
         vbo_bytes = 0;
         bytes_used = 0;
     }
@@ -104,6 +112,7 @@ class BaseStore
     // Camera::raycast_threshold or Camera::far_plane.
 
     Entry entry_array[N][N][N];
+
   public:
     // Return a pointer to the location that the Entry for the chunk
     // group with the given group coordinate would be, IF it exists.
@@ -111,9 +120,9 @@ class BaseStore
     // another group).
     Entry* cached_location(glm::ivec3 group_coord)
     {
-        uint32_t x = (uint32_t(group_coord.x) | 0x1000'0000) % N;
-        uint32_t y = (uint32_t(group_coord.y) | 0x1000'0000) % N;
-        uint32_t z = (uint32_t(group_coord.z) | 0x1000'0000) % N;
+        uint32_t x = (uint32_t(group_coord.x) ^ 0x1000'0000) % N;
+        uint32_t y = (uint32_t(group_coord.y) ^ 0x1000'0000) % N;
+        uint32_t z = (uint32_t(group_coord.z) ^ 0x1000'0000) % N;
         return &entry_array[z][y][x];
     }
 
@@ -121,7 +130,7 @@ class BaseStore
     // extracted from the given world. TODO document templates needed
     // for this to work.
     template <typename EntryFiller>
-    Entry* update(const PositionedChunkGroup& pcg, const VoxelWorld& world)
+    Entry* update(PositionedChunkGroup& pcg, VoxelWorld& world)
     {
         glm::ivec3 gc = group_coord(pcg);
         Entry* entry = cached_location(gc);
@@ -150,6 +159,16 @@ class BaseStore
 
 class MeshStore : BaseStore<MeshEntry, 16> { };
 
+MeshStore* new_mesh_store()
+{
+    return new MeshStore;
+}
+
+void delete_mesh_store(MeshStore* mesh_store)
+{
+    delete mesh_store;
+}
+
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
 class Renderer
@@ -165,7 +184,7 @@ class Renderer
     // the position of the chunk relative to the chunk group it is
     // in) because the mesh is defined to be in residue coordinates.
     //
-    // This is just messy.
+    // This is just ugly.
     //
     // TODO: consider properly handling edge cases with other chunks?
     // It's less easy than it seems, as the mesh can change not only
@@ -173,8 +192,8 @@ class Renderer
     // chunks that reveal previously hidden voxel faces. This may
     // not be worth it, so for now, I don't include a VoxelWorld
     // argument needed to make this happen.
-    std::vector<MeshVertex> make_mesh(const Chunk& chunk,
-                                      glm::ivec3 chunk_residue)
+    static std::vector<MeshVertex> make_mesh_verts(const Chunk& chunk,
+                                                   glm::ivec3 chunk_residue)
     {
         // Look up whether the voxel at the given coordinate
         // (relative to the lower-left of this chunk) is visible.
@@ -271,6 +290,182 @@ class Renderer
             }
         }
         return verts;
+    }
+
+    // Return the number of bytes that will be reserved in a VBO to
+    // store the given array of mesh vertices. This is not the number
+    // needed, but the number that will be allocated when we have a
+    // choice.
+    static GLsizeiptr verts_reserved_bytes(
+        const std::vector<MeshVertex>& verts)
+    {
+        return GLsizeiptr((128+verts.size()) * sizeof(verts[0]));
+    }
+
+    // Return the actual number of bytes needed to store the given
+    // mesh vertex array.
+    static GLsizeiptr verts_needed_bytes(
+        const std::vector<MeshVertex>& verts)
+    {
+        return GLsizeiptr(verts.size() * sizeof(verts[0]));
+    }
+
+    // Fill the given MeshEntry with mesh data for the given chunk
+    // group from the given world.
+    static void replace(PositionedChunkGroup& pcg,
+                        VoxelWorld& world,
+                        MeshEntry* entry)
+    {
+        entry->world_id = world.id();
+        entry->group_coord = group_coord(pcg);
+
+        GLsizeiptr bytes_to_alloc = 0;
+        for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+                for (int x = 0; x < edge_chunks; ++x) {
+                    ChunkMesh& mesh = entry->mesh_array[z][y][x];
+                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
+                    std::vector<MeshVertex> verts =
+                        make_mesh_verts(chunk, residue);
+                    chunk.mesh_dirty = false;
+                    auto reserved_bytes = verts_reserved_bytes(verts);
+
+                    mesh.vbo_byte_offset = bytes_to_alloc;
+                    bytes_to_alloc += reserved_bytes;
+                    mesh.vbo_bytes_reserved = reserved_bytes;
+                    mesh.verts = std::move(verts);
+                }
+            }
+        }
+
+        if (entry->vbo_name == 0 or bytes_to_alloc > entry->vbo_bytes) {
+            if (entry->vbo_name == 0) glGenBuffers(1, &entry->vbo_name);
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            glBufferData(GL_ARRAY_BUFFER, bytes_to_alloc,
+                         nullptr, GL_DYNAMIC_DRAW);
+            entry->vbo_bytes = bytes_to_alloc;
+            entry->bytes_used = bytes_to_alloc;
+            PANIC_IF_GL_ERROR;
+        }
+
+        // Parasitically depend on the MeshEntry update function.
+        // This is a bit dicey -- the main violation is that MeshEntry
+        // doesn't accurately describe GPU state now, as the actual
+        // data has not been uploaded yet.
+        update(pcg, world, entry, true);
+    }
+
+    // Update the given mesh entry with new data from dirty chunks.
+    // (The always_dirty flag is used to allow replace to depend on
+    // this function, if true, re-upload all chunks' data).
+    //
+    // Requires that the MeshEntry corresponds to the given chunk
+    // group of the given world.
+    static void update(PositionedChunkGroup& pcg,
+                       VoxelWorld& world,
+                       MeshEntry* entry,
+                       bool always_dirty = false) noexcept
+    {
+        assert(entry->world_id == world.id());
+        assert(entry->group_coord == group_coord(pcg));
+        assert(entry->vbo_name != 0);
+
+        // First step is to recompute the mesh vertices of any chunk
+        // that needs it. This is also when we find out if a
+        // reallocation needs to be done due to some mesh growing too
+        // much.
+        //
+        // Don't reset the chunk dirty flag yet since we'll need it to
+        // know if re-upload has to happen.
+        bool requires_reallocation = false;
+        GLsizeiptr bytes_to_alloc = 0; // Only used in case of realloc.
+        for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+                for (int x = 0; x < edge_chunks; ++x) {
+                    ChunkMesh& mesh = entry->mesh_array[z][y][x];
+                    std::vector<MeshVertex>& verts = mesh.verts;
+                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
+                    bool dirty = always_dirty | chunk.mesh_dirty;
+
+                    if (dirty)  {
+                        verts = make_mesh_verts(chunk, residue);
+                    }
+                    auto verts_bytes = verts_needed_bytes(verts);
+                    requires_reallocation |=
+                        (verts_bytes > mesh.vbo_bytes_reserved);
+                    bytes_to_alloc += verts_reserved_bytes(verts);
+                }
+            }
+        }
+
+        // Now actually upload the data. This depends on whether
+        // reallocation is needed or not. We also clear the mesh dirty
+        // flags at this time, now that we're actually uploading the
+        // mesh data.
+        if (requires_reallocation) {
+            // If realloc is required, resize the VBO and re-upload
+            // every chunk's mesh (I may find a more efficient way one
+            // day).
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            glBufferData(GL_ARRAY_BUFFER, bytes_to_alloc,
+                         nullptr, GL_DYNAMIC_DRAW);
+            entry->vbo_bytes = bytes_to_alloc;
+            entry->bytes_used = bytes_to_alloc;
+            PANIC_IF_GL_ERROR;
+
+            GLsizeiptr offset = 0;
+
+            for (int z = 0; z < edge_chunks; ++z) {
+                for (int y = 0; y < edge_chunks; ++y) {
+                    for (int x = 0; x < edge_chunks; ++x) {
+                        ChunkMesh& mesh = entry->mesh_array[z][y][x];
+                        std::vector<MeshVertex>& verts = mesh.verts;
+                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                        chunk.mesh_dirty = false;
+
+                        auto bytes_reserved = verts_reserved_bytes(verts);
+                        auto bytes_needed = verts_needed_bytes(verts);
+                        mesh.vbo_byte_offset = offset;
+                        mesh.vbo_bytes_reserved = bytes_reserved;
+
+                        glBufferSubData(GL_ARRAY_BUFFER, offset,
+                                        bytes_needed, verts.data());
+                        offset += bytes_reserved;
+                    }
+                }
+            }
+            PANIC_IF_GL_ERROR;
+        }
+        // No reallocation case. Just re-upload the dirty chunks,
+        // except when always_dirty is true.
+        else {
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            PANIC_IF_GL_ERROR;
+            for (int z = 0; z < edge_chunks; ++z) {
+                for (int y = 0; y < edge_chunks; ++y) {
+                    for (int x = 0; x < edge_chunks; ++x) {
+                        ChunkMesh& mesh = entry->mesh_array[z][y][x];
+                        std::vector<MeshVertex>& verts = mesh.verts;
+                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                        bool dirty = always_dirty | chunk.mesh_dirty;
+
+                        if (!dirty) continue;
+
+                        chunk.mesh_dirty = false;
+                        auto bytes_needed = verts_needed_bytes(verts);
+                        assert(mesh.vbo_byte_offset + bytes_needed <= entry->vbo_bytes);
+                        assert(bytes_needed <= mesh.vbo_bytes_reserved);
+                        glBufferSubData(GL_ARRAY_BUFFER,
+                                        mesh.vbo_byte_offset,
+                                        bytes_needed,
+                                        verts.data());
+                    }
+                }
+            }
+            PANIC_IF_GL_ERROR;
+        }
     }
 };
 

@@ -66,6 +66,7 @@
 #include "glm/gtc/matrix_transform.hpp"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <string>
@@ -117,6 +118,14 @@ inline void panic(const char* a, const char* b)
     std::string reason = a + std::string("\n") + b;
     panic(reason);
 }
+
+#define PANIC_IF_GL_ERROR do { \
+    if (GLenum PANIC_error = glGetError()) { \
+        char PANIC_msg[160]; \
+        snprintf(PANIC_msg, sizeof PANIC_msg, "line %i: code %u", __LINE__, (unsigned)PANIC_error); \
+        panic("OpenGL error", PANIC_msg); \
+    } \
+} while (0)
 
 } // end namespace
 
