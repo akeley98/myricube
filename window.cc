@@ -2,6 +2,10 @@
 
 #include <stdio.h>
 
+#include "glad/glad.h"
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_opengl.h"
+
 namespace myricube {
 
 // For now I'm just indicating mouse buttons with negative numbers.
@@ -34,6 +38,9 @@ Window::Window(OnWindowResize on_window_resize_)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
 
     context = SDL_GL_CreateContext(window);
+    if (!context) {
+        panic("OpenGL context creation error:", SDL_GetError());
+    }
     gl_make_current();
 
     if (!gladLoadGL()) {
@@ -144,6 +151,12 @@ bool Window::update_swap_buffers(int64_t min_ms)
     return !quit;
 }
 
+// Given that the key/mouse button with the specified key code has
+// been pressed, search for a successful bind for it and call the
+// KeyTarget for that bind. If successful, store the keycode and
+// activated KeyTarget in the pressed_keys_map so we will do the right
+// thing when the key is released (even if the key is re-bound in the
+// meantime).
 void Window::handle_down(int keycode, float dt, float amount)
 {
     auto it = pressed_keys_map.find(keycode);

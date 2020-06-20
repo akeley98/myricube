@@ -18,13 +18,27 @@ namespace myricube {
 class Camera
 {
     // Mysterious GPU storage managers along for the ride.
-    TextureStore* ptr_texture_store = nullptr;
+    RaycastStore* ptr_raycast_store = nullptr;
     MeshStore* ptr_mesh_store = nullptr;
 
     // Position of the eye.
     glm::dvec3 eye = glm::dvec3(0.0, 0.0, 0.0);
+
+    // Near and far plane for z-depth.
+    // Far plane influences the chunk render distance.
+    float near_plane = 0.1f, far_plane = 300.0f;
+
+    // (roughly) minimum distance from the camera that a chunk needs
+    // to be to switch from mesh to raycast graphics.
+    float raycast_threshold = 120.0f;
+
+    // TODO: Add setters for the near/raycast/far planes, but to do
+    // this safely I need to make MeshStore::N and RaycastStore::N
+    // configurable.
+
     // Horizontal and vertical angle camera is pointed in.
     float theta = 1.5707f, phi = 1.5707f;
+
     // Field of view (y direction), radians.
     float fovy_radians = 1.0f;
 
@@ -107,12 +121,12 @@ class Camera
     Camera(Camera&&) = delete;
 
     // GPU Storage functions.
-    TextureStore& get_texture_store()
+    RaycastStore& get_raycast_store()
     {
-        if (ptr_texture_store == nullptr) {
-            ptr_texture_store = new_texture_store();
+        if (ptr_raycast_store == nullptr) {
+            ptr_raycast_store = new_raycast_store();
         }
-        return *ptr_texture_store;
+        return *ptr_raycast_store;
     }
 
     MeshStore& get_mesh_store()
@@ -125,8 +139,8 @@ class Camera
 
     void unload_gpu_storage()
     {
-        delete_texture_store(ptr_texture_store);
-        ptr_texture_store = nullptr;
+        delete_raycast_store(ptr_raycast_store);
+        ptr_raycast_store = nullptr;
         delete_mesh_store(ptr_mesh_store);
         ptr_mesh_store = nullptr;
     }

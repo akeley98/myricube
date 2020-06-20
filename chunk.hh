@@ -17,6 +17,9 @@ class Renderer;
 class ChunkGroup;
 
 // A texel of the 3D texture used to represent the voxel grid on the GPU.
+//
+// This will probably become 8-bit palettized color if I really start
+// to optimize aggressively.
 struct VoxelTexel
 {
     uint8_t red = 0, green = 0, blue = 0, alpha = 0;
@@ -52,6 +55,13 @@ class Chunk
 
     // True when the texture needs to be re-uploaded to the GPU.
     bool texture_dirty = true;
+
+    // True when the mesh needs to be re-uploaded to the GPU.
+    bool mesh_dirty = true;
+
+    // As an optimization, consider moving the dirty flags to an array
+    // of flags in ChunkGroup, shared among all Chunks in the group.
+    // This would improve memory locality.
 
     // Array of voxels within the chunk, in [z][y][x] order (to match
     // GPU texture).
@@ -93,6 +103,7 @@ class Chunk
     {
         aabb_dirty = true;
         texture_dirty = true;
+        mesh_dirty = true;
 
         auto mask = chunk_size-1;
         auto x = mask & c.x;
@@ -155,17 +166,17 @@ class Chunk
 class ChunkGroup
 {
     friend class Renderer;
-    static constexpr int N = group_size / chunk_size;
+    static constexpr int edge_chunks = group_size / chunk_size;
 
     // Chunks within this chunk group, in [z][y][x] order.
-    Chunk chunk_array[N][N][N];
+    Chunk chunk_array[edge_chunks][edge_chunks][edge_chunks];
 
   public:
     // Assuming that the given coordinate is wihin this group, return
     // the voxel at the given coordinate.
     Voxel operator() (glm::ivec3 c) const
     {
-        auto mask = uint32_t(N-1);
+        auto mask = uint32_t(edge_chunks-1);
         auto x = (uint32_t(c.x) / chunk_size) & mask;
         auto y = (uint32_t(c.y) / chunk_size) & mask;
         auto z = (uint32_t(c.z) / chunk_size) & mask;
@@ -176,7 +187,7 @@ class ChunkGroup
     // this voxel is in the group).
     void set(glm::ivec3 c, Voxel v)
     {
-        auto mask = uint32_t(N-1);
+        auto mask = uint32_t(edge_chunks-1);
         auto x = (uint32_t(c.x) / chunk_size) & mask;
         auto y = (uint32_t(c.y) / chunk_size) & mask;
         auto z = (uint32_t(c.z) / chunk_size) & mask;
@@ -219,7 +230,7 @@ inline const ChunkGroup& group(const PositionedChunkGroup& g)
 
 // Get the voxel with the given coordinate, assuming the coordinate
 // is in the group referenced.
-Voxel get(const PositionedChunkGroup& g, glm::ivec3 c)
+inline Voxel get(const PositionedChunkGroup& g, glm::ivec3 c)
 {
     assert(group_coord(c) == group_coord(g));
     return group(g)(c);
@@ -227,7 +238,7 @@ Voxel get(const PositionedChunkGroup& g, glm::ivec3 c)
 
 // Set the voxel with the given coordinate, assuming the coordinate
 // is in the group referenced.
-void write(PositionedChunkGroup& g, glm::ivec3 c, Voxel v)
+inline void write(PositionedChunkGroup& g, glm::ivec3 c, Voxel v)
 {
     assert(group_coord(c) == group_coord(g));
     group(g).set(c, v);
@@ -236,6 +247,8 @@ void write(PositionedChunkGroup& g, glm::ivec3 c, Voxel v)
 // Entire world of voxels, built out of chunk groups.
 class VoxelWorld
 {
+    friend class Renderer;
+
     // Stupid hasher for ivec3.
     struct Hash
     {
@@ -265,6 +278,11 @@ class VoxelWorld
     }
 
     VoxelWorld(VoxelWorld&&) = delete;
+
+    uint64_t id() const
+    {
+        return unique_id;
+    }
 
     // Return voxel at the given coordinate. If a pointer to a
     // non-null hint pointer is provided, the chunk pointed to by the
