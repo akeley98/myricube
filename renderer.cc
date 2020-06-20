@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "app.hh"
 #include "camera.hh"
 #include "chunk.hh"
 #include "glad/glad.h"

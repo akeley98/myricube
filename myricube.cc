@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "app.hh"
 #include "camera.hh"
 #include "chunk.hh"
 #include "renderer.hh"
@@ -43,21 +44,9 @@ bool ends_with_dash_bin(const std::string& in)
            // sigh...
 }
 
-std::mt19937 rng;
+bool paused = false;
 
-void add_random_column(VoxelWorld& world)
-{
-    auto x = uint8_t(rng() % 128);
-    auto y = uint8_t(rng() % 128);
-    auto z = uint8_t(rng() % 128);
-    auto r = uint8_t(rng() % 256);
-    auto b = uint8_t(rng() % 256);
-    for (int i = 0; i < 86; ++i) {
-        world.set(glm::ivec3(x, y+i, z), Voxel(r,i*3,b));
-    }
-}
-
-void add_key_targets(Window& window, Camera& camera, VoxelWorld& world)
+void add_key_targets(Window& window, Camera& camera)
 {
     static float speed = 8.0f;
     static float sprint_mod = 1.0f;
@@ -146,13 +135,13 @@ void add_key_targets(Window& window, Camera& camera, VoxelWorld& world)
     window.add_key_target("vertical_scroll", vertical_scroll);
     window.add_key_target("horizontal_scroll", horizontal_scroll);
 
-    KeyTarget add_random_block;
-    add_random_block.down = [&] (KeyArg arg) -> bool
+    KeyTarget pause;
+    pause.down = [&] (KeyArg) -> bool
     {
-        add_random_column(world);
+        paused = !paused;
         return true;
     };
-    window.add_key_target("add_random_block", add_random_block);
+    window.add_key_target("pause", pause);
 }
 
 void bind_keys(Window& window)
@@ -174,7 +163,8 @@ void bind_keys(Window& window)
     window.bind_keycode(-6, "horizontal_scroll");
     window.bind_keycode(-7, "horizontal_scroll");
 
-    window.bind_keycode(SDL_SCANCODE_K, "add_random_block");
+    window.bind_keycode(SDL_SCANCODE_K, "do_it");
+    window.bind_keycode(SDL_SCANCODE_Z, "pause");
 }
 
 int Main(std::vector<std::string> args)
@@ -203,37 +193,20 @@ int Main(std::vector<std::string> args)
         camera.set_window_size(x, y);
     };
     Window window(on_window_resize);
-    add_key_targets(window, camera, world);
+    add_key_targets(window, camera);
     bind_keys(window);
 
-    Voxel red(180, 0, 100);
-    Voxel green(0, 130, 0);
-    Voxel blue(140, 200, 255);
-    Voxel yellow(255, 255, 0);
-
-    for (int i = 0; i < 100; i += 3) {
-        auto red_or_yellow = i % 30 == 0 ? yellow : red;
-        auto green_or_yellow = i % 30 == 0 ? yellow : green;
-        auto blue_or_yellow = i % 30 == 0 ? yellow : blue;
-        world.set(glm::ivec3(i,0,0), red_or_yellow);
-        world.set(glm::ivec3(-i,0,0), yellow);
-        world.set(glm::ivec3(0,i,0), green_or_yellow);
-        world.set(glm::ivec3(0,-i,0), yellow);
-        world.set(glm::ivec3(0,0,i), blue_or_yellow);
-        world.set(glm::ivec3(0,0,-i), yellow);
-    }
-
+    app_init(world, window);
     gl_first_time_setup();
     while (window.update_swap_buffers(5)) {
+        if (!paused) app_update(world);
         gl_clear();
         void draw_skybox(glm::mat4, glm::mat4);
         draw_skybox(camera.get_residue_view(), camera.get_projection());
         render_world_mesh_step(world, camera);
-        add_random_column(world);
         window.set_title("Myricube "
                          + std::to_string(window.get_fps()) + " FPS");
     }
-
     return 0;
 }
 
