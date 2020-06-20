@@ -33,6 +33,15 @@ struct Voxel
     uint8_t red = 0, green = 0, blue = 0;
     operator bool() const { return visible; }
 
+    Voxel() = default;
+    Voxel(uint8_t red_, uint8_t green_, uint8_t blue_)
+    {
+        visible = true;
+        red = red_;
+        green = green_;
+        blue = blue_;
+    }
+
     explicit operator VoxelTexel() const
     {
         VoxelTexel t;
@@ -335,7 +344,7 @@ class VoxelWorld
                 return;
             }
         }
-        auto it = group_map.try_emplace(c).first;
+        auto it = group_map.try_emplace(gc).first;
         write(*it, c, v);
         if (p_hint != nullptr) *p_hint = &*it;
     }

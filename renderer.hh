@@ -19,13 +19,21 @@ class VoxelWorld;
 
 // Render, to the current framebuffer, chunks near the camera using
 // the conventional mesh-based algorithm.
-void render_world_mesh_step(const VoxelWorld&, Camera&);
+void render_world_mesh_step(VoxelWorld&, Camera&);
 
 // Render, to the current framebuffer, chunks around the camera
 // using the AABB-raycast algorithm. Chunks that are near
 // enough to have been drawn using the mesh algorithm will
 // not be re-drawn.
-void render_world_raycast_step(const VoxelWorld&, Camera&);
+void render_world_raycast_step(VoxelWorld&, Camera&);
+
+// Wrapper for glViewport
+void on_window_resize(int x, int y);
+
+// glEnables and stuff.
+void gl_first_time_setup();
+
+void gl_clear();
 
 } // end namespace
 #endif /* !MYRICUBE_RENDERER_HH_ */

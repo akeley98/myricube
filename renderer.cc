@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "camera.hh"
 #include "chunk.hh"
 #include "renderer.hh"
 #include "glad/glad.h"
@@ -11,6 +12,52 @@
 namespace myricube {
 
 static constexpr int edge_chunks = group_size / chunk_size;
+
+// TODO: Maybe get some better code for compiling shaders? Load it
+// from a file?
+static GLuint make_program(const char* vs_code, const char* fs_code)
+{
+    static GLchar log[1024];
+    PANIC_IF_GL_ERROR;
+    GLuint program_id = glCreateProgram();
+    GLuint vs_id = glCreateShader(GL_VERTEX_SHADER);
+    GLuint fs_id = glCreateShader(GL_FRAGMENT_SHADER);
+
+    const GLchar* string_array[1];
+    string_array[0] = (GLchar*)vs_code;
+    glShaderSource(vs_id, 1, string_array, nullptr);
+    string_array[0] = (GLchar*)fs_code;
+    glShaderSource(fs_id, 1, string_array, nullptr);
+
+    glCompileShader(vs_id);
+    glCompileShader(fs_id);
+
+    PANIC_IF_GL_ERROR;
+
+    GLint okay = 0;
+    GLsizei length = 0;
+    const GLuint shader_id_array[2] = { vs_id, fs_id };
+    for (auto id : shader_id_array) {
+        glGetShaderiv(id, GL_COMPILE_STATUS, &okay);
+        if (okay) {
+            glAttachShader(program_id, id);
+        } else {
+            glGetShaderInfoLog(id, sizeof log, &length, log);
+            fprintf(stderr, "%s\n", id == vs_id ? vs_code : fs_code);
+            panic("Shader compilation error", log);
+        }
+    }
+
+    glLinkProgram(program_id);
+    glGetProgramiv(program_id, GL_LINK_STATUS, &okay);
+    if (!okay) {
+        glGetProgramInfoLog(program_id, sizeof log, &length, log);
+        panic("Shader link error", log);
+    }
+
+    PANIC_IF_GL_ERROR;
+    return program_id;
+}
 
 // Single vertex of the VBO for a chunk's mesh.
 struct MeshVertex
@@ -147,9 +194,9 @@ class BaseStore
         // Otherwise, we need to evict the current entry and repopulate it.
         fprintf(stderr, "Evicting MeshStore entry for chunk group "
                         "(%i %i %i) of world %li\n",
-                        int(entry->group_coordinate.x),
-                        int(entry->group_coordinate.y),
-                        int(entry->group_coordinate.z),
+                        int(entry->group_coord.x),
+                        int(entry->group_coord.y),
+                        int(entry->group_coord.z),
                         long(entry->world_id));
 
         EntryFiller::replace(pcg, world, entry);
@@ -157,17 +204,49 @@ class BaseStore
     }
 };
 
-class MeshStore : BaseStore<MeshEntry, 16> { };
+class MeshStore : public BaseStore<MeshEntry, 16> { };
 
-MeshStore* new_mesh_store()
-{
-    return new MeshStore;
-}
+#define BORDER_WIDTH_STR "0.1"
 
-void delete_mesh_store(MeshStore* mesh_store)
-{
-    delete mesh_store;
-}
+const char mesh_vs_source[] =
+"#version 330\n"
+"layout(location=0) in int packed_vertex;\n"
+"layout(location=1) in int packed_color;\n"
+"out vec3 color;\n"
+"out vec3 model_space_position_;\n"
+"uniform mat4 mvp_matrix;\n"
+"void main() {\n"
+    "float x = float(packed_vertex & 255);\n"
+    "float y = float((packed_vertex >> 8) & 255);\n"
+    "float z = float((packed_vertex >> 16) & 255);\n"
+    "vec4 model_space_position = vec4(x, y, z, 1);\n"
+    "gl_Position = mvp_matrix * model_space_position;\n"
+    "float red   = ((packed_color >> 16) & 255) * (1./255.);\n"
+    "float green = ((packed_color >> 8) & 255) * (1./255.);\n"
+    "float blue  = (packed_color & 255) * (1./255.);\n"
+    "color = vec3(red, green, blue);\n"
+    "model_space_position_ = model_space_position.xyz;\n"
+"}\n";
+
+auto packed_vertex_idx = 0;
+auto packed_color_idx = 1;
+
+const char mesh_fs_source[] =
+"#version 330\n"
+"in vec3 color;\n"
+"in vec3 model_space_position_;\n"
+"out vec4 out_color;\n"
+"void main() {\n"
+    "const float d = " BORDER_WIDTH_STR ";\n"
+    "float x = model_space_position_.x;\n"
+    "int x_border = (x - floor(x + d) < d) ? 1 : 0;\n"
+    "float y = model_space_position_.y;\n"
+    "int y_border = (y - floor(y + d) < d) ? 1 : 0;\n"
+    "float z = model_space_position_.z;\n"
+    "int z_border = (z - floor(z + d) < d) ? 1 : 0;\n"
+    "float scale = (x_border + y_border + z_border >= 2) ? 0.5 : 1.0;\n"
+    "out_color = vec4(color * scale, 1);\n"
+"}\n";
 
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
@@ -176,9 +255,9 @@ class Renderer
     Camera& camera;
     VoxelWorld& world;
   public:
-    Renderer(Camera& camera_, VoxelWorld& world_) :
+    Renderer(VoxelWorld& world_, Camera& camera_) :
         camera(camera_), world(world_) { }
-  private:
+
     // Given a chunk, make the mesh needed to render it. I also need
     // the residue coordinate of the lower-left of the chunk (i.e.
     // the position of the chunk relative to the chunk group it is
@@ -221,6 +300,8 @@ class Renderer
         {
             Voxel v = chunk(coord);
             if (!v.visible) return;
+
+            printf("%i %i %i\n", int(coord.x), int(coord.y), int(coord.z));
 
             auto r = v.red;
             auto g = v.green;
@@ -438,8 +519,7 @@ class Renderer
             }
             PANIC_IF_GL_ERROR;
         }
-        // No reallocation case. Just re-upload the dirty chunks,
-        // except when always_dirty is true.
+        // No reallocation case. Just re-upload the dirty chunks.
         else {
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
             PANIC_IF_GL_ERROR;
@@ -467,6 +547,134 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
     }
+
+    void render_world_mesh_step()
+    {
+        MeshStore& store = camera.get_mesh_store();
+        glm::mat4 residue_vp_matrix = camera.get_residue_vp();
+        glm::vec3 eye_residue;
+        glm::ivec3 eye_group;
+        camera.get_eye(&eye_group, &eye_residue);
+
+        static GLuint vao = 0;
+        static GLuint program_id;
+        static GLint mvp_matrix_idx = 0;
+
+        if (vao == 0) {
+            program_id = make_program(mesh_vs_source, mesh_fs_source);
+            mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+            PANIC_IF_GL_ERROR;
+        }
+
+        glBindVertexArray(vao);
+        glUseProgram(program_id);
+        PANIC_IF_GL_ERROR;
+
+        // TODO: Actually cull far-away chunks.
+        auto draw_chunk = [&] (Chunk&, ChunkMesh& mesh)
+        {
+            auto vertex_offset = mesh.vbo_byte_offset / sizeof (mesh.verts[0]);
+            auto vertex_count = mesh.verts.size();
+            if (vertex_count != 0) {
+                printf("vertex_offset %i\n", int(vertex_offset));
+            }
+            glDrawArrays(GL_TRIANGLES, vertex_offset, vertex_count);
+        };
+
+        auto draw_group = [&] (PositionedChunkGroup& pcg)
+        {
+            MeshEntry* entry = store.update<Renderer>(pcg, world);
+
+            assert(entry->vbo_name != 0);
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+
+            // TODO: Maybe make one VAO per MeshEntry?
+            glVertexAttribIPointer(
+                packed_vertex_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(MeshVertex),
+                (void*) offsetof(MeshVertex, packed_vertex));
+            glEnableVertexAttribArray(packed_vertex_idx);
+
+            glVertexAttribIPointer(
+                packed_color_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(MeshVertex),
+                (void*) offsetof(MeshVertex, packed_color));
+            glEnableVertexAttribArray(packed_color_idx);
+            PANIC_IF_GL_ERROR;
+
+            // The view matrix only takes into account the eye's
+            // residue coordinate, so the model position of the group
+            // actually needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            glm::mat4 mvp = residue_vp_matrix * m;
+            glUniformMatrix4fv(mvp_matrix_idx, 1, 0, &mvp[0][0]);
+
+            for (int z = 0; z < edge_chunks; ++z) {
+                for (int y = 0; y < edge_chunks; ++y) {
+                    for (int x = 0; x < edge_chunks; ++x) {
+                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                        draw_chunk(chunk, entry->mesh_array[z][y][x]);
+                        PANIC_IF_GL_ERROR;
+                    }
+                }
+            }
+        };
+
+        // TODO: Again, need to cull chunks.
+        for (PositionedChunkGroup& pcg : world.group_map) {
+            draw_group(pcg);
+        }
+    }
 };
+
+void render_world_mesh_step(VoxelWorld& world, Camera& camera)
+{
+    Renderer(world, camera).render_world_mesh_step();
+}
+
+MeshStore* new_mesh_store()
+{
+    return new MeshStore;
+}
+
+void delete_mesh_store(MeshStore* mesh_store)
+{
+    delete mesh_store;
+}
+
+// TODO
+RaycastStore* new_raycast_store()
+{
+    return nullptr;
+}
+
+void delete_raycast_store(RaycastStore*) { }
+
+void on_window_resize(int x, int y)
+{
+    glViewport(0, 0, x, y);
+    PANIC_IF_GL_ERROR;
+};
+
+void gl_first_time_setup()
+{
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glClearColor(0.3, 0.3, 0.3, 1);
+}
+
+void gl_clear()
+{
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+}
 
 } // end namespace

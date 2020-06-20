@@ -146,9 +146,24 @@ class Camera
     }
 
     // Getters and setters for user-specified camera data.
-    glm::dvec3 get_eye()
+    glm::dvec3 get_eye() const
     {
         return eye;
+    }
+
+    float get_near_plane() const
+    {
+        return near_plane;
+    }
+
+    float get_far_plane() const
+    {
+        return far_plane;
+    }
+
+    float get_raycast_threshold() const
+    {
+        return raycast_threshold;
     }
 
     void set_eye(glm::dvec3 in)
@@ -163,7 +178,7 @@ class Camera
         set_eye(eye + deye);
     }
 
-    float get_theta()
+    float get_theta() const
     {
         return theta;
     }
@@ -180,7 +195,7 @@ class Camera
         set_theta(theta + dtheta);
     }
 
-    float get_phi()
+    float get_phi() const
     {
         return phi;
     }
@@ -197,7 +212,7 @@ class Camera
         set_phi(phi + dphi);
     }
 
-    float get_fovy_radians()
+    float get_fovy_radians() const
     {
         return fovy_radians;
     }

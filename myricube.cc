@@ -2,6 +2,7 @@
 
 #include "myricube.hh"
 
+#include <assert.h>
 #include <stdio.h>
 
 #include <stdexcept>
@@ -9,7 +10,9 @@
 #include <utility>
 #include <vector>
 
+#include "camera.hh"
 #include "chunk.hh"
+#include "renderer.hh"
 #include "window.hh"
 
 namespace myricube {
@@ -54,9 +57,27 @@ int Main(std::vector<std::string> args)
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
 
-    Window window([] (int x, int y) { printf("%i %i\n", x, y); });
+    Window window(on_window_resize);
     window.set_title("Myricube");
-    while (window.update_swap_buffers(5)) continue;
+
+    VoxelWorld world;
+    Camera camera;
+    Voxel red(255, 0, 0);
+
+    for (int i = 2; i < 20; i += 3) {
+        world.set(glm::ivec3(i,0,0), red);
+        world.set(glm::ivec3(-i,0,0), red);
+        world.set(glm::ivec3(0,i,0), red);
+        world.set(glm::ivec3(0,-i,0), red);
+        world.set(glm::ivec3(0,0,i), red);
+        world.set(glm::ivec3(0,0,-i), red);
+    }
+
+    gl_first_time_setup();
+    while (window.update_swap_buffers(5)) {
+        gl_clear();
+        render_world_mesh_step(world, camera);
+    }
 
     return 0;
 }
