@@ -28,7 +28,7 @@ void render_world_mesh_step(VoxelWorld&, Camera&);
 void render_world_raycast_step(VoxelWorld&, Camera&);
 
 // Wrapper for glViewport
-void on_window_resize(int x, int y);
+void viewport(int x, int y);
 
 // glEnables and stuff.
 void gl_first_time_setup();

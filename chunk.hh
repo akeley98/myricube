@@ -215,10 +215,10 @@ using PositionedChunkGroup = std::pair<const glm::ivec3, ChunkGroup>;
 // it is within.
 inline glm::ivec3 group_coord(glm::ivec3 voxel_coord)
 {
-    return glm::ivec3(
-        int32_t(uint32_t(voxel_coord.x) / group_size),
-        int32_t(uint32_t(voxel_coord.y) / group_size),
-        int32_t(uint32_t(voxel_coord.z) / group_size));
+    // Requires arithmetic shift.
+    return glm::ivec3(voxel_coord.x >> group_shift,
+                      voxel_coord.y >> group_shift,
+                      voxel_coord.z >> group_shift);
 }
 
 // Convenience / understandability getters for positioned chunk groups.

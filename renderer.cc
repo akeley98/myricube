@@ -6,8 +6,9 @@
 
 #include "camera.hh"
 #include "chunk.hh"
-#include "renderer.hh"
 #include "glad/glad.h"
+#include "renderer.hh"
+#include "SDL2/SDL.h"
 
 namespace myricube {
 
@@ -75,8 +76,8 @@ struct MeshVertex
     {
         static_assert(group_size <= 255,
                       "group too big for 8-bit unsigned coordinates.");
-        packed_color = x | uint32_t(y) << 8 | uint32_t(z) << 16;
-        packed_vertex = blue | uint32_t(green) << 8 | uint32_t(red) << 16;
+        packed_vertex = x | uint32_t(y) << 8 | uint32_t(z) << 16;
+        packed_color = blue | uint32_t(green) << 8 | uint32_t(red) << 16;
     }
 };
 
@@ -301,7 +302,7 @@ class Renderer
             Voxel v = chunk(coord);
             if (!v.visible) return;
 
-            printf("%i %i %i\n", int(coord.x), int(coord.y), int(coord.z));
+            // printf("%i %i %i\n", int(coord.x), int(coord.y), int(coord.z));
 
             auto r = v.red;
             auto g = v.green;
@@ -370,6 +371,15 @@ class Renderer
                 }
             }
         }
+        // for (MeshVertex mv : verts) {
+        //     float x = float(mv.packed_vertex & 255);
+        //     float y = float((mv.packed_vertex >> 8) & 255);
+        //     float z = float((mv.packed_vertex >> 16) & 255);
+        //     float red   = ((mv.packed_color >> 16) & 255) * (1./255.);
+        //     float green = ((mv.packed_color >> 8) & 255) * (1./255.);
+        //     float blue  = (mv.packed_color & 255) * (1./255.);
+        //     printf("%f %f %f   %f %f %f\n", x, y, z, red, green, blue);
+        // }
         return verts;
     }
 
@@ -446,7 +456,7 @@ class Renderer
     static void update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
                        MeshEntry* entry,
-                       bool always_dirty = false) noexcept
+                       bool always_dirty = false)
     {
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
@@ -548,7 +558,7 @@ class Renderer
         }
     }
 
-    void render_world_mesh_step()
+    void render_world_mesh_step() noexcept
     {
         MeshStore& store = camera.get_mesh_store();
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
@@ -558,11 +568,12 @@ class Renderer
 
         static GLuint vao = 0;
         static GLuint program_id;
-        static GLint mvp_matrix_idx = 0;
+        static GLint mvp_matrix_idx;
 
         if (vao == 0) {
             program_id = make_program(mesh_vs_source, mesh_fs_source);
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
+            assert(mvp_matrix_idx >= 0);
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
@@ -577,9 +588,6 @@ class Renderer
         {
             auto vertex_offset = mesh.vbo_byte_offset / sizeof (mesh.verts[0]);
             auto vertex_count = mesh.verts.size();
-            if (vertex_count != 0) {
-                printf("vertex_offset %i\n", int(vertex_offset));
-            }
             glDrawArrays(GL_TRIANGLES, vertex_offset, vertex_count);
         };
 
@@ -658,7 +666,7 @@ RaycastStore* new_raycast_store()
 
 void delete_raycast_store(RaycastStore*) { }
 
-void on_window_resize(int x, int y)
+void viewport(int x, int y)
 {
     glViewport(0, 0, x, y);
     PANIC_IF_GL_ERROR;
@@ -675,6 +683,173 @@ void gl_first_time_setup()
 void gl_clear()
 {
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+}
+
+// XXX
+void load_cubemap_face(GLenum face, const char* filename)
+{
+    std::string full_filename = expand_filename(filename);
+    SDL_Surface* surface = SDL_LoadBMP(full_filename.c_str());
+    if (surface == nullptr) {
+        panic(SDL_GetError(), full_filename.c_str());
+    }
+    if (surface->w != 1024 || surface->h != 1024) {
+        panic("Expected 1024x1024 texture", full_filename.c_str());
+    }
+    if (surface->format->format != SDL_PIXELFORMAT_BGR24) {
+        fprintf(stderr, "%i\n", (int)surface->format->format);
+        panic("Expected 24-bit BGR bitmap", full_filename.c_str());
+    }
+
+    glTexImage2D(face, 0, GL_RGB, 1024, 1024, 0,
+                  GL_BGR, GL_UNSIGNED_BYTE, surface->pixels);
+
+    SDL_FreeSurface(surface);
+}
+
+GLuint load_cubemap()
+{
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, id);
+
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_LOD, 0);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LOD, 8);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, 8);
+
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, "left.bmp");
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_X, "right.bmp");
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, "bottom.bmp");
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Y, "top.bmp");
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, "back.bmp");
+    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Z, "front.bmp");
+
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+    PANIC_IF_GL_ERROR;
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    return id;
+}
+
+static const char skybox_vs_source[] =
+"#version 330\n"
+"layout(location=0) in vec3 position;\n"
+"out vec3 texture_coordinate;\n"
+"uniform mat4 view_matrix;\n"
+"uniform mat4 proj_matrix;\n"
+"void main() {\n"
+    "vec4 v = view_matrix * vec4(400*position, 0.0);\n"
+    "gl_Position = proj_matrix * vec4(v.xyz, 1);\n"
+    "texture_coordinate = position;\n"
+"}\n";
+
+static const char skybox_fs_source[] =
+"#version 330\n"
+"in vec3 texture_coordinate;\n"
+"out vec4 color;\n"
+"uniform samplerCube cubemap;\n"
+"void main() {\n"
+    "vec4 c = texture(cubemap, texture_coordinate);\n"
+    "c.a = 1.0;\n"
+    "color = c;\n"
+    "gl_FragDepth = 0.99999;\n"
+"}\n";
+
+static const float skybox_vertices[24] = {
+    -1, 1, 1,
+    -1, -1, 1,
+    1, -1, 1,
+    1, 1, 1,
+    -1, 1, -1,
+    -1, -1, -1,
+    1, -1, -1,
+    1, 1, -1,
+};
+
+static const GLushort skybox_elements[36] = {
+    7, 4, 5, 7, 5, 6,
+    1, 0, 3, 1, 3, 2,
+    5, 1, 2, 5, 2, 6,
+    4, 7, 3, 4, 3, 0,
+    0, 1, 5, 0, 5, 4,
+    2, 3, 7, 2, 7, 6
+};
+
+void draw_skybox(
+    glm::mat4 view_matrix, glm::mat4 proj_matrix)
+{
+    static bool cubemap_loaded = false;
+    static GLuint cubemap_texture_id;
+    if (!cubemap_loaded) {
+        cubemap_texture_id = load_cubemap();
+        cubemap_loaded = true;
+    }
+
+    static GLuint vao = 0;
+    static GLuint program_id;
+    static GLuint vertex_buffer_id;
+    static GLuint element_buffer_id;
+    static GLint view_matrix_id;
+    static GLint proj_matrix_id;
+    static GLint cubemap_uniform_id;
+
+    if (vao == 0) {
+        program_id = make_program(skybox_vs_source, skybox_fs_source);
+        view_matrix_id = glGetUniformLocation(program_id, "view_matrix");
+        proj_matrix_id = glGetUniformLocation(program_id, "proj_matrix");
+        cubemap_uniform_id = glGetUniformLocation(program_id, "cubemap");
+
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+
+        glGenBuffers(1, &vertex_buffer_id);
+        glGenBuffers(1, &element_buffer_id);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
+        glBufferData(
+            GL_ELEMENT_ARRAY_BUFFER, sizeof skybox_elements,
+            skybox_elements, GL_STATIC_DRAW
+        );
+
+        glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
+        glBufferData(
+            GL_ARRAY_BUFFER, sizeof skybox_vertices,
+            skybox_vertices, GL_STATIC_DRAW
+        );
+        glVertexAttribPointer(
+            0,
+            3,
+            GL_FLOAT,
+            false,
+            sizeof(float) * 3,
+            (void*)0
+        );
+        glEnableVertexAttribArray(0);
+        PANIC_IF_GL_ERROR;
+    }
+
+    glUseProgram(program_id);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture_id);
+    glUniform1i(cubemap_uniform_id, 0);
+
+    glUniformMatrix4fv(view_matrix_id, 1, 0, &view_matrix[0][0]);
+    glUniformMatrix4fv(proj_matrix_id, 1, 0, &proj_matrix[0][0]);
+
+    glBindVertexArray(vao);
+    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, (void*)0);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    PANIC_IF_GL_ERROR;
 }
 
 } // end namespace

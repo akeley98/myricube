@@ -121,6 +121,12 @@ class Window
             std::move(key_target));
     }
 
+    // Bind this keycode to the key target with the given name.
+    void bind_keycode(int keycode, std::string target_name)
+    {
+        keycode_map[keycode].emplace_back(std::move(target_name));
+    }
+
     // Update events and swap OpenGL buffers. Return true iff the user
     // hasn't ordered the window closed yet. Parameter is the minimum
     // number of milliseconds between this call's completion and

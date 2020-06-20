@@ -46,51 +46,6 @@ Window::Window(OnWindowResize on_window_resize_)
     if (!gladLoadGL()) {
         panic("gladLoadGL failure", "gladLoadGL failure");
     }
-
-    // Temporary
-    keycode_map[SDL_SCANCODE_W].emplace_back("forward");
-    keycode_map[SDL_SCANCODE_W].emplace_back("woo");
-    keycode_map[SDL_SCANCODE_A].emplace_back("left");
-    keycode_map[SDL_SCANCODE_E].emplace_back("toggle_woo");
-    keycode_map[-1].emplace_back("left");
-    keycode_map[-4].emplace_back("woo");
-
-    static bool woo_enabled;
-    KeyTarget woo;
-    woo.down = [] (KeyArg a)
-    {
-        if (!woo_enabled) return false;
-        printf(a.repeat ? "repeat\n" : "press\n");
-        return true;
-    };
-    woo.up = [] (KeyArg)
-    {
-        printf("up\n");
-        return true;
-    };
-    add_key_target("woo", woo);
-
-    KeyTarget t;
-    t.per_frame = [] (KeyArg a)
-    {
-        printf("%fs [%f, %f]\n", a.dt, a.mouse_rel_x, a.mouse_rel_y);
-        return true;
-    };
-    add_key_target("forward", t);
-    add_key_target("left", t);
-
-    KeyTarget toggle;
-    toggle.down = [] (KeyArg a)
-    {
-        if (a.repeat) {
-            printf("Ignoring repeat\n");
-            return false;
-        }
-        woo_enabled = !woo_enabled;
-        printf("woo %s.\n", woo_enabled ? "enabled" : "disabled");
-        return true;
-    };
-    add_key_target("toggle_woo", toggle);
 }
 
 Window::~Window()

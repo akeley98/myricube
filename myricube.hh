@@ -77,12 +77,18 @@ namespace myricube {
 constexpr int group_size = 64;
 constexpr int chunk_size = 16;
 
+// Bit shift counts of above.
+constexpr int group_shift = 6;
+constexpr int chunk_shift = 4;
+
 static_assert((group_size & (group_size-1)) == 0,
     "group_size should be a power of 2.");
 static_assert((chunk_size & (chunk_size-1)) == 0,
     "chunk_size should be a power of 2.");
 static_assert((group_size % chunk_size) == 0,
     "There must be an integer number of chunks per chunk group.");
+static_assert((1 << chunk_shift) == chunk_size, "chunk_shift is wrong");
+static_assert((1 << group_shift) == group_size, "group_shift is wrong");
 
 // Name a file that is in the data directory, and return its absolute path.
 std::string expand_filename(const std::string& in);

@@ -26,7 +26,7 @@ class Camera
 
     // Near and far plane for z-depth.
     // Far plane influences the chunk render distance.
-    float near_plane = 0.1f, far_plane = 300.0f;
+    float near_plane = 0.1f, far_plane = 1000.0f;
 
     // (roughly) minimum distance from the camera that a chunk needs
     // to be to switch from mesh to raycast graphics.
@@ -89,7 +89,7 @@ class Camera
 
         forward_normal_vector = glm::vec3(
             sinf(phi) * cosf(theta),
-            cosf(theta),
+            cosf(phi),
             sinf(phi) * sinf(theta));
 
         right_vector = glm::normalize(
@@ -204,7 +204,7 @@ class Camera
     {
         assert(is_real(in));
         dirty = true;
-        phi = glm::clamp(in, 0.0f, 3.1415926f);
+        phi = glm::clamp(in, 0.01f, 3.14f);
     }
 
     void inc_phi(float dphi)

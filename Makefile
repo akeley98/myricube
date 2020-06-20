@@ -3,7 +3,7 @@ default: run
 CXX=clang++
 CC=clang
 CPPFLAGS=-I ./glad/include
-CXXFLAGS=-Wall -Wextra -O3 -g -std=c++2a
+CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g
 
 -include cckiss/Makefile
