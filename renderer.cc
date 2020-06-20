@@ -205,7 +205,7 @@ class BaseStore
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 16> { };
+class MeshStore : public BaseStore<MeshEntry, 5> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -590,8 +590,9 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         // TODO: Actually cull far-away chunks.
-        auto draw_chunk = [&] (Chunk&, ChunkMesh& mesh)
+        auto draw_chunk = [&] (Chunk& chunk, ChunkMesh& mesh)
         {
+            if (chunk.total_visible == 0) return;
             auto vertex_offset = mesh.vbo_byte_offset / sizeof (mesh.verts[0]);
             auto vertex_count = mesh.verts.size();
             glDrawArrays(GL_TRIANGLES, vertex_offset, vertex_count);

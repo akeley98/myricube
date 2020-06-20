@@ -52,7 +52,7 @@ void add_random_column(VoxelWorld& world)
     auto z = uint8_t(rng() % 128);
     auto r = uint8_t(rng() % 256);
     auto b = uint8_t(rng() % 256);
-    for (int i = 0; i < 80; ++i) {
+    for (int i = 0; i < 86; ++i) {
         world.set(glm::ivec3(x, y+i, z), Voxel(r,i*3,b));
     }
 }
