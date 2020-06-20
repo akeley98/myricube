@@ -4,7 +4,6 @@
 #include <utility>
 #include <vector>
 
-#include "app.hh"
 #include "camera.hh"
 #include "chunk.hh"
 #include "glad/glad.h"
@@ -194,13 +193,15 @@ class BaseStore
         }
 
         // Otherwise, we need to evict the current entry and repopulate it.
-        fprintf(stderr, "Evicting MeshStore entry for chunk group "
-                        "(%i %i %i) of world %li\n",
-                        int(entry->group_coord.x),
-                        int(entry->group_coord.y),
-                        int(entry->group_coord.z),
-                        long(entry->world_id));
+        if (long(entry->world_id) >= 0) {
+            fprintf(stderr, "Evicting MeshStore entry for chunk group "
+                            "(%i %i %i) of world %li\n",
+                            int(entry->group_coord.x),
+                            int(entry->group_coord.y),
+                            int(entry->group_coord.z),
+                            long(entry->world_id));
 
+        }
         EntryFiller::replace(pcg, world, entry);
         return entry;
     }
