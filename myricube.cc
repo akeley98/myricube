@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -42,7 +43,21 @@ bool ends_with_dash_bin(const std::string& in)
            // sigh...
 }
 
-void add_key_targets(Window& window, Camera& camera)
+std::mt19937 rng;
+
+void add_random_column(VoxelWorld& world)
+{
+    auto x = uint8_t(rng() % 128);
+    auto y = uint8_t(rng() % 128);
+    auto z = uint8_t(rng() % 128);
+    auto r = uint8_t(rng() % 256);
+    auto b = uint8_t(rng() % 256);
+    for (int i = 0; i < 80; ++i) {
+        world.set(glm::ivec3(x, y+i, z), Voxel(r,i*3,b));
+    }
+}
+
+void add_key_targets(Window& window, Camera& camera, VoxelWorld& world)
 {
     static float speed = 8.0f;
     static float sprint_mod = 1.0f;
@@ -119,17 +134,25 @@ void add_key_targets(Window& window, Camera& camera)
     };
     vertical_scroll.down = [&] (KeyArg arg) -> bool
     {
-        camera.inc_phi(arg.amount * -0.09f);
+        camera.inc_phi(arg.amount * -0.05f);
         return true;
     };
     horizontal_scroll.down = [&] (KeyArg arg) -> bool
     {
-        camera.inc_theta(arg.amount * -0.09f);
+        camera.inc_theta(arg.amount * -0.05f);
         return true;
     };
     window.add_key_target("look_around", look_around);
     window.add_key_target("vertical_scroll", vertical_scroll);
     window.add_key_target("horizontal_scroll", horizontal_scroll);
+
+    KeyTarget add_random_block;
+    add_random_block.down = [&] (KeyArg arg) -> bool
+    {
+        add_random_column(world);
+        return true;
+    };
+    window.add_key_target("add_random_block", add_random_block);
 }
 
 void bind_keys(Window& window)
@@ -150,6 +173,8 @@ void bind_keys(Window& window)
     window.bind_keycode(-5, "vertical_scroll");
     window.bind_keycode(-6, "horizontal_scroll");
     window.bind_keycode(-7, "horizontal_scroll");
+
+    window.bind_keycode(SDL_SCANCODE_K, "add_random_block");
 }
 
 int Main(std::vector<std::string> args)
@@ -178,8 +203,7 @@ int Main(std::vector<std::string> args)
         camera.set_window_size(x, y);
     };
     Window window(on_window_resize);
-    window.set_title("Myricube");
-    add_key_targets(window, camera);
+    add_key_targets(window, camera, world);
     bind_keys(window);
 
     Voxel red(180, 0, 100);
@@ -205,6 +229,9 @@ int Main(std::vector<std::string> args)
         void draw_skybox(glm::mat4, glm::mat4);
         draw_skybox(camera.get_residue_view(), camera.get_projection());
         render_world_mesh_step(world, camera);
+        add_random_column(world);
+        window.set_title("Myricube "
+                         + std::to_string(window.get_fps()) + " FPS");
     }
 
     return 0;

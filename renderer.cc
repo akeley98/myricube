@@ -390,7 +390,7 @@ class Renderer
     static GLsizeiptr verts_reserved_bytes(
         const std::vector<MeshVertex>& verts)
     {
-        return GLsizeiptr((128+verts.size()) * sizeof(verts[0]));
+        return GLsizeiptr((64+verts.size()) * sizeof(verts[0]));
     }
 
     // Return the actual number of bytes needed to store the given
@@ -506,6 +506,12 @@ class Renderer
             entry->bytes_used = bytes_to_alloc;
             PANIC_IF_GL_ERROR;
 
+            // fprintf(stderr, "Reallocating VBO for chunk group (%i %i %i) "
+            //                 "to %i bytes.\n",
+            //                 int(entry->group_coord.x),
+            //                 int(entry->group_coord.y),
+            //                 int(entry->group_coord.z),
+            //                 int(bytes_to_alloc));
             GLsizeiptr offset = 0;
 
             for (int z = 0; z < edge_chunks; ++z) {

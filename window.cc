@@ -68,9 +68,11 @@ void Window::gl_make_current()
 bool Window::update_swap_buffers(int64_t min_ms)
 {
     // Calculate dt & wait for min_ms elapsed before previous swap.
+    int64_t current_tick;
     int64_t dt_ms = 0;
     for (; dt_ms < min_ms; SDL_Delay(1)) {
-        dt_ms = SDL_GetTicks() - previous_update_ms;
+        current_tick = SDL_GetTicks();
+        dt_ms = current_tick - previous_update_ms;
     }
     previous_update_ms += dt_ms;
     float dt = 1/1000.f * dt_ms;
@@ -102,6 +104,15 @@ bool Window::update_swap_buffers(int64_t min_ms)
             case SDL_WINDOWEVENT: handle_window_event(event.window); break;
             case SDL_QUIT: quit = true; break;
         }
+    }
+
+    // Update FPS.
+    ++frames;
+    if (current_tick - previous_fps_update >= fps_interval_ms) {
+        fps = 1000.0 * frames
+            / (current_tick - previous_fps_update);
+        previous_fps_update = current_tick;
+        frames = 0;
     }
     return !quit;
 }

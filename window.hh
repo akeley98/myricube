@@ -92,6 +92,12 @@ class Window
     // update_swap_buffers call.
     int64_t previous_update_ms = SDL_GetTicks();
 
+    // Used for fps calculation.
+    int64_t previous_fps_update = SDL_GetTicks();
+    int frames = 0;
+    static constexpr int fps_interval_ms = 250;
+    double fps = 0.0;
+
   public:
     // Construct the window with a callback that is called when the
     // window is resized.
@@ -133,6 +139,10 @@ class Window
     // the previous call's completion.
     bool update_swap_buffers(int64_t min_ms);
 
+    double get_fps() const
+    {
+        return fps;
+    }
   private:
     void handle_down(int, float, float);
     void handle_up(int);
