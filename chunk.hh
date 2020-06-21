@@ -90,12 +90,12 @@ class Chunk
     static_assert(chunk_size * chunk_size * chunk_size <= 32767,
         "int16_t may not be enough for Chunk::total_visible.");
 
-    // Lower-left corner and size of the AABB in voxel units.  The
-    // lower-left is measured as if the lower-left of the chunk is the
-    // origin, so if voxel_array[1][2][3] is the only visible voxel,
-    // then aabb_low == (3,2,1) and aabb_size == (1,1,1).
+    // Lower-left corner and upper-right of the AABB in voxel units.
+    // The lower-left is measured as if the lower-left of the chunk is
+    // the origin, so if voxel_array[1][2][3] is the only visible
+    // voxel, then aabb_low == (3,2,1) and aabb_high == (4,3,2).
     glm::ivec3 aabb_low;
-    glm::ivec3 aabb_size;
+    glm::ivec3 aabb_high;
   public:
     // Assuming that the given coordinate is wihin this chunk, return
     // the voxel at the given coordinate. ("Assume" ==
@@ -106,9 +106,10 @@ class Chunk
         return voxel_array[c.z & mask][c.y & mask][c.x & mask];
     }
 
-    // Set the voxel at the given coordinate (again assuming that
-    // this voxel is in the chunk).
-    void set(glm::ivec3 c, Voxel v)
+    // Set the voxel at the given coordinate (again assuming that this
+    // voxel is in the chunk). Return the change in the number of
+    // visible voxels in the chunk.
+    int set(glm::ivec3 c, Voxel v)
     {
         aabb_dirty = true;
         texture_dirty = true;
@@ -129,23 +130,25 @@ class Chunk
         total_visible += delta;
         voxel_array[z][y][x] = v;
         voxel_texture[z][y][x] = VoxelTexel(v);
+        return delta;
     }
 
   private:
-    // Write out the AABB lower-left corner and size, recomputing if needed.
+    // Write out the AABB lower-left corner and upper-right corner,
+    // recomputing if needed.
     //
     // This (and the voxel_texture) really belongs in the Renderer, maybe
     // I'll move it some time.
-    void get_aabb(glm::ivec3* ptr_aabb_low, glm::ivec3* ptr_aabb_size)
+    void get_aabb(glm::ivec3* ptr_aabb_low, glm::ivec3* ptr_aabb_high)
     {
         if (aabb_dirty) {
             if (total_visible == 0) {
                 aabb_low = glm::ivec3(0,0,0);
-                aabb_size = glm::ivec3(0,0,0);
+                aabb_high = glm::ivec3(0,0,0);
             }
             else {
                 aabb_low = glm::ivec3(chunk_size, chunk_size, chunk_size);
-                glm::ivec3 aabb_high = glm::ivec3(0, 0, 0);
+                aabb_high = glm::ivec3(0, 0, 0);
 
                 for (int n = 0; n < chunk_size; ++n) {
                     if (x_visible[n] > 0) {
@@ -161,12 +164,11 @@ class Chunk
                         aabb_high.z = std::max<int>(n+1, aabb_high.z);
                     }
                 }
-                aabb_size = aabb_high - aabb_low;
             }
             aabb_dirty = false;
         }
         if (ptr_aabb_low) *ptr_aabb_low = aabb_low;
-        if (ptr_aabb_size) *ptr_aabb_size = aabb_size;
+        if (ptr_aabb_high) *ptr_aabb_high = aabb_high;
     }
 };
 
@@ -179,6 +181,9 @@ class ChunkGroup
 
     // Chunks within this chunk group, in [z][y][x] order.
     Chunk chunk_array[edge_chunks][edge_chunks][edge_chunks];
+
+    // Total number of visible voxels in this chunk group.
+    int32_t total_visible = 0;
 
   public:
     // Assuming that the given coordinate is wihin this group, return
@@ -201,7 +206,7 @@ class ChunkGroup
         auto y = (uint32_t(c.y) / chunk_size) & mask;
         auto z = (uint32_t(c.z) / chunk_size) & mask;
         Chunk& chunk = chunk_array[z][y][x];
-        chunk.set(c, v);
+        total_visible += chunk.set(c, v);
     }
 };
 

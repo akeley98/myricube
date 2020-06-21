@@ -6,10 +6,10 @@
 
 #include "myricube.hh"
 
-namespace myricube {
+#include "chunk.hh"
+#include "window.hh"
 
-class VoxelWorld;
-class Window;
+namespace myricube {
 
 // Name of the app.
 extern const char app_name[];

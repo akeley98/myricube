@@ -1,6 +1,12 @@
+// Implementation of the hybrid voxel renderer. I don't see how I can
+// make much of this exception safe, so I wrap everything in a
+// noexcept at the end. As usual with OpenGL, none of this is
+// thread-safe either.
+
 #include "myricube.hh"
 
 #include <stdio.h>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -13,6 +19,7 @@
 namespace myricube {
 
 static constexpr int edge_chunks = group_size / chunk_size;
+bool chunk_debug = false;
 
 // TODO: Maybe get some better code for compiling shaders? Load it
 // from a file?
@@ -131,6 +138,7 @@ struct MeshEntry
         vbo_name = 0;
         vbo_bytes = 0;
         bytes_used = 0;
+        world_id = uint64_t(-1);
     }
 
     // Disable moves, but, see swap below. (Harkens back to C++98 hacks :P )
@@ -146,6 +154,82 @@ void swap(MeshEntry& left, MeshEntry& right)
     swap(left.vbo_name, right.vbo_name);
     swap(left.vbo_bytes, right.vbo_bytes);
     swap(left.bytes_used, right.bytes_used);
+}
+
+// For memory efficiency, the AABB of a chunk is stored in packed
+// format on the GPU.
+struct PackedAABB
+{
+    uint32_t packed_low;
+    uint32_t packed_high;
+
+    static_assert(group_size <= 255,
+                  "group too big for 8-bit unsigned coordinates.");
+
+    PackedAABB() = default;
+
+    PackedAABB(glm::ivec3 aabb_low, glm::ivec3 aabb_high)
+    {
+        auto x = aabb_low.x;
+        auto y = aabb_low.y;
+        auto z = aabb_low.z;
+        packed_low = uint32_t(x) | uint32_t(y) << 8 | uint32_t(z) << 16;
+        x = aabb_high.x;
+        y = aabb_high.y;
+        z = aabb_high.z;
+        packed_high = uint32_t(x) | uint32_t(y) << 8 | uint32_t(z) << 16;
+    }
+};
+
+// All voxels within a chunk group share a single 3D texture on the
+// GPU, as well as one VBO used to store the array of AABB for the
+// chunks within the group. This is the handle for the GPU data needed
+// to raycast one chunk group.
+struct RaycastEntry
+{
+    // World ID and group coordinate of the chunk group this texture
+    // and AABB array is for. This can be used to tell if this entry
+    // is correct or needs to be replaced in RaycastStore.
+    uint64_t world_id = uint64_t(-1);
+    glm::ivec3 group_coord;
+
+    // aabb_array[z][y][x] is the minimal AABB containing the visible
+    // voxels of ChunkGroup::chunk_array[z][y][x].
+    //
+    // If you change this, be aware that sizeof is used on this to
+    // know the amount of bytes to allocate for the GPU's VBO.
+    PackedAABB aabb_array[edge_chunks][edge_chunks][edge_chunks];
+
+    // OpenGL name of the VBO storing the aabb_array. 0 when not yet
+    // allocated.
+    GLuint vbo_name = 0;
+
+    // OpenGL name for the 3D texture representing this group of
+    // voxels on the GPU. 0 when not yet allocated.
+    GLuint texture_name = 0;
+
+    RaycastEntry() = default;
+
+    ~RaycastEntry()
+    {
+        glDeleteBuffers(1, &vbo_name);
+        glDeleteTextures(1, &texture_name);
+        vbo_name = 0;
+        texture_name = 0;
+        world_id = uint64_t(-1);
+    }
+
+    RaycastEntry(RaycastEntry&&) = delete;
+};
+
+void swap(RaycastEntry& left, RaycastEntry& right)
+{
+    using std::swap;
+    swap(left.world_id, right.world_id);
+    swap(left.group_coord, right.group_coord);
+    swap(left.aabb_array, right.aabb_array);
+    swap(left.vbo_name, right.vbo_name);
+    swap(left.texture_name, right.texture_name);
 }
 
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
@@ -194,8 +278,9 @@ class BaseStore
 
         // Otherwise, we need to evict the current entry and repopulate it.
         if (long(entry->world_id) >= 0) {
-            fprintf(stderr, "Evicting MeshStore entry for chunk group "
+            fprintf(stderr, "Evicting %s entry for chunk group "
                             "(%i %i %i) of world %li\n",
+                            typeid(Entry).name(),
                             int(entry->group_coord.x),
                             int(entry->group_coord.y),
                             int(entry->group_coord.z),
@@ -208,6 +293,7 @@ class BaseStore
 };
 
 class MeshStore : public BaseStore<MeshEntry, 5> { };
+class RaycastStore : public BaseStore<RaycastEntry, 7> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -231,8 +317,8 @@ const char mesh_vs_source[] =
     "model_space_position_ = model_space_position.xyz;\n"
 "}\n";
 
-auto packed_vertex_idx = 0;
-auto packed_color_idx = 1;
+constexpr int packed_vertex_idx = 0;
+constexpr int packed_color_idx = 1;
 
 const char mesh_fs_source[] =
 "#version 330\n"
@@ -250,6 +336,183 @@ const char mesh_fs_source[] =
     "float scale = (x_border + y_border + z_border >= 2) ? 0.5 : 1.0;\n"
     "out_color = vec4(color * scale, 1);\n"
 "}\n";
+
+// Really need to improve this...
+#define GROUP_SIZE_STR "64"
+constexpr int unit_box_vertex_idx = 0;
+constexpr int packed_aabb_low_idx = 1;
+constexpr int packed_aabb_high_idx = 2;
+
+static const char raycast_vs_source[] =
+"#version 330\n"
+"layout(location=0) in vec4 unit_box_vertex;\n"
+"layout(location=1) in int packed_aabb_low;\n"
+"layout(location=2) in int packed_aabb_high;\n"
+"out vec3 residue_coord;\n"
+"out float border_fade;\n"
+"flat out ivec3 aabb_low;\n"
+"flat out ivec3 aabb_high;\n"
+"uniform mat4 mvp_matrix;\n"
+"uniform vec3 eye_relative_group_origin;\n"
+"void main() {\n"
+    "int low_x = packed_aabb_low & 255;\n"
+    "int low_y = (packed_aabb_low >> 8) & 255;\n"
+    "int low_z = (packed_aabb_low >> 16) & 255;\n"
+    "int high_x = packed_aabb_high & 255;\n"
+    "int high_y = (packed_aabb_high >> 8) & 255;\n"
+    "int high_z = (packed_aabb_high >> 16) & 255;\n"
+    "vec3 f_aabb_low = vec3(low_x, low_y, low_z);\n"
+    "vec3 sz = vec3(high_x, high_y, high_z) - f_aabb_low;\n"
+    "vec4 model_space_pos = vec4(unit_box_vertex.xyz * sz + f_aabb_low, 1);\n"
+    "gl_Position = mvp_matrix * model_space_pos;\n"
+    "vec3 disp = model_space_pos.xyz - eye_relative_group_origin;\n"
+    "float distance = sqrt(dot(disp, disp));\n"
+    "border_fade = clamp(sqrt(distance) * 0.042, 0.5, 1.0);\n"
+    "aabb_low = ivec3(low_x, low_y, low_z);\n"
+    "aabb_high = ivec3(high_x, high_y, high_z);\n"
+    "residue_coord = model_space_pos.xyz;\n"
+"}\n";
+
+static const char raycast_fs_source[] =
+"#version 330\n"
+"in vec3 residue_coord;\n"
+"in float border_fade;\n"
+"flat in ivec3 aabb_low;\n"
+"flat in ivec3 aabb_high;\n"
+// TODO: Add bias (based on normal vector) to deal with floor/ceil
+// rounding errors. Also hide this mess in a glsl file somewhere.
+"uniform vec3 eye_relative_group_origin;\n"
+"uniform sampler3D chunk_blocks;\n"
+"uniform bool chunk_debug;\n"
+"out vec4 color;\n"
+"void main() {\n"
+"if (!chunk_debug) {\n"
+    "const float d = " BORDER_WIDTH_STR ";\n"
+    "float x0 = eye_relative_group_origin.x;\n"
+    "float y0 = eye_relative_group_origin.y;\n"
+    "float z0 = eye_relative_group_origin.z;\n"
+    "vec3 slope = vec3(residue_coord) - eye_relative_group_origin;\n"
+    "float xm = slope.x;\n"
+    "float ym = slope.y;\n"
+    "float zm = slope.z;\n"
+    "float rcp = 1.0/" GROUP_SIZE_STR ".0;\n"
+    "float best_t = 1.0 / 0.0;\n"
+    "vec4 best_color = vec4(0,0,0,0);\n"
+    "vec3 best_coord = vec3(0,0,0);\n"
+    "int iter = 0;\n"
+    "int x_init = int(xm > 0 ? ceil(residue_coord.x) \n"
+                            ": floor(residue_coord.x));\n"
+    "int x_end = xm > 0 ? aabb_high.x : aabb_low.x;\n"
+    // "int x_end = xm > 0 ? 64 : 0;\n"
+    "int x_step = xm > 0 ? 1 : -1;\n"
+    "float x_fudge = xm > 0 ? .25 : -.25;\n"
+    "for (int x = x_init; x != x_end; x += x_step) {\n"
+        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
+        "float t = (x - x0) / xm;\n"
+        "float y = y0 + ym * t;\n"
+        "float z = z0 + zm * t;\n"
+        "if (y < aabb_low.y || y > aabb_high.y) break;\n"
+        "if (z < aabb_low.z || z > aabb_high.z) break;\n"
+        "vec3 texcoord = vec3(x + x_fudge, y, z) * rcp;\n"
+        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
+        "if (lookup_color.a > 0 && t > 0) {\n"
+            "if (best_t > t) {\n"
+                "best_t = t;\n"
+                "best_color = lookup_color;\n"
+                "best_coord = vec3(x,y,z);\n"
+                "if (y - floor(y + d) < d || z - floor(z + d) < d) {\n"
+                    "best_color.rgb *= border_fade;\n"
+                "}\n"
+            "}\n"
+            "break;\n"
+        "}\n"
+    "}\n"
+    "int y_init = int(ym > 0 ? ceil(residue_coord.y) \n"
+                            ": floor(residue_coord.y));\n"
+    "int y_end = ym > 0 ? aabb_high.y : aabb_low.y;\n"
+    // "int y_end = ym > 0 ? 64 : 0;\n"
+    "int y_step = ym > 0 ? 1 : -1;\n"
+    "float y_fudge = ym > 0 ? .25 : -.25;\n"
+    "for (int y = y_init; y != y_end; y += y_step) {\n"
+        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
+        "float t = (y - y0) / ym;\n"
+        "float x = x0 + xm * t;\n"
+        "float z = z0 + zm * t;\n"
+        "if (x < aabb_low.x || x > aabb_high.x) break;\n"
+        "if (z < aabb_low.z || z > aabb_high.z) break;\n"
+        "vec3 texcoord = vec3(x, y + y_fudge, z) * rcp;\n"
+        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
+        "if (lookup_color.a > 0 && t > 0) {\n"
+            "if (best_t > t) {\n"
+                "best_t = t;\n"
+                "best_color = lookup_color;\n"
+                "best_coord = vec3(x,y,z);\n"
+                "if (x - floor(x + d) < d || z - floor(z + d) < d) {\n"
+                    "best_color.rgb *= border_fade;\n"
+                "}\n"
+            "}\n"
+            "break;\n"
+        "}\n"
+    "}\n"
+    "int z_init = int(zm > 0 ? ceil(residue_coord.z) \n"
+                            ": floor(residue_coord.z));\n"
+    "int z_end = zm > 0 ? aabb_high.z : aabb_low.z;\n"
+    // "int z_end = zm > 0 ? 64 : 0;\n"
+    "int z_step = zm > 0 ? 1 : -1;\n"
+    "float z_fudge = zm > 0 ? .25 : -.25;\n"
+    "for (int z = z_init; z != z_end; z += z_step) {\n"
+        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
+        "float t = (z - z0) / zm;\n"
+        "float x = x0 + xm * t;\n"
+        "float y = y0 + ym * t;\n"
+        "if (x < aabb_low.x || x > aabb_high.x) break;\n"
+        "if (y < aabb_low.y || y > aabb_high.y) break;\n"
+        "vec3 texcoord = vec3(x, y, z + z_fudge) * rcp;\n"
+        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
+        "if (lookup_color.a > 0 && t > 0) {\n"
+            "if (best_t > t) {\n"
+                "best_t = t;\n"
+                "best_color = lookup_color;\n"
+                "best_coord = vec3(x,y,z);\n"
+                "if (x - floor(x + d) < d || y - floor(y + d) < d) {\n"
+                    "best_color.rgb *= border_fade;\n"
+                "}\n"
+            "}\n"
+            "break;\n"
+        "}\n"
+    "}\n"
+    "if (best_color.a == 0) discard;\n"
+    "color = best_color;\n"
+    //"vec4 v = vp_matrix * vec4(best_coord + chunk_offset, 1);\n"
+    //"gl_FragDepth = .3;\n"
+"} else {\n"
+    "int x_floor = int(floor(residue_coord.x));\n"
+    "int y_floor = int(floor(residue_coord.y));\n"
+    "int z_floor = int(floor(residue_coord.z));\n"
+    "color = vec4(x_floor & 1, y_floor & 1, z_floor & 1, 1);\n"
+"}\n"
+"}\n";
+
+static const float unit_box_vertices[32] =
+{
+    0, 1, 1, 1,
+    0, 0, 1, 1,
+    1, 0, 1, 1,
+    1, 1, 1, 1,
+    0, 1, 0, 1,
+    0, 0, 0, 1,
+    1, 0, 0, 1,
+    1, 1, 0, 1,
+};
+
+static const GLushort unit_box_elements[36] = {
+    6, 7, 2, 7, 3, 2,
+    4, 5, 0, 5, 1, 0,
+    0, 3, 4, 3, 7, 4,
+    6, 2, 5, 2, 1, 5,
+    2, 3, 1, 3, 0, 1,
+    6, 5, 7, 5, 4, 7,
+};
 
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
@@ -566,6 +829,9 @@ class Renderer
         }
     }
 
+    // Render, to the current framebuffer, chunks near the camera
+    // using the conventional mesh-based algorithm. TODO: honor the
+    // "near" part.
     void render_world_mesh_step() noexcept
     {
         MeshStore& store = camera.get_mesh_store();
@@ -602,6 +868,7 @@ class Renderer
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
+            if (group(pcg).total_visible == 0) return;
             MeshEntry* entry = store.update<Renderer>(pcg, world);
 
             assert(entry->vbo_name != 0);
@@ -650,11 +917,269 @@ class Renderer
             draw_group(pcg);
         }
     }
+
+    // Now time to write the AABB-raycasting renderer. Here goes...
+
+    // Fill the given RaycastEntry with the 3D texture + AABB
+    // for the given chunk group from the given world.
+    static void replace(PositionedChunkGroup& pcg,
+                        VoxelWorld& world,
+                        RaycastEntry* entry)
+    {
+        entry->world_id = world.id();
+        entry->group_coord = group_coord(pcg);
+
+        if (entry->vbo_name == 0) {
+            glCreateBuffers(1, &entry->vbo_name);
+            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            auto sz = sizeof(RaycastEntry::aabb_array);
+            glNamedBufferStorage(entry->vbo_name, sz, nullptr, flags);
+            PANIC_IF_GL_ERROR;
+        }
+
+        if (entry->texture_name == 0) {
+            glGenTextures(1, &entry->texture_name);
+            GLint texture_name = entry->texture_name;
+
+            glBindTexture(GL_TEXTURE_3D, texture_name);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            PANIC_IF_GL_ERROR;
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA,
+                         group_size, group_size, group_size, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            PANIC_IF_GL_ERROR;
+            static_assert(sizeof(VoxelTexel) == 4,
+                          "Need to change texture format to match VoxelTexel");
+        }
+
+        // Again, I parasitically depend on the update RaycastEntry
+        // function using an overriding always_dirty flag.
+        update(pcg, world, entry, true);
+    }
+
+    // Update the given raycast entry with new data from dirty chunks
+    // (or all chunks, if always_dirty is true).
+    //
+    // Requires that the RaycastEntry corresponds to the given chunk
+    // group of the given world.
+    static void update(PositionedChunkGroup& pcg,
+                       VoxelWorld& world,
+                       RaycastEntry* entry,
+                       bool always_dirty = false)
+    {
+        assert(entry->world_id == world.id());
+        assert(entry->group_coord == group_coord(pcg));
+        assert(entry->texture_name != 0);
+        assert(entry->vbo_name != 0);
+
+        // This is actually a hell of a lot easier than the MeshEntry.
+        // I just need to visit the chunks in one pass and upload
+        // dirty sub-textures and AABBs (but defer upload of AABB to
+        // later to reduce calls; the vbo_dirty flag is useful here).
+        bool vbo_dirty = false;
+        auto texture_name = entry->texture_name;
+        for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+                for (int x = 0; x < edge_chunks; ++x) {
+                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
+                    bool tex_dirty = always_dirty | chunk.texture_dirty;
+                    bool aabb_dirty = always_dirty | chunk.aabb_dirty;
+                    vbo_dirty |= aabb_dirty;
+
+                    if (aabb_dirty) {
+                        glm::ivec3 aabb_low, aabb_high;
+                        chunk.get_aabb(&aabb_low, &aabb_high);
+                        entry->aabb_array[z][y][x] =
+                            PackedAABB(aabb_low + residue, aabb_high + residue);
+                        // int packed_aabb_low = entry->aabb_array[z][y][x].packed_low;
+                        // int packed_aabb_high = entry->aabb_array[z][y][x].packed_high;
+                        // int low_x = (packed_aabb_low >> 16) & 255;
+                        // int low_y = (packed_aabb_low >> 8) & 255;
+                        // int low_z = packed_aabb_low & 255;
+                        // int high_x = (packed_aabb_high >> 16) & 255;
+                        // int high_y = (packed_aabb_high >> 8) & 255;
+                        // int high_z = packed_aabb_high & 255;
+                        // printf("(%i %i %i) (%i %i %i)\n",
+                        //     low_x, low_y, low_z, high_x, high_y, high_z);
+                    }
+
+                    if (tex_dirty) {
+                        chunk.texture_dirty = false;
+                        glTextureSubImage3D(
+                            texture_name, 0,
+                            residue.x, residue.y, residue.z,
+                            chunk_size, chunk_size, chunk_size,
+                            GL_RGBA, GL_UNSIGNED_BYTE,
+                            chunk.voxel_texture);
+                    }
+                    static_assert(sizeof(VoxelTexel) == 4,
+                          "Need to change texture format to match VoxelTexel");
+                }
+            }
+        }
+        PANIC_IF_GL_ERROR;
+
+        // Now re-upload AABBs if any changed.
+        glNamedBufferSubData(entry->vbo_name, 0,
+                             sizeof entry->aabb_array, entry->aabb_array);
+        static_assert(sizeof entry->aabb_array >= 64,
+            "Suspiciously small aabb_array, did it get replaced by a ptr?");
+        PANIC_IF_GL_ERROR;
+    }
+
+    // Render, to the current framebuffer, chunks around the camera
+    // using the AABB-raycast algorithm. Chunks that are near
+    // enough to have been drawn using the mesh algorithm will
+    // not be re-drawn.
+    //
+    // TODO: This last sentence is not accurate at the moment.
+    void render_world_raycast_step() noexcept
+    {
+        RaycastStore& store = camera.get_raycast_store();
+        glm::mat4 residue_vp_matrix = camera.get_residue_vp();
+        glm::vec3 eye_residue;
+        glm::ivec3 eye_group;
+        camera.get_eye(&eye_group, &eye_residue);
+
+        static GLuint vao = 0;
+        static GLuint program_id;
+        static GLuint vertex_buffer_id;
+        static GLuint element_buffer_id;
+        static GLint mvp_matrix_id;
+        // Position of camera eye relative to the origin of the group
+        // (i.e. group_size times the group coordinate).
+        static GLint eye_relative_group_origin_id;
+        static GLint chunk_blocks_id;
+        static GLint chunk_debug_id;
+
+        if (vao == 0) {
+            program_id = make_program(raycast_vs_source, raycast_fs_source);
+            mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
+            assert(mvp_matrix_id >= 0);
+            eye_relative_group_origin_id = glGetUniformLocation(program_id,
+                "eye_relative_group_origin");
+            assert(eye_relative_group_origin_id >= 0);
+            chunk_blocks_id = glGetUniformLocation(program_id, "chunk_blocks");
+            assert(chunk_blocks_id >= 0);
+            chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
+            assert(chunk_debug_id >= 0);
+
+            glGenBuffers(1, &vertex_buffer_id);
+            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
+            glBufferData(
+                GL_ARRAY_BUFFER, sizeof unit_box_vertices,
+                unit_box_vertices, GL_STATIC_DRAW);
+
+            glGenBuffers(1, &element_buffer_id);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
+            glBufferData(
+                GL_ELEMENT_ARRAY_BUFFER, sizeof unit_box_elements,
+                unit_box_elements, GL_STATIC_DRAW);
+
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+        }
+
+        glBindVertexArray(vao);
+        glUseProgram(program_id);
+        glUniform1i(chunk_debug_id, chunk_debug);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(chunk_blocks_id, 0);
+        PANIC_IF_GL_ERROR;
+
+        // My plan is to use instanced rendering to draw the chunk AABBs
+        // of this chunk group. The base box is a 1x1x1 unit box, which
+        // is stretched and repositioned in the vertex shader to the
+        // true AABB.
+        auto draw_group = [&] (PositionedChunkGroup& pcg)
+        {
+            // if (group(pcg).total_visible == 0) return;
+            RaycastEntry* entry = store.update<Renderer>(pcg, world);
+            assert(entry->texture_name != 0);
+            assert(entry->vbo_name != 0);
+
+            glBindTexture(GL_TEXTURE_3D, entry->texture_name);
+
+            // The view matrix only takes into account the eye's
+            // residue coordinate, so the model position of the group
+            // actually needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            glm::mat4 mvp = residue_vp_matrix * m;
+            glUniformMatrix4fv(mvp_matrix_id, 1, 0, &mvp[0][0]);
+            PANIC_IF_GL_ERROR;
+
+            // Similarly, the eye residue needs to be shifted by the
+            // group's position.
+            glm::vec3 eye_relative_group_origin = eye_residue - model_offset;
+            glUniform3fv(eye_relative_group_origin_id, 1,
+                &eye_relative_group_origin[0]);
+
+            // Get the vertex attribs going, I should probably make
+            // a VAO per chunk group in the RaycastEntry.
+
+            // Verts of the unit box.
+            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
+            glVertexAttribPointer(
+                unit_box_vertex_idx,
+                4,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 4,
+                (void*)0);
+            glEnableVertexAttribArray(unit_box_vertex_idx);
+
+            // AABB residue coords (packed as integers); these are per-
+            // chunk and thus instanced.
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            glVertexAttribIPointer(
+                packed_aabb_low_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(PackedAABB),
+                (void*) offsetof(PackedAABB, packed_low));
+            glEnableVertexAttribArray(packed_aabb_low_idx);
+            glVertexAttribDivisor(packed_aabb_low_idx, 1);
+
+            glVertexAttribIPointer(
+                packed_aabb_high_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(PackedAABB),
+                (void*) offsetof(PackedAABB, packed_high));
+            glEnableVertexAttribArray(packed_aabb_high_idx);
+            glVertexAttribDivisor(packed_aabb_high_idx, 1);
+            PANIC_IF_GL_ERROR;
+
+            // Draw all edge_chunks^3 chunks in the chunk group.
+            auto instances = edge_chunks * edge_chunks * edge_chunks;
+            glDrawElementsInstanced(
+                GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr, instances);
+            PANIC_IF_GL_ERROR;
+        };
+
+        // TODO: Again, need to cull chunks.
+        for (PositionedChunkGroup& pcg : world.group_map) {
+            draw_group(pcg);
+        }
+    }
 };
 
 void render_world_mesh_step(VoxelWorld& world, Camera& camera)
 {
     Renderer(world, camera).render_world_mesh_step();
+}
+
+void render_world_raycast_step(VoxelWorld& world, Camera& camera)
+{
+    Renderer(world, camera).render_world_raycast_step();
 }
 
 MeshStore* new_mesh_store()
@@ -667,13 +1192,15 @@ void delete_mesh_store(MeshStore* mesh_store)
     delete mesh_store;
 }
 
-// TODO
 RaycastStore* new_raycast_store()
 {
-    return nullptr;
+    return new RaycastStore;
 }
 
-void delete_raycast_store(RaycastStore*) { }
+void delete_raycast_store(RaycastStore* raycast_store)
+{
+    delete raycast_store;
+}
 
 void viewport(int x, int y)
 {
@@ -686,7 +1213,6 @@ void gl_first_time_setup()
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-    glClearColor(0.3, 0.3, 0.3, 1);
 }
 
 void gl_clear()
@@ -694,7 +1220,7 @@ void gl_clear()
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 }
 
-// XXX
+// Old skybox code I copied.
 void load_cubemap_face(GLenum face, const char* filename)
 {
     std::string full_filename = expand_filename(filename);

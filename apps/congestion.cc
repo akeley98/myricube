@@ -6,10 +6,8 @@
 #include <time.h>
 
 #include "app.hh"
-#include "chunk.hh"
-#include "window.hh"
 
-static constexpr int Size = 180;
+static constexpr int Size = 365;
 static constexpr int Border = 8;
 static constexpr double Load = 0.4;
 

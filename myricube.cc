@@ -142,6 +142,15 @@ void add_key_targets(Window& window, Camera& camera)
         return true;
     };
     window.add_key_target("pause", pause);
+
+    extern bool chunk_debug;
+    KeyTarget toggle_chunk_debug;
+    toggle_chunk_debug.down = [&] (KeyArg) -> bool
+    {
+        chunk_debug = !chunk_debug;
+        return true;
+    };
+    window.add_key_target("toggle_chunk_debug", toggle_chunk_debug);
 }
 
 void bind_keys(Window& window)
@@ -165,6 +174,7 @@ void bind_keys(Window& window)
 
     window.bind_keycode(SDL_SCANCODE_K, "do_it");
     window.bind_keycode(SDL_SCANCODE_Z, "pause");
+    window.bind_keycode(SDL_SCANCODE_B, "toggle_chunk_debug");
 }
 
 int Main(std::vector<std::string> args)
@@ -203,7 +213,8 @@ int Main(std::vector<std::string> args)
         gl_clear();
         void draw_skybox(glm::mat4, glm::mat4);
         draw_skybox(camera.get_residue_view(), camera.get_projection());
-        render_world_mesh_step(world, camera);
+        // render_world_mesh_step(world, camera);
+        render_world_raycast_step(world, camera);
         window.set_title("Myricube "
                          + std::to_string(window.get_fps()) + " FPS");
     }
