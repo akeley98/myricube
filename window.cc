@@ -68,7 +68,7 @@ void Window::gl_make_current()
 bool Window::update_swap_buffers(int64_t min_ms)
 {
     // Calculate dt & wait for min_ms elapsed before previous swap.
-    int64_t current_tick;
+    int64_t current_tick = 0;
     int64_t dt_ms = 0;
     for (; dt_ms < min_ms; SDL_Delay(1)) {
         current_tick = SDL_GetTicks();

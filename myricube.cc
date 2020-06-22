@@ -51,32 +51,94 @@ void add_key_targets(Window& window, Camera& camera)
     static float speed = 8.0f;
     static float sprint_mod = 1.0f;
 
+    struct Position
+    {
+        glm::dvec3 eye = glm::dvec3(0);
+        float theta = 1.5707f;
+        float phi = 1.5707f;
+    };
+    static Position old_positions_ring_buffer[256];
+    static Position future_positions_ring_buffer[256];
+    static uint8_t old_idx = 0;
+    static uint8_t future_idx = 0;
+
+    static auto get_camera_position = [&camera] () -> Position
+    {
+        Position p;
+        p.eye = camera.get_eye();
+        p.theta = camera.get_theta();
+        p.phi = camera.get_phi();
+        return p;
+    };
+
+    static auto push_camera_position = [&]
+    {
+        old_positions_ring_buffer[--old_idx] = get_camera_position();
+    };
+
+    static auto push_camera_position_callback = [&] (KeyArg arg)
+    {
+        if (arg.repeat) return false;
+        push_camera_position();
+        return true;
+    };
+
+    KeyTarget pop_old_camera, pop_future_camera;
+    pop_old_camera.down = [&] (KeyArg) -> bool
+    {
+        future_positions_ring_buffer[--future_idx] =
+            get_camera_position();
+        Position p = old_positions_ring_buffer[old_idx++];
+        camera.set_eye(p.eye);
+        camera.set_theta(p.theta);
+        camera.set_phi(p.phi);
+        return true;
+    };
+    pop_future_camera.down = [&] (KeyArg) -> bool
+    {
+        old_positions_ring_buffer[--old_idx] =
+            get_camera_position();
+        Position p = future_positions_ring_buffer[future_idx++];
+        camera.set_eye(p.eye);
+        camera.set_theta(p.theta);
+        camera.set_phi(p.phi);
+        return true;
+    };
+    window.add_key_target("pop_old_camera", pop_old_camera);
+    window.add_key_target("pop_future_camera", pop_future_camera);
+
     KeyTarget forward, backward, leftward, rightward, upward, downward;
+    forward.down = push_camera_position_callback;
     forward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(0, 0, +arg.dt * speed * sprint_mod);
         return true;
     };
+    backward.down = push_camera_position_callback;
     backward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(0, 0, -arg.dt * speed * sprint_mod);
         return true;
     };
+    leftward.down = push_camera_position_callback;
     leftward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(-arg.dt * speed * sprint_mod, 0, 0);
         return true;
     };
+    rightward.down = push_camera_position_callback;
     rightward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(+arg.dt * speed * sprint_mod, 0, 0);
         return true;
     };
+    upward.down = push_camera_position_callback;
     upward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(0, +arg.dt * speed * sprint_mod, 0);
         return true;
     };
+    downward.down = push_camera_position_callback;
     downward.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.frenet_move(0, -arg.dt * speed * sprint_mod, 0);
@@ -115,6 +177,7 @@ void add_key_targets(Window& window, Camera& camera)
     window.add_key_target("slow_down", slow_down);
 
     KeyTarget vertical_scroll, horizontal_scroll, look_around;
+    look_around.down = push_camera_position_callback;
     look_around.per_frame = [&] (KeyArg arg) -> bool
     {
         camera.inc_theta(arg.mouse_rel_x * arg.dt * 0.01f);
@@ -155,6 +218,11 @@ void add_key_targets(Window& window, Camera& camera)
 
 void bind_keys(Window& window)
 {
+    window.bind_keycode(SDL_SCANCODE_LEFT, "pop_old_camera");
+    window.bind_keycode(-8, "pop_old_camera");
+    window.bind_keycode(SDL_SCANCODE_RIGHT, "pop_future_camera");
+    window.bind_keycode(-9, "pop_future_camera");
+
     window.bind_keycode(SDL_SCANCODE_U, "forward");
     window.bind_keycode(SDL_SCANCODE_SPACE, "backward");
     window.bind_keycode(SDL_SCANCODE_P, "leftward");
@@ -173,6 +241,7 @@ void bind_keys(Window& window)
     window.bind_keycode(-7, "horizontal_scroll");
 
     window.bind_keycode(SDL_SCANCODE_K, "do_it");
+    window.bind_keycode(SDL_SCANCODE_K, "add_random_walk");
     window.bind_keycode(SDL_SCANCODE_Z, "pause");
     window.bind_keycode(SDL_SCANCODE_B, "toggle_chunk_debug");
 }

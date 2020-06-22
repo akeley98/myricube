@@ -27,7 +27,7 @@ class Camera
     // Near and far plane for z-depth.
     // Far plane influences the chunk render distance.
     float near_plane = 0.1f;
-    int far_plane = 300;
+    int far_plane = 500;
 
     // (roughly) minimum distance from the camera that a chunk needs
     // to be to switch from mesh to raycast graphics.

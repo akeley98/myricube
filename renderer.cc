@@ -5,6 +5,7 @@
 
 #include "myricube.hh"
 
+#include <algorithm>
 #include <stdio.h>
 #include <typeinfo>
 #include <utility>
@@ -364,8 +365,8 @@ class BaseStore
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 2, 6> { };
-class RaycastStore : public BaseStore<RaycastEntry, 5, 4> { };
+class MeshStore : public BaseStore<MeshEntry, 2, 10> { };
+class RaycastStore : public BaseStore<RaycastEntry, 3, 16> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -442,7 +443,7 @@ static const char raycast_vs_source[] =
     "vec4 model_space_pos = vec4(unit_box_vertex.xyz * sz + f_aabb_low, 1);\n"
     "vec3 disp = model_space_pos.xyz - eye_relative_group_origin;\n"
     "float distance = sqrt(dot(disp, disp));\n"
-    "border_fade = clamp(sqrt(distance) * 0.042, 0.5, 1.0);\n"
+    "border_fade = clamp(distance * 0.003 + 0.11, 0.5, 1.0);\n"
     "aabb_low = ivec3(low_x, low_y, low_z);\n"
     "aabb_high = ivec3(high_x, high_y, high_z);\n"
     // Re-implement decide_chunk(...) == draw_raycast on GPU.
@@ -1370,14 +1371,24 @@ class Renderer
             PANIC_IF_GL_ERROR;
         };
 
+        // Collect all chunk groups needing to be raycast, and sort from
+        // nearest to furthest (reverse painters). This fascilitates
+        // the early depth test optimization.
         float squared_thresh = camera.get_far_plane();
         squared_thresh *= squared_thresh;
+        std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
+
         // TODO: Avoid visiting far away chunk groups.
         for (PositionedChunkGroup& pcg : world.group_map) {
             float min_squared_dist;
             bool cull = cull_group(pcg, &min_squared_dist);
             if (cull or min_squared_dist >= squared_thresh) continue;
-            draw_group(pcg);
+            pcg_by_depth.emplace_back(min_squared_dist, &pcg);
+        }
+
+        std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        for (auto& pair : pcg_by_depth) {
+            draw_group(*pair.second);
         }
     }
 };
