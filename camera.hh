@@ -76,18 +76,7 @@ class Camera
     void fix_dirty()
     {
         if (!dirty) return;
-        int32_t group_x = int32_t(eye.x / group_size);
-        if (eye.x < 0) --group_x;
-        int32_t group_y = int32_t(eye.y / group_size);
-        if (eye.y < 0) --group_y;
-        int32_t group_z = int32_t(eye.z / group_size);
-        if (eye.z < 0) --group_z;
-
-        eye_group.x = group_x;
-        eye_group.y = group_y;
-        eye_group.z = group_z;
-        eye_residue = glm::vec3(
-            eye - glm::dvec3(eye_group) * double(group_size));
+        split_coordinate(eye, &eye_group, &eye_residue);
 
         forward_normal_vector = glm::vec3(
             sinf(phi) * cosf(theta),

@@ -18,7 +18,6 @@
 
 namespace myricube {
 
-static constexpr int edge_chunks = group_size / chunk_size;
 bool chunk_debug = false;
 
 // TODO: Maybe get some better code for compiling shaders? Load it
@@ -370,6 +369,8 @@ const char mesh_fs_source[] =
 
 // Really need to improve this...
 #define GROUP_SIZE_STR "64"
+static_assert(group_size == 64, "fix GROUP_SIZE_STR");
+
 constexpr int unit_box_vertex_idx = 0;
 constexpr int packed_aabb_low_idx = 1;
 constexpr int packed_aabb_high_idx = 2;
@@ -628,24 +629,21 @@ class Renderer
     }
 
     static constexpr int cull = 1, draw_mesh = 2, draw_raycast = 3;
-    // Distance culling step. Given the group coordinate, offset of
-    // the chunk in its chunk group, and AABB of a chunk, decide which
-    // of the above things we should do: cull it, draw it with the
-    // mesh algorithm (near the eye), or draw it with the raycast
-    // algorithm (far away).
+    // Distance culling step. Given the group coordinate and AABB of a
+    // chunk, decide which of the above things we should do: cull it,
+    // draw it with the mesh algorithm (near the eye), or draw it with
+    // the raycast algorithm (far away).
     //
     // This function may be duplicated on the GPU, hence the
     // floor(eye) -- this prevents subtle disagreements due to
     // different FP representations.
     int decide_chunk(glm::ivec3 group_coord,
-                     glm::vec3 chunk_offset,
                      Chunk& chunk)
     {
         if (chunk.total_visible == 0) return cull;
         glm::ivec3 aabb_low, aabb_high;
         chunk.get_aabb(&aabb_low, &aabb_high);
-        glm::vec3 aabb_center = glm::vec3(aabb_high + aabb_low) * 0.5f
-                              + chunk_offset;
+        glm::vec3 aabb_center = glm::vec3(aabb_high + aabb_low) * 0.5f;
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
         camera.get_eye(&eye_group, &eye_residue);
@@ -1001,10 +999,9 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         auto draw_chunk = [&]
-        (glm::ivec3 group_coord, glm::vec3 chunk_offset,
-        Chunk& chunk, ChunkMesh& chunk_mesh)
+        (glm::ivec3 group_coord, Chunk& chunk, ChunkMesh& chunk_mesh)
         {
-            if (decide_chunk(group_coord, chunk_offset, chunk) != draw_mesh) {
+            if (decide_chunk(group_coord, chunk) != draw_mesh) {
                 return;
             }
             auto vertex_offset = chunk_mesh.vbo_byte_offset
@@ -1051,11 +1048,8 @@ class Renderer
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
-                        glm::vec3 chunk_offset(chunk_size * glm::ivec3(x,y,z));
                         Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        draw_chunk(group_coord(pcg),
-                                   chunk_offset,
-                                   chunk,
+                        draw_chunk(group_coord(pcg), chunk,
                                    entry->mesh_array[z][y][x]);
                         PANIC_IF_GL_ERROR;
                     }
@@ -1156,7 +1150,7 @@ class Renderer
                         chunk.get_aabb(&aabb_low, &aabb_high);
                         chunk.aabb_gpu_dirty = false;
                         entry->aabb_array[z][y][x] =
-                            PackedAABB(aabb_low + residue, aabb_high + residue);
+                            PackedAABB(aabb_low, aabb_high);
                     }
 
                     if (tex_dirty) {

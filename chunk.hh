@@ -58,6 +58,7 @@ struct Voxel
 class Chunk
 {
     friend class Renderer;
+    friend class ChunkGroup;
 
     // True when the AABB needs to be recalculated.
     bool aabb_dirty = true;
@@ -93,13 +94,17 @@ class Chunk
     static_assert(chunk_size * chunk_size * chunk_size <= 32767,
         "int16_t may not be enough for Chunk::total_visible.");
 
-    // Lower-left corner and upper-right of the AABB in voxel units.
-    // The lower-left is measured as if the lower-left of the chunk is
-    // the origin, so if voxel_array[1][2][3] is the only visible
-    // voxel, then aabb_low == (3,2,1) and aabb_high == (4,3,2).
+    // residue coordinate of the voxel at voxel_array[0][0][0], i.e.
+    // the offset in voxel units that the lower-left corner of this
+    // chunk is relative to the lower-left corner of the chunk group
+    // that it is in. This needs to be set by ChunkGroup.
+    glm::ivec3 chunk_offset;
+
+    // Lower-left corner and upper-right of the AABB in residue
+    // coordinates.
     glm::ivec3 aabb_low;
     glm::ivec3 aabb_high;
-  public:
+
     // Assuming that the given coordinate is wihin this chunk, return
     // the voxel at the given coordinate. ("Assume" ==
     // the upper bits are masked away without checking).
@@ -137,7 +142,6 @@ class Chunk
         return delta;
     }
 
-  private:
     // Write out the AABB lower-left corner and upper-right corner,
     // recomputing if needed.
     //
@@ -170,6 +174,8 @@ class Chunk
                 }
             }
             aabb_dirty = false;
+            aabb_low += chunk_offset;
+            aabb_high += chunk_offset;
         }
         if (ptr_aabb_low) *ptr_aabb_low = aabb_low;
         if (ptr_aabb_high) *ptr_aabb_high = aabb_high;
@@ -181,7 +187,6 @@ class Chunk
 class ChunkGroup
 {
     friend class Renderer;
-    static constexpr int edge_chunks = group_size / chunk_size;
 
     // Chunks within this chunk group, in [z][y][x] order.
     Chunk chunk_array[edge_chunks][edge_chunks][edge_chunks];
@@ -190,6 +195,18 @@ class ChunkGroup
     int32_t total_visible = 0;
 
   public:
+    ChunkGroup()
+    {
+        for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+                for (int x = 0; x < edge_chunks; ++x) {
+                    chunk_array[z][y][x].chunk_offset =
+                        chunk_size * glm::ivec3(x, y, z);
+                }
+            }
+        }
+    }
+
     // Assuming that the given coordinate is wihin this group, return
     // the voxel at the given coordinate.
     Voxel operator() (glm::ivec3 c) const

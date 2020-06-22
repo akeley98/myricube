@@ -24,8 +24,9 @@
 // (3D textures, buffer storage, etc.). Points in space are frequently
 // expressed as "group" and "residue" coordinates -- these are the
 // coordinates (in chunk-group-size units) of the lower-left of the
-// chunk the point is in, and the remaining offset within the chunk
-// (is that clear?). For example, if chunk groups were 100 x 100 x 100
+// chunk the point is in, and the remaining offset within the
+// chunk. (See split_coordinate for the precise floor-based
+// definition). For example, if chunk groups were 100 x 100 x 100
 // voxels, then point (1, 502.5, -1) has chunk coordinate (0, 5, -1)
 // and residue (1, 2.5, 99).
 //
@@ -89,6 +90,26 @@ static_assert((group_size % chunk_size) == 0,
     "There must be an integer number of chunks per chunk group.");
 static_assert((1 << chunk_shift) == chunk_size, "chunk_shift is wrong");
 static_assert((1 << group_shift) == group_size, "group_shift is wrong");
+
+// Edge-length of a chunk group cube in chunks.
+constexpr int edge_chunks = group_size / chunk_size;
+
+// Split a 3-vector in voxel units into its group and residue coordinates.
+inline void split_coordinate(glm::dvec3 v,
+                             glm::ivec3* p_group=nullptr,
+                             glm::vec3* p_residue=nullptr)
+{
+    int32_t group_x = int32_t(glm::floor(v.x / group_size));
+    int32_t group_y = int32_t(glm::floor(v.y / group_size));
+    int32_t group_z = int32_t(glm::floor(v.z / group_size));
+
+    glm::ivec3 group_coord(group_x, group_y, group_z);
+    if (p_group != nullptr) *p_group = group_coord;
+    if (p_residue != nullptr) {
+        *p_residue =
+            glm::vec3(v - glm::dvec3(group_coord) * double(group_size));
+    }
+}
 
 // Name a file that is in the data directory, and return its absolute path.
 std::string expand_filename(const std::string& in);
