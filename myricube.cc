@@ -214,7 +214,7 @@ int Main(std::vector<std::string> args)
         void draw_skybox(glm::mat4, glm::mat4);
         draw_skybox(camera.get_residue_view(), camera.get_projection());
         render_world_mesh_step(world, camera);
-        // render_world_raycast_step(world, camera);
+        render_world_raycast_step(world, camera);
         window.set_title("Myricube "
                          + std::to_string(window.get_fps()) + " FPS");
     }

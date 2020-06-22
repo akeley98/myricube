@@ -261,24 +261,66 @@ void swap(RaycastEntry& left, RaycastEntry& right)
 // wraparound fashion (i.e.  using modular arithmetic on group
 // coordinates) so that as the camera moves, the new groups being
 // rendered overwrites the old groups no longer being rendered.
-template <class Entry, uint32_t N>
+template <class Entry, uint32_t N, uint32_t Assoc>
 class BaseStore
 {
     // N should be made tunable later depending on
     // Camera::raycast_threshold or Camera::far_plane.
 
-    Entry entry_array[N][N][N];
+    struct CacheEntry
+    {
+        uint64_t last_access[Assoc] = {0};
+        Entry slots[Assoc];
+    };
+    // Monotonic increasing counter for least-recently accessed cache
+    // eviction algorithm.
+    uint64_t access_counter = 0;
+    CacheEntry entry_array[N][N][N];
+
+    // Victim cache
+    // Entry victim;
 
     // Return a pointer to the location that the Entry for the chunk
-    // group with the given group coordinate would be, IF it exists.
-    // (i.e. that location may be blank or occupied by an entry for
-    // another group).
-    Entry* cached_location(glm::ivec3 group_coord)
+    // group with the given group coordinate and world id should be.
+    // The p_valid bool tells us whether the returned Entry matches
+    // the one being searched for.
+    Entry* cached_location(
+        bool* p_valid, glm::ivec3 group_coord, uint64_t world_id)
     {
         uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % N;
         uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % N;
         uint32_t z = uint32_t(group_coord.z ^ 0x8000'0000) % N;
-        return &entry_array[z][y][x];
+        CacheEntry& cache_entry = entry_array[z][y][x];
+
+        // Try to search for a valid Entry for the requested world &
+        // group coordinate. Mark it as accessed if so
+        for (unsigned i = 0; i < Assoc; ++i) {
+            Entry* entry = &cache_entry.slots[i];
+            if (entry->world_id == world_id
+            and entry->group_coord == group_coord) {
+                cache_entry.last_access[i] = ++access_counter;
+                *p_valid = true;
+                return entry;
+            }
+        }
+
+        // Not found at this point; need to choose the least-recently
+        // used entry to evict. This is much colder code than above.
+        uint64_t min_access = cache_entry.last_access[0];
+        unsigned evict_idx = 0;
+        for (unsigned i = 1; i < Assoc; ++i) {
+            if (cache_entry.last_access[i] < min_access) evict_idx = i;
+        }
+        Entry* entry = &cache_entry.slots[evict_idx];
+
+        // Victim cache check (consider)
+        // using std::swap;
+        // swap(victim, *entry);
+        // *p_valid = entry->world_id == world_id
+        //        and entry->group_coord == group_coord;
+        *p_valid = false;
+        cache_entry.last_access[evict_idx] = ++access_counter;
+        return entry;
     }
 
   public:
@@ -289,13 +331,13 @@ class BaseStore
     Entry* update(PositionedChunkGroup& pcg, VoxelWorld& world)
     {
         glm::ivec3 gc = group_coord(pcg);
-        Entry* entry = cached_location(gc);
+        bool valid;
+        Entry* entry = cached_location(&valid, gc, world.id());
 
         // If the Entry in the array already corresponds to the given
         // chunk group; just update it (deal with dirty chunks) and
         // return.
-        if (entry->world_id == world.id()
-        and entry->group_coord == group_coord(pcg)) {
+        if (valid) {
             EntryFiller::update(pcg, world, entry);
             return entry;
         }
@@ -322,8 +364,8 @@ class BaseStore
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 4> { };
-class RaycastStore : public BaseStore<RaycastEntry, 7> { };
+class MeshStore : public BaseStore<MeshEntry, 2, 6> { };
+class RaycastStore : public BaseStore<RaycastEntry, 5, 4> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -386,6 +428,8 @@ static const char raycast_vs_source[] =
 "flat out ivec3 aabb_high;\n"
 "uniform mat4 mvp_matrix;\n"
 "uniform vec3 eye_relative_group_origin;\n"
+"uniform int far_plane_squared;\n"
+"uniform int raycast_thresh_squared;\n"
 "void main() {\n"
     "int low_x = packed_aabb_low & 255;\n"
     "int low_y = (packed_aabb_low >> 8) & 255;\n"
@@ -396,13 +440,22 @@ static const char raycast_vs_source[] =
     "vec3 f_aabb_low = vec3(low_x, low_y, low_z);\n"
     "vec3 sz = vec3(high_x, high_y, high_z) - f_aabb_low;\n"
     "vec4 model_space_pos = vec4(unit_box_vertex.xyz * sz + f_aabb_low, 1);\n"
-    "gl_Position = mvp_matrix * model_space_pos;\n"
     "vec3 disp = model_space_pos.xyz - eye_relative_group_origin;\n"
     "float distance = sqrt(dot(disp, disp));\n"
     "border_fade = clamp(sqrt(distance) * 0.042, 0.5, 1.0);\n"
     "aabb_low = ivec3(low_x, low_y, low_z);\n"
     "aabb_high = ivec3(high_x, high_y, high_z);\n"
+    // Re-implement decide_chunk(...) == draw_raycast on GPU.
+    "vec3 aabb_center = vec3(aabb_low + aabb_high) * 0.5;\n"
+    "vec3 floor_eye = floor(eye_relative_group_origin);\n"
+    "disp = aabb_center - floor_eye;\n"
     "residue_coord = model_space_pos.xyz;\n"
+    "float squared_dist = dot(disp, disp);\n"
+    "bool draw_raycast = squared_dist\n"
+        "== clamp(squared_dist, raycast_thresh_squared, far_plane_squared);\n"
+    // Draw as degenerate triangle if this chunk is not meant for raycasting.
+    "gl_Position = draw_raycast ? mvp_matrix * model_space_pos\n"
+                               ": vec4(0,0,0,1);\n"
 "}\n";
 
 static const char raycast_fs_source[] =
@@ -435,7 +488,6 @@ static const char raycast_fs_source[] =
     "int x_init = int(xm > 0 ? ceil(residue_coord.x) \n"
                             ": floor(residue_coord.x));\n"
     "int x_end = xm > 0 ? aabb_high.x : aabb_low.x;\n"
-    // "int x_end = xm > 0 ? 64 : 0;\n"
     "int x_step = xm > 0 ? 1 : -1;\n"
     "float x_fudge = xm > 0 ? .25 : -.25;\n"
     "for (int x = x_init; x != x_end; x += x_step) {\n"
@@ -462,7 +514,6 @@ static const char raycast_fs_source[] =
     "int y_init = int(ym > 0 ? ceil(residue_coord.y) \n"
                             ": floor(residue_coord.y));\n"
     "int y_end = ym > 0 ? aabb_high.y : aabb_low.y;\n"
-    // "int y_end = ym > 0 ? 64 : 0;\n"
     "int y_step = ym > 0 ? 1 : -1;\n"
     "float y_fudge = ym > 0 ? .25 : -.25;\n"
     "for (int y = y_init; y != y_end; y += y_step) {\n"
@@ -489,7 +540,6 @@ static const char raycast_fs_source[] =
     "int z_init = int(zm > 0 ? ceil(residue_coord.z) \n"
                             ": floor(residue_coord.z));\n"
     "int z_end = zm > 0 ? aabb_high.z : aabb_low.z;\n"
-    // "int z_end = zm > 0 ? 64 : 0;\n"
     "int z_step = zm > 0 ? 1 : -1;\n"
     "float z_fudge = zm > 0 ? .25 : -.25;\n"
     "for (int z = z_init; z != z_end; z += z_step) {\n"
@@ -1181,8 +1231,6 @@ class Renderer
     // using the AABB-raycast algorithm. Chunks that are near
     // enough to have been drawn using the mesh algorithm will
     // not be re-drawn.
-    //
-    // TODO: This last sentence is not accurate at the moment.
     void render_world_raycast_step() noexcept
     {
         RaycastStore& store = camera.get_raycast_store();
@@ -1199,6 +1247,8 @@ class Renderer
         // Position of camera eye relative to the origin of the group
         // (origin == group_size times the group coordinate).
         static GLint eye_relative_group_origin_id;
+        static GLint far_plane_squared_id;
+        static GLint raycast_thresh_squared_id;
         static GLint chunk_blocks_id;
         static GLint chunk_debug_id;
 
@@ -1213,6 +1263,12 @@ class Renderer
             assert(chunk_blocks_id >= 0);
             chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
             assert(chunk_debug_id >= 0);
+            far_plane_squared_id = glGetUniformLocation(program_id,
+                "far_plane_squared");
+            assert(far_plane_squared_id >= 0);
+            raycast_thresh_squared_id = glGetUniformLocation(program_id,
+                "raycast_thresh_squared");
+            assert(raycast_thresh_squared_id >= 0);
 
             glGenBuffers(1, &vertex_buffer_id);
             glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
@@ -1235,6 +1291,10 @@ class Renderer
         glUniform1i(chunk_debug_id, chunk_debug);
         glActiveTexture(GL_TEXTURE0);
         glUniform1i(chunk_blocks_id, 0);
+        auto far_plane = camera.get_far_plane();
+        glUniform1i(far_plane_squared_id, far_plane * far_plane);
+        auto raycast_thr = camera.get_raycast_threshold();
+        glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
         PANIC_IF_GL_ERROR;
 
         // My plan is to use instanced rendering to draw the chunk AABBs
@@ -1310,8 +1370,13 @@ class Renderer
             PANIC_IF_GL_ERROR;
         };
 
-        // TODO: Again, need to cull chunks.
+        float squared_thresh = camera.get_far_plane();
+        squared_thresh *= squared_thresh;
+        // TODO: Avoid visiting far away chunk groups.
         for (PositionedChunkGroup& pcg : world.group_map) {
+            float min_squared_dist;
+            bool cull = cull_group(pcg, &min_squared_dist);
+            if (cull or min_squared_dist >= squared_thresh) continue;
             draw_group(pcg);
         }
     }
@@ -1425,7 +1490,7 @@ static const char skybox_vs_source[] =
 "uniform mat4 view_matrix;\n"
 "uniform mat4 proj_matrix;\n"
 "void main() {\n"
-    "vec4 v = view_matrix * vec4(400*position, 0.0);\n"
+    "vec4 v = view_matrix * vec4(position, 0.0);\n"
     "gl_Position = proj_matrix * vec4(v.xyz, 1);\n"
     "texture_coordinate = position;\n"
 "}\n";
