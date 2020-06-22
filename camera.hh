@@ -26,15 +26,17 @@ class Camera
 
     // Near and far plane for z-depth.
     // Far plane influences the chunk render distance.
-    float near_plane = 0.1f, far_plane = 1000.0f;
+    float near_plane = 0.1f;
+    int far_plane = 1000;
 
     // (roughly) minimum distance from the camera that a chunk needs
     // to be to switch from mesh to raycast graphics.
-    float raycast_threshold = 120.0f;
+    // Keep as int to avoid rounding errors in distance culling.
+    int raycast_threshold = 120;
 
-    // TODO: Add setters for the near/raycast/far planes, but to do
-    // this safely I need to make MeshStore::N and RaycastStore::N
-    // configurable.
+    // TODO: I've added setters for the near/raycast/far planes, but
+    // to do this safely I need to make MeshStore::N and
+    // RaycastStore::N configurable.
 
     // Horizontal and vertical angle camera is pointed in.
     float theta = 1.5707f, phi = 1.5707f;
@@ -101,10 +103,10 @@ class Camera
                                           glm::vec3(0, 1, 0));
 
         projection_matrix = glm::perspective(
-            fovy_radians,
+            float(fovy_radians),
             float(window_x) / window_y,
-            near_plane,
-            far_plane);
+            float(near_plane),
+            float(far_plane));
 
         residue_vp_matrix = projection_matrix * residue_view_matrix;
 
@@ -156,14 +158,32 @@ class Camera
         return near_plane;
     }
 
-    float get_far_plane() const
+    void set_near_plane(float in)
+    {
+        near_plane = in;
+        dirty = true;
+    }
+
+    int get_far_plane() const
     {
         return far_plane;
     }
 
-    float get_raycast_threshold() const
+    void set_far_plane(int in)
+    {
+        far_plane = in;
+        dirty = true;
+    }
+
+    int get_raycast_threshold() const
     {
         return raycast_threshold;
+    }
+
+    void set_raycast_threshold(int in)
+    {
+        raycast_threshold = in;
+        dirty = true;
     }
 
     void set_eye(glm::dvec3 in)

@@ -62,6 +62,9 @@ class Chunk
     // True when the AABB needs to be recalculated.
     bool aabb_dirty = true;
 
+    // True when the AABB needs to be re-sent to the GPU.
+    bool aabb_gpu_dirty = true;
+
     // True when the texture needs to be re-uploaded to the GPU.
     bool texture_dirty = true;
 
@@ -112,6 +115,7 @@ class Chunk
     int set(glm::ivec3 c, Voxel v)
     {
         aabb_dirty = true;
+        aabb_gpu_dirty = true;
         texture_dirty = true;
         mesh_dirty = true;
 

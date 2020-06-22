@@ -179,6 +179,31 @@ struct PackedAABB
         z = aabb_high.z;
         packed_high = uint32_t(x) | uint32_t(y) << 8 | uint32_t(z) << 16;
     }
+
+    uint8_t low_x() const
+    {
+        return uint8_t(packed_low & 255);
+    }
+    uint8_t low_y() const
+    {
+        return uint8_t((packed_low >> 8) & 255);
+    }
+    uint8_t low_z() const
+    {
+        return uint8_t((packed_low >> 16) & 255);
+    }
+    uint8_t high_x() const
+    {
+        return uint8_t(packed_high & 255);
+    }
+    uint8_t high_y() const
+    {
+        return uint8_t((packed_high >> 8) & 255);
+    }
+    uint8_t high_z() const
+    {
+        return uint8_t((packed_high >> 16) & 255);
+    }
 };
 
 // All voxels within a chunk group share a single 3D texture on the
@@ -237,7 +262,7 @@ void swap(RaycastEntry& left, RaycastEntry& right)
 // wraparound fashion (i.e.  using modular arithmetic on group
 // coordinates) so that as the camera moves, the new groups being
 // rendered overwrites the old groups no longer being rendered.
-template <class Entry, int N>
+template <class Entry, uint32_t N>
 class BaseStore
 {
     // N should be made tunable later depending on
@@ -245,19 +270,19 @@ class BaseStore
 
     Entry entry_array[N][N][N];
 
-  public:
     // Return a pointer to the location that the Entry for the chunk
     // group with the given group coordinate would be, IF it exists.
     // (i.e. that location may be blank or occupied by an entry for
     // another group).
     Entry* cached_location(glm::ivec3 group_coord)
     {
-        uint32_t x = (uint32_t(group_coord.x) ^ 0x1000'0000) % N;
-        uint32_t y = (uint32_t(group_coord.y) ^ 0x1000'0000) % N;
-        uint32_t z = (uint32_t(group_coord.z) ^ 0x1000'0000) % N;
+        uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % N;
+        uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % N;
+        uint32_t z = uint32_t(group_coord.z ^ 0x8000'0000) % N;
         return &entry_array[z][y][x];
     }
 
+  public:
     // Return a valid, updated Entry for the given chunk group
     // extracted from the given world. TODO document templates needed
     // for this to work.
@@ -285,14 +310,20 @@ class BaseStore
                             int(entry->group_coord.y),
                             int(entry->group_coord.z),
                             long(entry->world_id));
-
         }
+        fprintf(stderr, "Storing %s entry for chunk group "
+                        "(%i %i %i) of world %li\n",
+                        typeid(Entry).name(),
+                        int(gc.x),
+                        int(gc.y),
+                        int(gc.z),
+                        long(world.id()));
         EntryFiller::replace(pcg, world, entry);
         return entry;
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 5> { };
+class MeshStore : public BaseStore<MeshEntry, 4> { };
 class RaycastStore : public BaseStore<RaycastEntry, 7> { };
 
 #define BORDER_WIDTH_STR "0.1"
@@ -524,6 +555,114 @@ class Renderer
     Renderer(VoxelWorld& world_, Camera& camera_) :
         camera(camera_), world(world_) { }
 
+    // Culling strategy: There are two phases to culling chunks: group
+    // culling and distance culling. In group culling, entire groups of
+    // chunks are culled if they are outside the view frustum, or if they
+    // contain no visible voxels. Then of the chunks in non-culled groups,
+    // their distance to the eye is calculated, and the chunk is culled,
+    // drawn with raycasting, or drawn as a mesh, depending on whether
+    // it is out-of-range of, far, or near the camera.
+
+    // Should this group be culled? If not, return through *the squared
+    // distance between the eye and the nearest point in the group.
+    bool cull_group(PositionedChunkGroup& pcg, float* squared_dist=nullptr)
+    {
+        if (group(pcg).total_visible == 0) return true;
+
+        glm::mat4 vp = camera.get_residue_vp();
+        glm::ivec3 eye_group;
+        glm::vec3 eye_residue;
+        camera.get_eye(&eye_group, &eye_residue);
+        eye_residue = glm::floor(eye_residue); // to match decide_chunk.
+
+        // Position of this chunk group relative to the group that the
+        // eye is in, in voxel units.
+        glm::vec3 low_corner(group_size * (group_coord(pcg) - eye_group));
+
+        const glm::vec3 x_edge = glm::vec3(group_size, 0, 0);
+        const glm::vec3 y_edge = glm::vec3(0, group_size, 0);
+        const glm::vec3 z_edge = glm::vec3(0, 0, group_size);
+
+        // Compute the clip space (?) coordinates of the 8 corners of
+        // this chunk group.
+        glm::vec3 corners[8];
+        auto to_clip_space = [vp] (glm::vec3 v)
+        {
+            auto vp_v = vp * glm::vec4(v, 1);
+            return glm::vec3(vp_v) / vp_v.w;
+        };
+        corners[0] = to_clip_space(low_corner);
+        corners[1] = to_clip_space(low_corner + x_edge);
+        corners[2] = to_clip_space(low_corner + y_edge);
+        corners[3] = to_clip_space(low_corner + z_edge);
+        corners[4] = to_clip_space(low_corner + x_edge + y_edge);
+        corners[5] = to_clip_space(low_corner + x_edge + z_edge);
+        corners[6] = to_clip_space(low_corner + y_edge + z_edge);
+        glm::vec3 high_corner = low_corner + x_edge + y_edge + z_edge;
+        corners[7] = to_clip_space(high_corner);
+
+        // Remove the chunk if it is entirely out-of-bounds in one
+        // direction on the x/y/z axis (one-direction == we won't clip
+        // the group if the corners are all out-of-bounds but some
+        // visible portion of the group "straddles" the frustum).
+        glm::vec3 low = corners[0], high = corners[0];
+        for (int i = 1; i < 8; ++i) {
+            low = glm::min(low, corners[i]);
+            high = glm::max(high, corners[i]);
+        }
+
+        if (low.x < -1 && high.x < -1) return true;
+        if (low.y < -1 && high.y < -1) return true;
+        if (low.z < 0 && high.z < 0) return true;
+        if (low.x > 1 && high.x > 1) return true;
+        if (low.y > 1 && high.y > 1) return true;
+        if (low.z > 1 && high.z > 1) return true;
+
+        if (squared_dist) {
+            glm::vec3 nearest_point = glm::clamp(
+                eye_residue, low_corner, high_corner);
+            glm::vec3 disp = nearest_point - eye_residue;
+            *squared_dist = glm::dot(disp, disp);
+        }
+        return false;
+    }
+
+    static constexpr int cull = 1, draw_mesh = 2, draw_raycast = 3;
+    // Distance culling step. Given the group coordinate, offset of
+    // the chunk in its chunk group, and AABB of a chunk, decide which
+    // of the above things we should do: cull it, draw it with the
+    // mesh algorithm (near the eye), or draw it with the raycast
+    // algorithm (far away).
+    //
+    // This function may be duplicated on the GPU, hence the
+    // floor(eye) -- this prevents subtle disagreements due to
+    // different FP representations.
+    int decide_chunk(glm::ivec3 group_coord,
+                     glm::vec3 chunk_offset,
+                     Chunk& chunk)
+    {
+        if (chunk.total_visible == 0) return cull;
+        glm::ivec3 aabb_low, aabb_high;
+        chunk.get_aabb(&aabb_low, &aabb_high);
+        glm::vec3 aabb_center = glm::vec3(aabb_high + aabb_low) * 0.5f
+                              + chunk_offset;
+        glm::ivec3 eye_group;
+        glm::vec3 eye_residue;
+        camera.get_eye(&eye_group, &eye_residue);
+        auto far_plane = camera.get_far_plane();
+        auto raycast_thresh = camera.get_raycast_threshold();
+
+        // Compute the displacement between the eye and the center of
+        // the chunk's AABB.
+        glm::vec3 disp = aabb_center - glm::floor(eye_residue);
+        disp += glm::vec3(group_size * (group_coord - eye_group));
+
+        float squared_dist = glm::dot(disp, disp);
+        if (squared_dist > far_plane * far_plane) return cull;
+        if (squared_dist < raycast_thresh * raycast_thresh) return draw_mesh;
+        return draw_raycast;
+    }
+
     // Given a chunk, make the mesh needed to render it. I also need
     // the residue coordinate of the lower-left of the chunk (i.e.
     // the position of the chunk relative to the chunk group it is
@@ -537,6 +676,11 @@ class Renderer
     // chunks that reveal previously hidden voxel faces. This may
     // not be worth it, so for now, I don't include a VoxelWorld
     // argument needed to make this happen.
+    //
+    // The main argument for doing this correctly is not performance,
+    // but because if the voxels are actually textured or lit,
+    // "hidden" faces may result in ugly line-like artifacts due to
+    // depth buffer rounding.
     static std::vector<MeshVertex> make_mesh_verts(const Chunk& chunk,
                                                    glm::ivec3 chunk_residue)
     {
@@ -830,8 +974,7 @@ class Renderer
     }
 
     // Render, to the current framebuffer, chunks near the camera
-    // using the conventional mesh-based algorithm. TODO: honor the
-    // "near" part.
+    // using the conventional mesh-based algorithm.
     void render_world_mesh_step() noexcept
     {
         MeshStore& store = camera.get_mesh_store();
@@ -857,12 +1000,16 @@ class Renderer
         glUseProgram(program_id);
         PANIC_IF_GL_ERROR;
 
-        // TODO: Actually cull far-away chunks.
-        auto draw_chunk = [&] (Chunk& chunk, ChunkMesh& mesh)
+        auto draw_chunk = [&]
+        (glm::ivec3 group_coord, glm::vec3 chunk_offset,
+        Chunk& chunk, ChunkMesh& chunk_mesh)
         {
-            if (chunk.total_visible == 0) return;
-            auto vertex_offset = mesh.vbo_byte_offset / sizeof (mesh.verts[0]);
-            auto vertex_count = mesh.verts.size();
+            if (decide_chunk(group_coord, chunk_offset, chunk) != draw_mesh) {
+                return;
+            }
+            auto vertex_offset = chunk_mesh.vbo_byte_offset
+                               / sizeof (chunk_mesh.verts[0]);
+            auto vertex_count = chunk_mesh.verts.size();
             glDrawArrays(GL_TRIANGLES, vertex_offset, vertex_count);
         };
 
@@ -904,16 +1051,29 @@ class Renderer
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
+                        glm::vec3 chunk_offset(chunk_size * glm::ivec3(x,y,z));
                         Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        draw_chunk(chunk, entry->mesh_array[z][y][x]);
+                        draw_chunk(group_coord(pcg),
+                                   chunk_offset,
+                                   chunk,
+                                   entry->mesh_array[z][y][x]);
                         PANIC_IF_GL_ERROR;
                     }
                 }
             }
         };
 
-        // TODO: Again, need to cull chunks.
+        float squared_thresh = camera.get_raycast_threshold();
+        squared_thresh *= squared_thresh;
+
+        // TODO: Avoid visiting too-far-away chunk groups.
         for (PositionedChunkGroup& pcg : world.group_map) {
+            float min_squared_dist;
+            bool cull = cull_group(pcg, &min_squared_dist);
+            // Skip culled chunk groups or those so far away that they
+            // cannot possibly contain chunks near enough to be drawn
+            // using the mesh renderer.
+            if (cull or min_squared_dist >= squared_thresh) continue;
             draw_group(pcg);
         }
     }
@@ -988,24 +1148,15 @@ class Renderer
                     Chunk& chunk = group(pcg).chunk_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
                     bool tex_dirty = always_dirty | chunk.texture_dirty;
-                    bool aabb_dirty = always_dirty | chunk.aabb_dirty;
+                    bool aabb_dirty = always_dirty | chunk.aabb_gpu_dirty;
                     vbo_dirty |= aabb_dirty;
 
                     if (aabb_dirty) {
                         glm::ivec3 aabb_low, aabb_high;
                         chunk.get_aabb(&aabb_low, &aabb_high);
+                        chunk.aabb_gpu_dirty = false;
                         entry->aabb_array[z][y][x] =
                             PackedAABB(aabb_low + residue, aabb_high + residue);
-                        // int packed_aabb_low = entry->aabb_array[z][y][x].packed_low;
-                        // int packed_aabb_high = entry->aabb_array[z][y][x].packed_high;
-                        // int low_x = (packed_aabb_low >> 16) & 255;
-                        // int low_y = (packed_aabb_low >> 8) & 255;
-                        // int low_z = packed_aabb_low & 255;
-                        // int high_x = (packed_aabb_high >> 16) & 255;
-                        // int high_y = (packed_aabb_high >> 8) & 255;
-                        // int high_z = packed_aabb_high & 255;
-                        // printf("(%i %i %i) (%i %i %i)\n",
-                        //     low_x, low_y, low_z, high_x, high_y, high_z);
                     }
 
                     if (tex_dirty) {
@@ -1052,7 +1203,7 @@ class Renderer
         static GLuint element_buffer_id;
         static GLint mvp_matrix_id;
         // Position of camera eye relative to the origin of the group
-        // (i.e. group_size times the group coordinate).
+        // (origin == group_size times the group coordinate).
         static GLint eye_relative_group_origin_id;
         static GLint chunk_blocks_id;
         static GLint chunk_debug_id;
