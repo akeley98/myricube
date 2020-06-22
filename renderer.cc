@@ -325,6 +325,7 @@ class BaseStore
     }
 
   public:
+    uint64_t eviction_count = 0;
     // Return a valid, updated Entry for the given chunk group
     // extracted from the given world. TODO document templates needed
     // for this to work.
@@ -344,29 +345,30 @@ class BaseStore
         }
 
         // Otherwise, we need to evict the current entry and repopulate it.
-        if (long(entry->world_id) >= 0) {
-            fprintf(stderr, "Evicting %s entry for chunk group "
-                            "(%i %i %i) of world %li\n",
-                            typeid(Entry).name(),
-                            int(entry->group_coord.x),
-                            int(entry->group_coord.y),
-                            int(entry->group_coord.z),
-                            long(entry->world_id));
-        }
-        fprintf(stderr, "Storing %s entry for chunk group "
-                        "(%i %i %i) of world %li\n",
-                        typeid(Entry).name(),
-                        int(gc.x),
-                        int(gc.y),
-                        int(gc.z),
-                        long(world.id()));
+        // if (long(entry->world_id) >= 0) {
+        //     fprintf(stderr, "Evicting %s entry for chunk group "
+        //                     "(%i %i %i) of world %li\n",
+        //                     typeid(Entry).name(),
+        //                     int(entry->group_coord.x),
+        //                     int(entry->group_coord.y),
+        //                     int(entry->group_coord.z),
+        //                     long(entry->world_id));
+        // }
+        // fprintf(stderr, "Storing %s entry for chunk group "
+        //                 "(%i %i %i) of world %li\n",
+        //                 typeid(Entry).name(),
+        //                 int(gc.x),
+        //                 int(gc.y),
+        //                 int(gc.z),
+        //                 long(world.id()));
         EntryFiller::replace(pcg, world, entry);
+        ++eviction_count;
         return entry;
     }
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 10> { };
-class RaycastStore : public BaseStore<RaycastEntry, 3, 16> { };
+class RaycastStore : public BaseStore<RaycastEntry, 3, 18> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -1027,6 +1029,8 @@ class Renderer
     void render_world_mesh_step() noexcept
     {
         MeshStore& store = camera.get_mesh_store();
+        store.eviction_count = 0;
+
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;
@@ -1120,6 +1124,11 @@ class Renderer
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
             draw_group(pcg);
+        }
+
+        if (store.eviction_count >= 5) {
+            fprintf(stderr, "%i MeshStore evictions.\n",
+                int(store.eviction_count));
         }
     }
 
@@ -1235,6 +1244,8 @@ class Renderer
     void render_world_raycast_step() noexcept
     {
         RaycastStore& store = camera.get_raycast_store();
+        store.eviction_count = 0;
+
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;
@@ -1389,6 +1400,11 @@ class Renderer
         std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
         for (auto& pair : pcg_by_depth) {
             draw_group(*pair.second);
+        }
+
+        if (store.eviction_count >= 5) {
+            fprintf(stderr, "%i RaycastStore evictions.\n",
+                int(store.eviction_count));
         }
     }
 };
