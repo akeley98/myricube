@@ -648,15 +648,15 @@ class Renderer
 
         // Compute the clip space (?) coordinates of the 8 corners of
         // this chunk group, and find the min/max of the xyz coordinates.
-        // Ignore corners behind the camera (w <= 0).
+        // Take the abs of w before dividing x and y (but not z) so that
+        // the x/y bounding planes don't swap sides.
         bool first_time = true;
         glm::vec3 low(-1), high(-1);
-        glm::vec3 corners[8];
         auto minmax_corner = [vp, &low, &high, &first_time] (glm::vec3 v)
         {
             auto vp_v = vp * glm::vec4(v, 1);
-            if (vp_v.w <= 0) return;
-            glm::vec3 clip_coord = glm::vec3(vp_v) / vp_v.w;
+            float abs_w = glm::abs(vp_v.w);
+            glm::vec3 clip_coord(vp_v.x/abs_w, vp_v.y/abs_w, vp_v.z/vp_v.w);
 
             if (first_time) {
                 low = clip_coord;
@@ -668,27 +668,21 @@ class Renderer
                 high = glm::max(high, clip_coord);
             }
         };
-        corners[0] = low_corner;
-        corners[1] = low_corner + x_edge;
-        corners[2] = low_corner + y_edge;
-        corners[3] = low_corner + z_edge;
-        corners[4] = low_corner + x_edge + y_edge;
-        corners[5] = low_corner + x_edge + z_edge;
-        corners[6] = low_corner + y_edge + z_edge;
-        glm::vec3 high_corner = low_corner + x_edge + y_edge + z_edge;
-        corners[7] = high_corner;
 
-        for (int i = 0; i < 8; ++i) {
-            minmax_corner(corners[i]);
-        }
+        minmax_corner(low_corner);
+        minmax_corner(low_corner + x_edge);
+        minmax_corner(low_corner + y_edge);
+        minmax_corner(low_corner + z_edge);
+        minmax_corner(low_corner + x_edge + y_edge);
+        minmax_corner(low_corner + x_edge + z_edge);
+        minmax_corner(low_corner + y_edge + z_edge);
+        glm::vec3 high_corner = low_corner + x_edge + y_edge + z_edge;
+        minmax_corner(high_corner);
 
         // Cull the chunk if it is entirely out-of-bounds in one
         // direction on the x/y/z axis (one-direction == we won't clip
         // the group if the corners are all out-of-bounds but some
         // visible portion of the group "straddles" the frustum).
-        //
-        // Also cull if all vectors had w <= 0. (first_time variable)
-        if (first_time) return true;
         if (low.x < -1 && high.x < -1) return true;
         if (low.y < -1 && high.y < -1) return true;
         if (low.z < 0 && high.z < 0) return true;

@@ -13,7 +13,7 @@ OBJS=cckiss/myricube.cc.s \
      cckiss/window.cc.s \
      cckiss/renderer.cc.s \
      cckiss/glad/src/glad.c.s \
-     cckiss/apps/marlo-planet.cc.s \
+     cckiss/apps/random-walk.cc.s \
 # Empty line for backslash
 
 myricube-bin: $(OBJS)
