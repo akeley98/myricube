@@ -38,6 +38,10 @@ void gl_clear();
 // When culling_freeze is active, frustum culling is done using the
 // camera from when the freezing started, not the current camera. Not
 // threadsafe; it's a debugging tool.
+//
+// At time of writing this looks glitchy because mesh culling is done
+// on the CPU side with the fake frozen camera while raycast culling
+// is partially done on the GPU still with the real camera position.
 void toggle_culling_freeze(Camera&);
 
 } // end namespace

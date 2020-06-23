@@ -329,8 +329,13 @@ class BaseStore
     // Return a valid, updated Entry for the given chunk group
     // extracted from the given world. TODO document templates needed
     // for this to work.
+    //
+    // If allow_failure is true, return null instead of evicting a
+    // cache entry if the needed entry is not found.
     template <typename EntryFiller>
-    Entry* update(PositionedChunkGroup& pcg, VoxelWorld& world)
+    Entry* update(PositionedChunkGroup& pcg,
+                  VoxelWorld& world,
+                  bool allow_failure=false)
     {
         glm::ivec3 gc = group_coord(pcg);
         bool valid;
@@ -344,31 +349,16 @@ class BaseStore
             return entry;
         }
 
-        // Otherwise, we need to evict the current entry and repopulate it.
-        // if (long(entry->world_id) >= 0) {
-        //     fprintf(stderr, "Evicting %s entry for chunk group "
-        //                     "(%i %i %i) of world %li\n",
-        //                     typeid(Entry).name(),
-        //                     int(entry->group_coord.x),
-        //                     int(entry->group_coord.y),
-        //                     int(entry->group_coord.z),
-        //                     long(entry->world_id));
-        // }
-        // fprintf(stderr, "Storing %s entry for chunk group "
-        //                 "(%i %i %i) of world %li\n",
-        //                 typeid(Entry).name(),
-        //                 int(gc.x),
-        //                 int(gc.y),
-        //                 int(gc.z),
-        //                 long(world.id()));
+        if (allow_failure) return nullptr;
+
         EntryFiller::replace(pcg, world, entry);
         ++eviction_count;
         return entry;
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 2, 10> { };
-class RaycastStore : public BaseStore<RaycastEntry, 4, 9> { };
+class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
+class RaycastStore : public BaseStore<RaycastEntry, 4, 8> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -636,6 +626,14 @@ class Renderer
             eye_residue = frozen_eye_residue;
         } else {
             camera.get_eye(&eye_group, &eye_residue);
+        }
+
+        // Never cull the group the eye is in (this avoids
+        // pathological cases e.g. 7 corners behind eye and 1 in front
+        // and out of the frustum).
+        if (group_coord(pcg) == eye_group) {
+            if (squared_dist) *squared_dist = 0.0f;
+            return false;
         }
 
         eye_residue = glm::floor(eye_residue); // to match decide_chunk.
@@ -1335,14 +1333,35 @@ class Renderer
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
         PANIC_IF_GL_ERROR;
 
+        std::vector<PositionedChunkGroup*> deferred_pcg;
+
         // My plan is to use instanced rendering to draw the chunk AABBs
         // of this chunk group. The base box is a 1x1x1 unit box, which
         // is stretched and repositioned in the vertex shader to the
         // true AABB.
-        auto draw_group = [&] (PositionedChunkGroup& pcg)
+        //
+        // This is a bit of an experimental after-the-fact hack but
+        // the allow_defer and deferred_pcg variables are used to
+        //
+        // A. Throttle the number of RaycastStore updates done subject
+        //    to the limits of camera.max_raycast_evict.
+        //
+        // B. Put some time between updating a missing RaycastEntry and
+        //    drawing its corresponding chunk group. This /in principle/
+        //    prevents texture updates from stalling the GPU so much.
+        auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
         {
             // if (group(pcg).total_visible == 0) return;
-            RaycastEntry* entry = store.update<Renderer>(pcg, world);
+            RaycastEntry* entry = store.update<Renderer>(
+                pcg, world, allow_defer);
+
+            if (entry == nullptr) {
+                if (deferred_pcg.size() < camera.max_raycast_evict) {
+                    store.update<Renderer>(pcg, world, false);
+                    deferred_pcg.push_back(&pcg);
+                }
+                return;
+            }
             assert(entry->texture_name != 0);
             assert(entry->vbo_name != 0);
 
@@ -1425,7 +1444,10 @@ class Renderer
 
         std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
         for (auto& pair : pcg_by_depth) {
-            draw_group(*pair.second);
+            draw_group(*pair.second, true);
+        }
+        for (PositionedChunkGroup* p_pcg : deferred_pcg) {
+            draw_group(*p_pcg, false);
         }
 
         if (store.eviction_count >= 5) {
@@ -1493,173 +1515,6 @@ void toggle_culling_freeze(Camera& current_camera)
         frozen_vp = current_camera.get_residue_vp();
         current_camera.get_eye(&frozen_eye_group, &frozen_eye_residue);
     }
-}
-
-// Old skybox code I copied.
-void load_cubemap_face(GLenum face, const char* filename)
-{
-    std::string full_filename = expand_filename(filename);
-    SDL_Surface* surface = SDL_LoadBMP(full_filename.c_str());
-    if (surface == nullptr) {
-        panic(SDL_GetError(), full_filename.c_str());
-    }
-    if (surface->w != 1024 || surface->h != 1024) {
-        panic("Expected 1024x1024 texture", full_filename.c_str());
-    }
-    if (surface->format->format != SDL_PIXELFORMAT_BGR24) {
-        fprintf(stderr, "%i\n", (int)surface->format->format);
-        panic("Expected 24-bit BGR bitmap", full_filename.c_str());
-    }
-
-    glTexImage2D(face, 0, GL_RGB, 1024, 1024, 0,
-                  GL_BGR, GL_UNSIGNED_BYTE, surface->pixels);
-
-    SDL_FreeSurface(surface);
-}
-
-GLuint load_cubemap()
-{
-    GLuint id = 0;
-    glGenTextures(1, &id);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, id);
-
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_LOD, 0);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LOD, 8);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, 8);
-
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, "left.bmp");
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_X, "right.bmp");
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, "bottom.bmp");
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Y, "top.bmp");
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, "back.bmp");
-    load_cubemap_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Z, "front.bmp");
-
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-
-    PANIC_IF_GL_ERROR;
-    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-
-    return id;
-}
-
-static const char skybox_vs_source[] =
-"#version 330\n"
-"layout(location=0) in vec3 position;\n"
-"out vec3 texture_coordinate;\n"
-"uniform mat4 view_matrix;\n"
-"uniform mat4 proj_matrix;\n"
-"void main() {\n"
-    "vec4 v = view_matrix * vec4(position, 0.0);\n"
-    "gl_Position = proj_matrix * vec4(v.xyz, 1);\n"
-    "texture_coordinate = position;\n"
-"}\n";
-
-static const char skybox_fs_source[] =
-"#version 330\n"
-"in vec3 texture_coordinate;\n"
-"out vec4 color;\n"
-"uniform samplerCube cubemap;\n"
-"void main() {\n"
-    "vec4 c = texture(cubemap, texture_coordinate);\n"
-    "c.a = 1.0;\n"
-    "color = c;\n"
-    "gl_FragDepth = 0.99999;\n"
-"}\n";
-
-static const float skybox_vertices[24] = {
-    -1, 1, 1,
-    -1, -1, 1,
-    1, -1, 1,
-    1, 1, 1,
-    -1, 1, -1,
-    -1, -1, -1,
-    1, -1, -1,
-    1, 1, -1,
-};
-
-static const GLushort skybox_elements[36] = {
-    7, 4, 5, 7, 5, 6,
-    1, 0, 3, 1, 3, 2,
-    5, 1, 2, 5, 2, 6,
-    4, 7, 3, 4, 3, 0,
-    0, 1, 5, 0, 5, 4,
-    2, 3, 7, 2, 7, 6
-};
-
-void draw_skybox(
-    glm::mat4 view_matrix, glm::mat4 proj_matrix)
-{
-    static bool cubemap_loaded = false;
-    static GLuint cubemap_texture_id;
-    if (!cubemap_loaded) {
-        cubemap_texture_id = load_cubemap();
-        cubemap_loaded = true;
-    }
-
-    static GLuint vao = 0;
-    static GLuint program_id;
-    static GLuint vertex_buffer_id;
-    static GLuint element_buffer_id;
-    static GLint view_matrix_id;
-    static GLint proj_matrix_id;
-    static GLint cubemap_uniform_id;
-
-    if (vao == 0) {
-        program_id = make_program(skybox_vs_source, skybox_fs_source);
-        view_matrix_id = glGetUniformLocation(program_id, "view_matrix");
-        proj_matrix_id = glGetUniformLocation(program_id, "proj_matrix");
-        cubemap_uniform_id = glGetUniformLocation(program_id, "cubemap");
-
-        glGenVertexArrays(1, &vao);
-        glBindVertexArray(vao);
-
-        glGenBuffers(1, &vertex_buffer_id);
-        glGenBuffers(1, &element_buffer_id);
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
-        glBufferData(
-            GL_ELEMENT_ARRAY_BUFFER, sizeof skybox_elements,
-            skybox_elements, GL_STATIC_DRAW
-        );
-
-        glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
-        glBufferData(
-            GL_ARRAY_BUFFER, sizeof skybox_vertices,
-            skybox_vertices, GL_STATIC_DRAW
-        );
-        glVertexAttribPointer(
-            0,
-            3,
-            GL_FLOAT,
-            false,
-            sizeof(float) * 3,
-            (void*)0
-        );
-        glEnableVertexAttribArray(0);
-        PANIC_IF_GL_ERROR;
-    }
-
-    glUseProgram(program_id);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture_id);
-    glUniform1i(cubemap_uniform_id, 0);
-
-    glUniformMatrix4fv(view_matrix_id, 1, 0, &view_matrix[0][0]);
-    glUniformMatrix4fv(proj_matrix_id, 1, 0, &proj_matrix[0][0]);
-
-    glBindVertexArray(vao);
-    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, (void*)0);
-    glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-
-    PANIC_IF_GL_ERROR;
 }
 
 } // end namespace

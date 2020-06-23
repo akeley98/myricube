@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stddef.h>
 
 #include "renderer.hh"
 
@@ -72,6 +73,11 @@ class Camera
     // Projection * View matrix
     glm::mat4 residue_vp_matrix;
 
+  public:
+    // Maximum number of 3D voxel textures that may be sent to the GPU
+    // per frame. Mystery parameter.
+    size_t max_raycast_evict = 5;
+
     // Respond if needed to dirty flag and recompute derived data.
     void fix_dirty()
     {
@@ -101,7 +107,7 @@ class Camera
 
         dirty = false;
     }
-  public:
+
     Camera() = default;
 
     ~Camera()

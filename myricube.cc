@@ -279,6 +279,14 @@ void add_key_targets(Window& window, Camera& camera)
         return true;
     };
     window.add_key_target("toggle_culling_freeze", toggle_culling_freeze_target);
+
+    KeyTarget unload;
+    unload.down = [&] (KeyArg) -> bool
+    {
+        camera.unload_gpu_storage();
+        return true;
+    };
+    window.add_key_target("unload_gpu_storage", unload);
 }
 
 void bind_keys(Window& window)
@@ -310,6 +318,7 @@ void bind_keys(Window& window)
     window.bind_keycode(SDL_SCANCODE_Z, "pause");
     window.bind_keycode(SDL_SCANCODE_B, "toggle_chunk_debug");
     window.bind_keycode(SDL_SCANCODE_C, "toggle_culling_freeze");
+    window.bind_keycode(SDL_SCANCODE_G, "unload_gpu_storage");
 }
 
 int Main(std::vector<std::string> args)
@@ -346,8 +355,7 @@ int Main(std::vector<std::string> args)
     while (window.update_swap_buffers(5)) {
         if (!paused) app_update(world);
         gl_clear();
-        void draw_skybox(glm::mat4, glm::mat4);
-        draw_skybox(camera.get_residue_view(), camera.get_projection());
+        camera.fix_dirty();
         render_world_mesh_step(world, camera);
         render_world_raycast_step(world, camera);
         window.set_title("Myricube "
