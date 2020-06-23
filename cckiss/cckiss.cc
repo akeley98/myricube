@@ -879,8 +879,10 @@ int main(int argc, char** argv)
         switch (*makeargs_str++) {
             case 'd': args.verbose = true; break;
             case 'B': args.always_make = true; break;
+            case ' ': goto end_makeargs;
         }
     }
+  end_makeargs:
 
     constexpr int cxxflags_mode = 0, cppflags_mode = 1, cxx_mode = 2;
     int mode = cxx_mode;

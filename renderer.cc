@@ -368,7 +368,7 @@ class BaseStore
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 10> { };
-class RaycastStore : public BaseStore<RaycastEntry, 3, 18> { };
+class RaycastStore : public BaseStore<RaycastEntry, 4, 9> { };
 
 #define BORDER_WIDTH_STR "0.1"
 
@@ -599,6 +599,11 @@ static const GLushort unit_box_elements[36] = {
     6, 5, 7, 5, 4, 7,
 };
 
+static bool culling_freeze = false;
+static glm::mat4 frozen_vp;
+static glm::ivec3 frozen_eye_group;
+static glm::vec3 frozen_eye_residue;
+
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
 class Renderer
@@ -623,10 +628,16 @@ class Renderer
     {
         if (group(pcg).total_visible == 0) return true;
 
-        glm::mat4 vp = camera.get_residue_vp();
+        glm::mat4 vp = culling_freeze ? frozen_vp : camera.get_residue_vp();
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
-        camera.get_eye(&eye_group, &eye_residue);
+        if (culling_freeze) {
+            eye_group = frozen_eye_group;
+            eye_residue = frozen_eye_residue;
+        } else {
+            camera.get_eye(&eye_group, &eye_residue);
+        }
+
         eye_residue = glm::floor(eye_residue); // to match decide_chunk.
 
         // Position of this chunk group relative to the group that the
@@ -638,33 +649,48 @@ class Renderer
         const glm::vec3 z_edge = glm::vec3(0, 0, group_size);
 
         // Compute the clip space (?) coordinates of the 8 corners of
-        // this chunk group.
+        // this chunk group, and find the min/max of the xyz coordinates.
+        // Ignore corners behind the camera (w <= 0).
+        bool first_time = true;
+        glm::vec3 low(-1), high(-1);
         glm::vec3 corners[8];
-        auto to_clip_space = [vp] (glm::vec3 v)
+        auto minmax_corner = [vp, &low, &high, &first_time] (glm::vec3 v)
         {
             auto vp_v = vp * glm::vec4(v, 1);
-            return glm::vec3(vp_v) / vp_v.w;
-        };
-        corners[0] = to_clip_space(low_corner);
-        corners[1] = to_clip_space(low_corner + x_edge);
-        corners[2] = to_clip_space(low_corner + y_edge);
-        corners[3] = to_clip_space(low_corner + z_edge);
-        corners[4] = to_clip_space(low_corner + x_edge + y_edge);
-        corners[5] = to_clip_space(low_corner + x_edge + z_edge);
-        corners[6] = to_clip_space(low_corner + y_edge + z_edge);
-        glm::vec3 high_corner = low_corner + x_edge + y_edge + z_edge;
-        corners[7] = to_clip_space(high_corner);
+            if (vp_v.w <= 0) return;
+            glm::vec3 clip_coord = glm::vec3(vp_v) / vp_v.w;
 
-        // Remove the chunk if it is entirely out-of-bounds in one
+            if (first_time) {
+                low = clip_coord;
+                high = clip_coord;
+                first_time = false;
+            }
+            else {
+                low = glm::min(low, clip_coord);
+                high = glm::max(high, clip_coord);
+            }
+        };
+        corners[0] = low_corner;
+        corners[1] = low_corner + x_edge;
+        corners[2] = low_corner + y_edge;
+        corners[3] = low_corner + z_edge;
+        corners[4] = low_corner + x_edge + y_edge;
+        corners[5] = low_corner + x_edge + z_edge;
+        corners[6] = low_corner + y_edge + z_edge;
+        glm::vec3 high_corner = low_corner + x_edge + y_edge + z_edge;
+        corners[7] = high_corner;
+
+        for (int i = 0; i < 8; ++i) {
+            minmax_corner(corners[i]);
+        }
+
+        // Cull the chunk if it is entirely out-of-bounds in one
         // direction on the x/y/z axis (one-direction == we won't clip
         // the group if the corners are all out-of-bounds but some
         // visible portion of the group "straddles" the frustum).
-        glm::vec3 low = corners[0], high = corners[0];
-        for (int i = 1; i < 8; ++i) {
-            low = glm::min(low, corners[i]);
-            high = glm::max(high, corners[i]);
-        }
-
+        //
+        // Also cull if all vectors had w <= 0. (first_time variable)
+        if (first_time) return true;
         if (low.x < -1 && high.x < -1) return true;
         if (low.y < -1 && high.y < -1) return true;
         if (low.z < 0 && high.z < 0) return true;
@@ -1455,6 +1481,18 @@ void gl_first_time_setup()
 void gl_clear()
 {
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+}
+
+void toggle_culling_freeze(Camera& current_camera)
+{
+    if (culling_freeze) {
+        culling_freeze = false;
+    }
+    else {
+        culling_freeze = true;
+        frozen_vp = current_camera.get_residue_vp();
+        current_camera.get_eye(&frozen_eye_group, &frozen_eye_residue);
+    }
 }
 
 // Old skybox code I copied.

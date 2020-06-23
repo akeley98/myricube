@@ -1,7 +1,5 @@
 default: run
 
-CXX=clang++
-CC=clang
 CPPFLAGS=-I ./glad/include -I .
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g

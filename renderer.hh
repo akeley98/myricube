@@ -35,5 +35,10 @@ void gl_first_time_setup();
 
 void gl_clear();
 
+// When culling_freeze is active, frustum culling is done using the
+// camera from when the freezing started, not the current camera. Not
+// threadsafe; it's a debugging tool.
+void toggle_culling_freeze(Camera&);
+
 } // end namespace
 #endif /* !MYRICUBE_RENDERER_HH_ */
