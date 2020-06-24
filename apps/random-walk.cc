@@ -19,7 +19,7 @@ void app_init(VoxelWorld& world, Window& window)
         uint8_t red = 127 + (rng() >> 25);
         uint8_t green_base = rng() >> 25;
         int x = 0, y = 0, z = 0;
-        for (int i = 0; i < 100000; ++i) {
+        for (int i = 0; i < 200000; ++i) {
             switch (rng() % 6) {
                 case 0: x++; break;
                 case 1: y++; break;

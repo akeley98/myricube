@@ -60,11 +60,14 @@
 #include "myricube.hh"
 
 #include <assert.h>
+#include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -289,36 +292,188 @@ void add_key_targets(Window& window, Camera& camera)
     window.add_key_target("unload_gpu_storage", unload);
 }
 
+extern std::unordered_map<std::string, int> key_name_to_key_code_map;
+
+// Given the full path of a key binds file, parse it for key bindings
+// and add it to the window's database of key bindings (physical
+// key/mouse button to KeyTarget name associations).
+//
+// Syntax: the file should consist of lines of pairs of key names and
+// KeyTarget names. Blank (all whitespace) lines are allowed as well
+// as comments, which go from a # character to the end of the line.
+//
+// Returns true iff successful (check errno on false).
+bool add_key_binds_from_file(Window& window, std::string filename) noexcept
+{
+    FILE* file = fopen(filename.c_str(), "r");
+    if (file == nullptr) {
+        fprintf(stderr, "Could not open %s\n", filename.c_str());
+        return false;
+    }
+
+    int line_number = 0;
+
+    auto skip_whitespace = [file]
+    {
+        int c;
+        while (1) {
+            c = fgetc(file);
+            if (c == EOF) return;
+            if (c == '\n' or !isspace(c)) {
+                ungetc(c, file);
+                return;
+            }
+        }
+    };
+
+    bool eof = false;
+    while (!eof) {
+        std::string key_name;
+        std::string target_name;
+        ++line_number;
+
+        int c;
+        skip_whitespace();
+
+        // Parse key name (not case sensitive -- converted to lower case)
+        while (1) {
+            c = fgetc(file);
+
+            if (c == EOF) {
+                if (errno != 0 and errno != EAGAIN) goto bad_eof;
+                eof = true;
+                goto end_line;
+            }
+            if (c == '\n') goto end_line;
+            if (isspace(c)) break;
+            if (c == '#') goto comment;
+            key_name.push_back(tolower(c));
+        }
+
+        skip_whitespace();
+
+        // Parse target name (case sensitive)
+        while (1) {
+            c = fgetc(file);
+
+            if (c == EOF) {
+                if (errno != 0 and errno != EAGAIN) goto bad_eof;
+                eof = true;
+                goto end_line;
+            }
+            if (c == '\n') goto end_line;
+            if (isspace(c)) break;
+            if (c == '#') goto comment;
+            target_name.push_back(c);
+        }
+
+        skip_whitespace();
+
+        // Check for unexpected cruft at end of line.
+        c = fgetc(file);
+        if (c == EOF) {
+            if (errno != 0 and errno != EAGAIN) goto bad_eof;
+            eof = true;
+            goto end_line;
+        }
+        else if (c == '#') {
+            goto comment;
+        }
+        else if (c == '\n') {
+            goto end_line;
+        }
+        else {
+            fprintf(stderr, "%s:%i unexpected third token"
+                " starting with '%c'\n",
+                filename.c_str(), line_number, c);
+            errno = EINVAL;
+            goto bad_eof;
+        }
+
+        // Skip over comment characters from # to \n
+      comment:
+        while (1) {
+            c = fgetc(file);
+            if (c == EOF) {
+                if (errno != 0 and errno != EAGAIN) goto bad_eof;
+                eof = true;
+                goto end_line;
+            }
+            if (c == '\n') {
+                break;
+            }
+        }
+      end_line:
+        // skip blank lines silently.
+        if (key_name.size() == 0) continue;
+
+        // Complain if only one token is provided on a line.
+        if (target_name.size() == 0) {
+            fprintf(stderr, "%s:%i key name without target name.\n",
+                filename.c_str(), line_number);
+            errno = EINVAL;
+            goto bad_eof;
+        }
+
+        auto it = key_name_to_key_code_map.find(key_name);
+        if (it == key_name_to_key_code_map.end()) {
+            fprintf(stderr, "%s:%i unknown key name %s.\n",
+                filename.c_str(), line_number, key_name.c_str());
+            errno = EINVAL;
+            goto bad_eof;
+        }
+
+        fprintf(stderr, "Binding %s (%i) to %s\n",
+            key_name.c_str(), it->second, target_name.c_str());
+        window.bind_keycode(it->second, target_name);
+    }
+
+    if (fclose(file) != 0) {
+        fprintf(stderr, "Error closing %s\n", filename.c_str());
+        return false;
+    }
+    return true;
+  bad_eof:
+    fprintf(stderr, "Unexpected end of parsing.\n");
+    int eof_errno = errno;
+    fclose(file);
+    errno = eof_errno;
+    return false;
+}
+
 void bind_keys(Window& window)
 {
-    window.bind_keycode(SDL_SCANCODE_LEFT, "pop_old_camera");
-    window.bind_keycode(-8, "pop_old_camera");
-    window.bind_keycode(SDL_SCANCODE_RIGHT, "pop_future_camera");
-    window.bind_keycode(-9, "pop_future_camera");
+    auto default_file = expand_filename("default-keybinds.txt");
+    auto user_file = expand_filename("keybinds.txt");
 
-    window.bind_keycode(SDL_SCANCODE_U, "forward");
-    window.bind_keycode(SDL_SCANCODE_SPACE, "backward");
-    window.bind_keycode(SDL_SCANCODE_P, "leftward");
-    window.bind_keycode(SDL_SCANCODE_A, "rightward");
-    window.bind_keycode(SDL_SCANCODE_LCTRL, "upward");
-    window.bind_keycode(SDL_SCANCODE_LALT, "downward");
+    bool default_okay = add_key_binds_from_file(window, default_file);
+    if (!default_okay) {
+        fprintf(stderr, "Failed to parse %s\n", default_file.c_str());
+        fprintf(stderr, "%s (%i)\n", strerror(errno), errno);
+        exit(2);
+    }
 
-    window.bind_keycode(SDL_SCANCODE_O, "sprint");
-    window.bind_keycode(SDL_SCANCODE_I, "speed_up");
-    window.bind_keycode(SDL_SCANCODE_COMMA, "slow_down");
+    bool user_okay = add_key_binds_from_file(window, user_file);
+    if (!user_okay) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Custom keybinds file %s not found.\n",
+                user_file.c_str());
+        }
+        else {
+            fprintf(stderr, "Failed to parse %s\n", user_file.c_str());
+            fprintf(stderr, "%s (%i)\n", strerror(errno), errno);
+            exit(2);
+        }
+    }
+}
 
-    window.bind_keycode(-3, "look_around");
-    window.bind_keycode(-4, "vertical_scroll");
-    window.bind_keycode(-5, "vertical_scroll");
-    window.bind_keycode(-6, "horizontal_scroll");
-    window.bind_keycode(-7, "horizontal_scroll");
+void set_window_title(Window& window)
+{
+    std::string title = "Myricube ";
+    title += std::to_string(window.get_fps()) + " FPS ";
+    title += std::to_string(window.get_frame_time_ms()) + "ms frame time";
 
-    window.bind_keycode(SDL_SCANCODE_K, "do_it");
-    window.bind_keycode(SDL_SCANCODE_K, "add_random_walk");
-    window.bind_keycode(SDL_SCANCODE_Z, "pause");
-    window.bind_keycode(SDL_SCANCODE_B, "toggle_chunk_debug");
-    window.bind_keycode(SDL_SCANCODE_C, "toggle_culling_freeze");
-    window.bind_keycode(SDL_SCANCODE_G, "unload_gpu_storage");
+    window.set_title(title);
 }
 
 int Main(std::vector<std::string> args)
@@ -358,8 +513,7 @@ int Main(std::vector<std::string> args)
         camera.fix_dirty();
         render_world_mesh_step(world, camera);
         render_world_raycast_step(world, camera);
-        window.set_title("Myricube "
-                         + std::to_string(window.get_fps()) + " FPS");
+        set_window_title(window);
     }
     return 0;
 }
@@ -373,4 +527,291 @@ int main(int argc, char** argv)
         args.emplace_back(argv[i]);
     }
     return myricube::Main(std::move(args));
+}
+
+namespace myricube {
+
+std::unordered_map<std::string, int> key_name_to_key_code_map {
+    { "mouse-1", -1 },
+    { "left-mouse", -1 },
+    { "mouse-2", -2 },
+    { "middle-mouse", -2 },
+    { "mouse-3", -3 },
+    { "right-mouse", -3 },
+    { "mouse-4", -4 },
+    { "scroll-up", -4 },
+    { "mouse-5", -5 },
+    { "scroll-down", -5 },
+    { "mouse-6", -6 },
+    { "scroll-left", -6 },
+    { "mouse-7", -7 },
+    { "scroll-right", -7 },
+    { "mouse-8", -8 },
+    { "thumb-button", -8 },
+    { "x1", -8 },
+    { "mouse-9", -9 },
+    { "thumb-button-2", -9 },
+    { "x2", -9 },
+    { "mouse-10", -10 },
+
+    { "a", SDL_SCANCODE_A },
+    { "b", SDL_SCANCODE_B },
+    { "c", SDL_SCANCODE_C },
+    { "d", SDL_SCANCODE_D },
+    { "e", SDL_SCANCODE_E },
+    { "f", SDL_SCANCODE_F },
+    { "g", SDL_SCANCODE_G },
+    { "h", SDL_SCANCODE_H },
+    { "i", SDL_SCANCODE_I },
+    { "j", SDL_SCANCODE_J },
+    { "k", SDL_SCANCODE_K },
+    { "l", SDL_SCANCODE_L },
+    { "m", SDL_SCANCODE_M },
+    { "n", SDL_SCANCODE_N },
+    { "o", SDL_SCANCODE_O },
+    { "p", SDL_SCANCODE_P },
+    { "q", SDL_SCANCODE_Q },
+    { "r", SDL_SCANCODE_R },
+    { "s", SDL_SCANCODE_S },
+    { "t", SDL_SCANCODE_T },
+    { "u", SDL_SCANCODE_U },
+    { "v", SDL_SCANCODE_V },
+    { "w", SDL_SCANCODE_W },
+    { "x", SDL_SCANCODE_X },
+    { "y", SDL_SCANCODE_Y },
+    { "z", SDL_SCANCODE_Z },
+
+    { "1", SDL_SCANCODE_1 },
+    { "2", SDL_SCANCODE_2 },
+    { "3", SDL_SCANCODE_3 },
+    { "4", SDL_SCANCODE_4 },
+    { "5", SDL_SCANCODE_5 },
+    { "6", SDL_SCANCODE_6 },
+    { "7", SDL_SCANCODE_7 },
+    { "8", SDL_SCANCODE_8 },
+    { "9", SDL_SCANCODE_9 },
+    { "0", SDL_SCANCODE_0 },
+
+    { "return", SDL_SCANCODE_RETURN },
+    { "escape", SDL_SCANCODE_ESCAPE },
+    { "backspace", SDL_SCANCODE_BACKSPACE },
+    { "tab", SDL_SCANCODE_TAB },
+    { "space", SDL_SCANCODE_SPACE },
+
+    { "minus", SDL_SCANCODE_MINUS },
+    { "equals", SDL_SCANCODE_EQUALS },
+    { "leftbracket", SDL_SCANCODE_LEFTBRACKET },
+    { "rightbracket", SDL_SCANCODE_RIGHTBRACKET },
+    { "backslash", SDL_SCANCODE_BACKSLASH },
+    { "nonushash", SDL_SCANCODE_NONUSHASH },
+    { "semicolon", SDL_SCANCODE_SEMICOLON },
+    { "apostrophe", SDL_SCANCODE_APOSTROPHE },
+    { "grave", SDL_SCANCODE_GRAVE },
+    { "comma", SDL_SCANCODE_COMMA },
+    { "period", SDL_SCANCODE_PERIOD },
+    { "slash", SDL_SCANCODE_SLASH },
+
+    { "capslock", SDL_SCANCODE_CAPSLOCK },
+
+    { "f1", SDL_SCANCODE_F1 },
+    { "f2", SDL_SCANCODE_F2 },
+    { "f3", SDL_SCANCODE_F3 },
+    { "f4", SDL_SCANCODE_F4 },
+    { "f5", SDL_SCANCODE_F5 },
+    { "f6", SDL_SCANCODE_F6 },
+    { "f7", SDL_SCANCODE_F7 },
+    { "f8", SDL_SCANCODE_F8 },
+    { "f9", SDL_SCANCODE_F9 },
+    { "f10", SDL_SCANCODE_F10 },
+    { "f11", SDL_SCANCODE_F11 },
+    { "f12", SDL_SCANCODE_F12 },
+
+    { "printscreen", SDL_SCANCODE_PRINTSCREEN },
+    { "scrolllock", SDL_SCANCODE_SCROLLLOCK },
+    { "pause", SDL_SCANCODE_PAUSE },
+    { "insert", SDL_SCANCODE_INSERT },
+    { "home", SDL_SCANCODE_HOME },
+    { "pageup", SDL_SCANCODE_PAGEUP },
+    { "delete", SDL_SCANCODE_DELETE },
+    { "end", SDL_SCANCODE_END },
+    { "pagedown", SDL_SCANCODE_PAGEDOWN },
+    { "right", SDL_SCANCODE_RIGHT },
+    { "left", SDL_SCANCODE_LEFT },
+    { "down", SDL_SCANCODE_DOWN },
+    { "up", SDL_SCANCODE_UP },
+
+    { "numlockclear", SDL_SCANCODE_NUMLOCKCLEAR },
+    { "kp_divide", SDL_SCANCODE_KP_DIVIDE },
+    { "kp_multiply", SDL_SCANCODE_KP_MULTIPLY },
+    { "kp_minus", SDL_SCANCODE_KP_MINUS },
+    { "kp_plus", SDL_SCANCODE_KP_PLUS },
+    { "kp_enter", SDL_SCANCODE_KP_ENTER },
+    { "kp_1", SDL_SCANCODE_KP_1 },
+    { "kp_2", SDL_SCANCODE_KP_2 },
+    { "kp_3", SDL_SCANCODE_KP_3 },
+    { "kp_4", SDL_SCANCODE_KP_4 },
+    { "kp_5", SDL_SCANCODE_KP_5 },
+    { "kp_6", SDL_SCANCODE_KP_6 },
+    { "kp_7", SDL_SCANCODE_KP_7 },
+    { "kp_8", SDL_SCANCODE_KP_8 },
+    { "kp_9", SDL_SCANCODE_KP_9 },
+    { "kp_0", SDL_SCANCODE_KP_0 },
+    { "kp_period", SDL_SCANCODE_KP_PERIOD },
+
+    { "nonusbackslash", SDL_SCANCODE_NONUSBACKSLASH },
+    { "application", SDL_SCANCODE_APPLICATION },
+    { "power", SDL_SCANCODE_POWER },
+    { "kp_equals", SDL_SCANCODE_KP_EQUALS },
+    { "f13", SDL_SCANCODE_F13 },
+    { "f14", SDL_SCANCODE_F14 },
+    { "f15", SDL_SCANCODE_F15 },
+    { "f16", SDL_SCANCODE_F16 },
+    { "f17", SDL_SCANCODE_F17 },
+    { "f18", SDL_SCANCODE_F18 },
+    { "f19", SDL_SCANCODE_F19 },
+    { "f20", SDL_SCANCODE_F20 },
+    { "f21", SDL_SCANCODE_F21 },
+    { "f22", SDL_SCANCODE_F22 },
+    { "f23", SDL_SCANCODE_F23 },
+    { "f24", SDL_SCANCODE_F24 },
+    { "execute", SDL_SCANCODE_EXECUTE },
+    { "help", SDL_SCANCODE_HELP },
+    { "menu", SDL_SCANCODE_MENU },
+    { "select", SDL_SCANCODE_SELECT },
+    { "stop", SDL_SCANCODE_STOP },
+    { "again", SDL_SCANCODE_AGAIN },
+    { "undo", SDL_SCANCODE_UNDO },
+    { "cut", SDL_SCANCODE_CUT },
+    { "copy", SDL_SCANCODE_COPY },
+    { "paste", SDL_SCANCODE_PASTE },
+    { "find", SDL_SCANCODE_FIND },
+    { "mute", SDL_SCANCODE_MUTE },
+    { "volumeup", SDL_SCANCODE_VOLUMEUP },
+    { "volumedown", SDL_SCANCODE_VOLUMEDOWN },
+    { "kp_comma", SDL_SCANCODE_KP_COMMA },
+    { "kp_equalsas400", SDL_SCANCODE_KP_EQUALSAS400 },
+
+    { "international1", SDL_SCANCODE_INTERNATIONAL1 },
+    { "international2", SDL_SCANCODE_INTERNATIONAL2 },
+    { "international3", SDL_SCANCODE_INTERNATIONAL3 },
+    { "international4", SDL_SCANCODE_INTERNATIONAL4 },
+    { "international5", SDL_SCANCODE_INTERNATIONAL5 },
+    { "international6", SDL_SCANCODE_INTERNATIONAL6 },
+    { "international7", SDL_SCANCODE_INTERNATIONAL7 },
+    { "international8", SDL_SCANCODE_INTERNATIONAL8 },
+    { "international9", SDL_SCANCODE_INTERNATIONAL9 },
+    { "lang1", SDL_SCANCODE_LANG1 },
+    { "lang2", SDL_SCANCODE_LANG2 },
+    { "lang3", SDL_SCANCODE_LANG3 },
+    { "lang4", SDL_SCANCODE_LANG4 },
+    { "lang5", SDL_SCANCODE_LANG5 },
+    { "lang6", SDL_SCANCODE_LANG6 },
+    { "lang7", SDL_SCANCODE_LANG7 },
+    { "lang8", SDL_SCANCODE_LANG8 },
+    { "lang9", SDL_SCANCODE_LANG9 },
+
+    { "alterase", SDL_SCANCODE_ALTERASE },
+    { "sysreq", SDL_SCANCODE_SYSREQ },
+    { "cancel", SDL_SCANCODE_CANCEL },
+    { "clear", SDL_SCANCODE_CLEAR },
+    { "prior", SDL_SCANCODE_PRIOR },
+    { "return2", SDL_SCANCODE_RETURN2 },
+    { "separator", SDL_SCANCODE_SEPARATOR },
+    { "out", SDL_SCANCODE_OUT },
+    { "oper", SDL_SCANCODE_OPER },
+    { "clearagain", SDL_SCANCODE_CLEARAGAIN },
+    { "crsel", SDL_SCANCODE_CRSEL },
+    { "exsel", SDL_SCANCODE_EXSEL },
+
+    { "kp_00", SDL_SCANCODE_KP_00 },
+    { "kp_000", SDL_SCANCODE_KP_000 },
+    { "thousandsseparator", SDL_SCANCODE_THOUSANDSSEPARATOR },
+    { "decimalseparator", SDL_SCANCODE_DECIMALSEPARATOR },
+    { "currencyunit", SDL_SCANCODE_CURRENCYUNIT },
+    { "currencysubunit", SDL_SCANCODE_CURRENCYSUBUNIT },
+    { "kp_leftparen", SDL_SCANCODE_KP_LEFTPAREN },
+    { "kp_rightparen", SDL_SCANCODE_KP_RIGHTPAREN },
+    { "kp_leftbrace", SDL_SCANCODE_KP_LEFTBRACE },
+    { "kp_rightbrace", SDL_SCANCODE_KP_RIGHTBRACE },
+    { "kp_tab", SDL_SCANCODE_KP_TAB },
+    { "kp_backspace", SDL_SCANCODE_KP_BACKSPACE },
+    { "kp_a", SDL_SCANCODE_KP_A },
+    { "kp_b", SDL_SCANCODE_KP_B },
+    { "kp_c", SDL_SCANCODE_KP_C },
+    { "kp_d", SDL_SCANCODE_KP_D },
+    { "kp_e", SDL_SCANCODE_KP_E },
+    { "kp_f", SDL_SCANCODE_KP_F },
+    { "kp_xor", SDL_SCANCODE_KP_XOR },
+    { "kp_power", SDL_SCANCODE_KP_POWER },
+    { "kp_percent", SDL_SCANCODE_KP_PERCENT },
+    { "kp_less", SDL_SCANCODE_KP_LESS },
+    { "kp_greater", SDL_SCANCODE_KP_GREATER },
+    { "kp_ampersand", SDL_SCANCODE_KP_AMPERSAND },
+    { "kp_dblampersand", SDL_SCANCODE_KP_DBLAMPERSAND },
+    { "kp_verticalbar", SDL_SCANCODE_KP_VERTICALBAR },
+    { "kp_dblverticalbar", SDL_SCANCODE_KP_DBLVERTICALBAR },
+    { "kp_colon", SDL_SCANCODE_KP_COLON },
+    { "kp_hash", SDL_SCANCODE_KP_HASH },
+    { "kp_space", SDL_SCANCODE_KP_SPACE },
+    { "kp_at", SDL_SCANCODE_KP_AT },
+    { "kp_exclam", SDL_SCANCODE_KP_EXCLAM },
+    { "kp_memstore", SDL_SCANCODE_KP_MEMSTORE },
+    { "kp_memrecall", SDL_SCANCODE_KP_MEMRECALL },
+    { "kp_memclear", SDL_SCANCODE_KP_MEMCLEAR },
+    { "kp_memadd", SDL_SCANCODE_KP_MEMADD },
+    { "kp_memsubtract", SDL_SCANCODE_KP_MEMSUBTRACT },
+    { "kp_memmultiply", SDL_SCANCODE_KP_MEMMULTIPLY },
+    { "kp_memdivide", SDL_SCANCODE_KP_MEMDIVIDE },
+    { "kp_plusminus", SDL_SCANCODE_KP_PLUSMINUS },
+    { "kp_clear", SDL_SCANCODE_KP_CLEAR },
+    { "kp_clearentry", SDL_SCANCODE_KP_CLEARENTRY },
+    { "kp_binary", SDL_SCANCODE_KP_BINARY },
+    { "kp_octal", SDL_SCANCODE_KP_OCTAL },
+    { "kp_decimal", SDL_SCANCODE_KP_DECIMAL },
+    { "kp_hexadecimal", SDL_SCANCODE_KP_HEXADECIMAL },
+
+    { "lctrl", SDL_SCANCODE_LCTRL },
+    { "lshift", SDL_SCANCODE_LSHIFT },
+    { "lalt", SDL_SCANCODE_LALT },
+    { "lgui", SDL_SCANCODE_LGUI },
+    { "rctrl", SDL_SCANCODE_RCTRL },
+    { "rshift", SDL_SCANCODE_RSHIFT },
+    { "ralt", SDL_SCANCODE_RALT },
+    { "rgui", SDL_SCANCODE_RGUI },
+
+    { "mode", SDL_SCANCODE_MODE },
+    { "audionext", SDL_SCANCODE_AUDIONEXT },
+    { "audioprev", SDL_SCANCODE_AUDIOPREV },
+    { "audiostop", SDL_SCANCODE_AUDIOSTOP },
+    { "audioplay", SDL_SCANCODE_AUDIOPLAY },
+    { "audiomute", SDL_SCANCODE_AUDIOMUTE },
+    { "mediaselect", SDL_SCANCODE_MEDIASELECT },
+    { "www", SDL_SCANCODE_WWW },
+    { "mail", SDL_SCANCODE_MAIL },
+    { "calculator", SDL_SCANCODE_CALCULATOR },
+    { "computer", SDL_SCANCODE_COMPUTER },
+    { "ac_search", SDL_SCANCODE_AC_SEARCH },
+    { "ac_home", SDL_SCANCODE_AC_HOME },
+    { "ac_back", SDL_SCANCODE_AC_BACK },
+    { "ac_forward", SDL_SCANCODE_AC_FORWARD },
+    { "ac_stop", SDL_SCANCODE_AC_STOP },
+    { "ac_refresh", SDL_SCANCODE_AC_REFRESH },
+    { "ac_bookmarks", SDL_SCANCODE_AC_BOOKMARKS },
+
+    { "brightnessdown", SDL_SCANCODE_BRIGHTNESSDOWN },
+    { "brightnessup", SDL_SCANCODE_BRIGHTNESSUP },
+    { "displayswitch", SDL_SCANCODE_DISPLAYSWITCH },
+
+    { "kbdillumtoggle", SDL_SCANCODE_KBDILLUMTOGGLE },
+    { "kbdillumdown", SDL_SCANCODE_KBDILLUMDOWN },
+    { "kbdillumup", SDL_SCANCODE_KBDILLUMUP },
+    { "eject", SDL_SCANCODE_EJECT },
+    { "sleep", SDL_SCANCODE_SLEEP },
+
+    { "app1", SDL_SCANCODE_APP1 },
+    { "app2", SDL_SCANCODE_APP2 },
+    { "audiorewind", SDL_SCANCODE_AUDIOREWIND },
+    { "audiofastforward", SDL_SCANCODE_AUDIOFASTFORWARD },
+};
+
 }

@@ -74,6 +74,7 @@ bool Window::update_swap_buffers(int64_t min_ms)
         current_tick = SDL_GetTicks();
         dt_ms = current_tick - previous_update_ms;
     }
+    if (dt_ms > next_frame_time) next_frame_time = dt_ms;
     previous_update_ms += dt_ms;
     float dt = 1/1000.f * dt_ms;
 
@@ -106,13 +107,15 @@ bool Window::update_swap_buffers(int64_t min_ms)
         }
     }
 
-    // Update FPS.
+    // Update FPS and frame time.
     ++frames;
     if (current_tick - previous_fps_update >= fps_interval_ms) {
         fps = 1000.0 * frames
             / (current_tick - previous_fps_update);
         previous_fps_update = current_tick;
         frames = 0;
+        frame_time_ms = next_frame_time;
+        next_frame_time = 0;
     }
     return !quit;
 }
@@ -224,12 +227,12 @@ void Window::handle_mouse_wheel(const SDL_MouseWheelEvent& e)
 {
     // Again I'm just using the Unix mouse numbers I know.
     if (e.x < 0) {
-        handle_down(-7, 0, e.x);
-        handle_up(-7);
-    }
-    if (e.x > 0) {
         handle_down(-6, 0, e.x);
         handle_up(-6);
+    }
+    if (e.x > 0) {
+        handle_down(-7, 0, e.x);
+        handle_up(-7);
     }
     if (e.y < 0) {
         handle_down(-5, 0, e.y);

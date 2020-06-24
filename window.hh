@@ -70,7 +70,7 @@ class Window
     void* context = nullptr;
 
     // Current size in pixels of the window.
-    int window_x = 1280, window_y = 960;
+    int window_x = 1920, window_y = 1080;
 
     // Mapping from names of key targets to the actual key target structures.
     std::unordered_map<std::string, KeyTarget> key_target_map;
@@ -97,6 +97,10 @@ class Window
     int frames = 0;
     static constexpr int fps_interval_ms = 250;
     double fps = 0.0;
+
+    // Used to calculate maximum latency between frames.
+    int frame_time_ms = 0;
+    int next_frame_time = 0;
 
   public:
     // Construct the window with a callback that is called when the
@@ -142,6 +146,11 @@ class Window
     double get_fps() const
     {
         return fps;
+    }
+
+    int get_frame_time_ms() const
+    {
+        return frame_time_ms;
     }
   private:
     void handle_down(int, float, float);
