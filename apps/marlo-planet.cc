@@ -1,4 +1,3 @@
-#include <iostream>
 #include <string>
 #include <fstream>
 #include "app.hh"
@@ -80,16 +79,26 @@ void marlo(int Radius, VoxelWorld& world)
             }
         }
     }
-    string line;
+	
+    std::ifstream file("./apps/m.txt");
+    std::string line;
     int j = 0;
-    while (getline (file, line) {
-        for(std::string::size_type i = 0; i < str.size(); ++i) {
-            if (str[i]!=' '){
-	        world.set(glm:ivec3(i,j,0), voxel_from_norm(100));  
+    while (std::getline (file, line)) {
+        for(std::string::size_type i = 0; i < line.size(); ++i) {
+            if (line[i]!=' '){
+		Voxel col(255,0,255);
+		if (line[i]=='+'){
+		    col = Voxel(0,255,255);
+		    printf("greeny\n");
+		}
+	        world.set(glm::ivec3(i-229,-j,601), col);  
+	        world.set(glm::ivec3(-i+50,-j,599), col);  
 	    }
+            world.set(glm::ivec3(-i+50,-j,600), Voxel(255,255,255));
         }
      	j +=1;	
     }
+    file.close();
 }
 
 namespace myricube {
