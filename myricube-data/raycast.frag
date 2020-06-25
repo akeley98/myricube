@@ -40,7 +40,7 @@ void main() {
     float x0 = eye_relative_group_origin.x;
     float y0 = eye_relative_group_origin.y;
     float z0 = eye_relative_group_origin.z;
-    vec3 slope = vec3(init_coord) - eye_relative_group_origin;
+    vec3 slope = residue_coord - eye_relative_group_origin;
     float xm = slope.x;
     float ym = slope.y;
     float zm = slope.z;
