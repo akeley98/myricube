@@ -226,13 +226,14 @@ void Window::handle_mouse_up(const SDL_MouseButtonEvent& e)
 void Window::handle_mouse_wheel(const SDL_MouseWheelEvent& e)
 {
     // Again I'm just using the Unix mouse numbers I know.
+    // x seems to be backwards from what I expect in SDL
     if (e.x < 0) {
-        handle_down(-6, 0, e.x);
-        handle_up(-6);
-    }
-    if (e.x > 0) {
         handle_down(-7, 0, e.x);
         handle_up(-7);
+    }
+    if (e.x > 0) {
+        handle_down(-6, 0, e.x);
+        handle_up(-6);
     }
     if (e.y < 0) {
         handle_down(-5, 0, e.y);

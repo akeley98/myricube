@@ -21,7 +21,7 @@ right-mouse     look_around
 mouse-4         vertical_scroll
 mouse-5         vertical_scroll
 mouse-6         horizontal_scroll
-mouse-7         horizontal-scroll
+mouse-7         horizontal_scroll
 
 k               do_it
 k               add_random_walk
