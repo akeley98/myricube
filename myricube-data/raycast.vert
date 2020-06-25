@@ -56,5 +56,5 @@ void main() {
     // Draw as degenerate triangle if this chunk is not meant for raycasting.
     gl_Position = draw_raycast ? mvp_matrix * model_space_pos
                                : vec4(0,0,0,1);
-    floor_ceil_fudge = 0.1 * unit_box_normal;
+    floor_ceil_fudge = 1e-5 * unit_box_normal;
 }
