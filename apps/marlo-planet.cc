@@ -1,3 +1,6 @@
+#include <iostream>
+#include <string>
+#include <fstream>
 #include "app.hh"
 #include "FastNoise.cpp"
 
@@ -56,7 +59,7 @@ void marlo(int Radius, VoxelWorld& world)
         }
         return Voxel(255, 255, 255);
     };
-
+    
     for (int i = -Radius; i <= +Radius; ++i) {
         for (int j = -Radius; j <= +Radius; ++j) {
             for (int k = -Radius; k <= +Radius; ++k) {
@@ -76,6 +79,16 @@ void marlo(int Radius, VoxelWorld& world)
                 }
             }
         }
+    }
+    string line;
+    int j = 0;
+    while (getline (file, line) {
+        for(std::string::size_type i = 0; i < str.size(); ++i) {
+            if (str[i]!=' '){
+	        world.set(glm:ivec3(i,j,0), voxel_from_norm(100));  
+	    }
+        }
+     	j +=1;	
     }
 }
 
