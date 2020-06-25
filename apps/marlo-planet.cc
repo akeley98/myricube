@@ -1,11 +1,11 @@
-#include <string>
-#include <fstream>
 #include "app.hh"
 #include "FastNoise.cpp"
+#include <string>
+#include <fstream>
 
 using namespace myricube;
 
-void marlo(int Radius, VoxelWorld& world)
+void marlo(int radius, VoxelWorld& world)
 {
     constexpr double box = 14.0;
     auto relu = [] (double n) -> double
@@ -58,11 +58,11 @@ void marlo(int Radius, VoxelWorld& world)
         }
         return Voxel(255, 255, 255);
     };
-    
-    for (int i = -Radius; i <= +Radius; ++i) {
-        for (int j = -Radius; j <= +Radius; ++j) {
-            for (int k = -Radius; k <= +Radius; ++k) {
-                auto pos = glm::dvec3(i, j, k) * double(box / Radius);
+
+    for (int i = -radius; i <= +radius; ++i) {
+        for (int j = -radius; j <= +radius; ++j) {
+            for (int k = -radius; k <= +radius; ++k) {
+                auto pos = glm::dvec3(i, j, k) * double(box / radius);
                 auto norm = l2norm(pos);
                 auto shell1 = relu(-std::abs(norm - 8) + 0.5);
                 auto shell2 = relu(-std::abs(norm - 12) + 0.5);
@@ -79,24 +79,21 @@ void marlo(int Radius, VoxelWorld& world)
             }
         }
     }
-	
-    std::ifstream file("./apps/m.txt");
+
+    std::ifstream file(expand_filename("M_name.txt"));
     std::string line;
     int j = 0;
-    while (std::getline (file, line)) {
+    while (std::getline(file, line)) {
         for(std::string::size_type i = 0; i < line.size(); ++i) {
-            if (line[i]!=' '){
-		Voxel col(255,0,255);
-		if (line[i]=='+'){
-		    col = Voxel(0,255,255);
-		    printf("greeny\n");
-		}
-	        world.set(glm::ivec3(i-229,-j,601), col);  
-	        world.set(glm::ivec3(-i+50,-j,599), col);  
-	    }
-            world.set(glm::ivec3(-i+50,-j,600), Voxel(255,255,255));
+            if (line[i] != ' ') {
+                auto col = (line[i] == '+') ? Voxel(255, 0, 255)
+                                            : Voxel(0, 255, 255);
+                world.set(glm::ivec3(i - 229, -j, radius + 301), col);
+                world.set(glm::ivec3(-i + 50, -j, radius + 299), col);
+            }
+            world.set(glm::ivec3(-i + 50, -j, radius + 300), Voxel(255, 255, 255));
         }
-     	j +=1;	
+        j++;
     }
     file.close();
 }
