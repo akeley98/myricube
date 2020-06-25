@@ -100,9 +100,10 @@ inline std::string read_shader_source(const char* raw_filename) noexcept
         result += char(c);
     }
 
-    if (errno != 0 and errno != EAGAIN) {
-        panic("Unexpected end-of-file: " + filename + " (" +
-            std::to_string(errno) + ") " + strerror(errno));
+    if (errno != 0) {
+        std::string message = "Warning: Unexpected EOF: " + filename + " (" +
+            std::to_string(errno) + ") " + strerror(errno);
+        fprintf(stderr, "%s\n", message.c_str());
     }
     return result;
 }

@@ -9,6 +9,8 @@ CFLAGS=  -Wall -Wextra -O3 -g
 run: myricube-planet-bin
 	./myricube-planet
 
+all: myricube-planet-bin myricube-axis-bin myricube-random-walk-bin
+
 OBJS=cckiss/myricube.cc.s \
      cckiss/window.cc.s \
      cckiss/renderer.cc.s \
