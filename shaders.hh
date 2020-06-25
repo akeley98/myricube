@@ -71,6 +71,7 @@ inline std::string read_shader_source(const char* raw_filename) noexcept
         panic("Could not open " + filename + " (" + std::to_string(errno)
             + ") " + strerror(errno));
     }
+    errno = 0;
 
     // I know there are better ways than just +='ing the whole file,
     // but it doesn't really matter at the moment. Shaders are not all

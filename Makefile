@@ -6,15 +6,20 @@ CFLAGS=  -Wall -Wextra -O3 -g
 
 -include cckiss/Makefile
 
-run: myricube-bin
-	./myricube
+run: myricube-planet-bin
+	./myricube-planet
 
 OBJS=cckiss/myricube.cc.s \
      cckiss/window.cc.s \
      cckiss/renderer.cc.s \
      cckiss/glad/src/glad.c.s \
-     cckiss/apps/random-walk.cc.s \
 # Empty line for backslash
 
-myricube-bin: $(OBJS)
-	$(CXX) $(OBJS) -ldl -lGL -lSDL2 -o myricube-bin
+myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
+	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lSDL2 -o myricube-planet-bin
+
+myricube-axis-bin: $(OBJS) cckiss/apps/axis.cc.s
+	$(CXX) $(OBJS) cckiss/apps/axis.cc.s -ldl -lGL -lSDL2 -o myricube-axis-bin
+
+myricube-random-walk-bin: $(OBJS) cckiss/apps/random-walk.cc.s
+	$(CXX) $(OBJS) cckiss/apps/random-walk.cc.s -ldl -lGL -lSDL2 -o myricube-random-walk-bin
