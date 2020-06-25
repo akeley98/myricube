@@ -315,25 +315,31 @@ class BaseStore
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 class RaycastStore : public BaseStore<RaycastEntry, 4, 8> { };
 
-static const float unit_box_vertices[32] =
+// AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
+// stretched and positioned to the right shape and position in space.
+// The normals are "flat shaded" and needed for dealing with
+// floor/ceil rounding errors.
+//
+// [positions] [normal]
+static const float unit_box_vertices[48] =
 {
-    0, 1, 1, 1,
-    0, 0, 1, 1,
-    1, 0, 1, 1,
-    1, 1, 1, 1,
-    0, 1, 0, 1,
-    0, 0, 0, 1,
-    1, 0, 0, 1,
-    1, 1, 0, 1,
+    0, 1, 1,   -1, 0, 0,    // 0 -x face provoking vertex
+    0, 0, 1,   0, 0, 1,     // 1 +z face provoking vertex
+    1, 0, 1,   1, 0, 0,     // 2 +x face provoking vertex
+    1, 1, 1,   0, 0, 0,     // 3 unused as provoking vertex
+    0, 1, 0,   0, 1, 0,     // 4 +y face provoking vertex
+    0, 0, 0,   0, -1, 0,    // 5 -y face provoking vertex
+    1, 0, 0,   0, 0, 0,     // 6 unused as provoking vertex
+    1, 1, 0,   0, 0, -1,    // 7 -z face provoking vertex
 };
 
 static const GLushort unit_box_elements[36] = {
-    6, 7, 2, 7, 3, 2,
-    4, 5, 0, 5, 1, 0,
-    0, 3, 4, 3, 7, 4,
-    6, 2, 5, 2, 1, 5,
-    2, 3, 1, 3, 0, 1,
-    6, 5, 7, 5, 4, 7,
+    6, 7, 2, 7, 3, 2,   // +x face
+    4, 5, 0, 5, 1, 0,   // -x face
+    0, 3, 4, 3, 7, 4,   // +y face
+    6, 2, 5, 2, 1, 5,   // -y face
+    2, 3, 1, 3, 0, 1,   // +z face
+    6, 5, 7, 5, 4, 7,   // -z face
 };
 
 static bool culling_freeze = false;
@@ -1127,17 +1133,26 @@ class Renderer
             // Get the vertex attribs going, I should probably make
             // a VAO per chunk group in the RaycastEntry.
 
-            // Verts of the unit box.
+            // Verts and normals of the unit box.
             glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
             glVertexAttribPointer(
                 unit_box_vertex_idx,
-                4,
+                3,
                 GL_FLOAT,
                 false,
-                sizeof(float) * 4,
+                sizeof(float) * 6,
                 (void*)0);
             glEnableVertexAttribArray(unit_box_vertex_idx);
+
+            glVertexAttribPointer(
+                unit_box_normal_idx,
+                3,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 6,
+                (void*)12);
+            glEnableVertexAttribArray(unit_box_normal_idx);
 
             // AABB residue coords (packed as integers); these are per-
             // chunk and thus instanced.

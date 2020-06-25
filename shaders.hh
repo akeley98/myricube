@@ -30,6 +30,7 @@ constexpr int packed_vertex_idx = 1;
 constexpr int packed_aabb_low_idx = 0;
 constexpr int packed_aabb_high_idx = 1;
 constexpr int unit_box_vertex_idx = 2;
+constexpr int unit_box_normal_idx = 3;
 
 // Return a vector of #define lines and stuff (not newline terminated).
 inline std::vector<std::string> get_preamble(std::string filename)
@@ -42,6 +43,7 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define PACKED_VERTEX_IDX " + std::to_string(packed_vertex_idx),
         "#define PACKED_COLOR_IDX " + std::to_string(packed_color_idx),
         "#define UNIT_BOX_VERTEX_IDX " + std::to_string(unit_box_vertex_idx),
+        "#define UNIT_BOX_NORMAL_IDX " + std::to_string(unit_box_normal_idx),
         "#define PACKED_AABB_LOW_IDX " + std::to_string(packed_aabb_low_idx),
         "#define PACKED_AABB_HIGH_IDX " + std::to_string(packed_aabb_high_idx),
     };
