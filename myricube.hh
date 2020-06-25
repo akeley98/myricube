@@ -57,6 +57,7 @@ inline void split_coordinate(glm::dvec3 v,
 }
 
 // Name a file that is in the data directory, and return its absolute path.
+// Filenames that are already absolute paths (start with /) are unchanged.
 std::string expand_filename(const std::string& in);
 
 inline bool is_real(float v)

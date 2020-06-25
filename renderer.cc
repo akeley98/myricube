@@ -15,57 +15,12 @@
 #include "chunk.hh"
 #include "glad/glad.h"
 #include "renderer.hh"
+#include "shaders.hh"
 #include "SDL2/SDL.h"
 
 namespace myricube {
 
 bool chunk_debug = false;
-
-// TODO: Maybe get some better code for compiling shaders? Load it
-// from a file?
-static GLuint make_program(const char* vs_code, const char* fs_code)
-{
-    static GLchar log[1024];
-    PANIC_IF_GL_ERROR;
-    GLuint program_id = glCreateProgram();
-    GLuint vs_id = glCreateShader(GL_VERTEX_SHADER);
-    GLuint fs_id = glCreateShader(GL_FRAGMENT_SHADER);
-
-    const GLchar* string_array[1];
-    string_array[0] = (GLchar*)vs_code;
-    glShaderSource(vs_id, 1, string_array, nullptr);
-    string_array[0] = (GLchar*)fs_code;
-    glShaderSource(fs_id, 1, string_array, nullptr);
-
-    glCompileShader(vs_id);
-    glCompileShader(fs_id);
-
-    PANIC_IF_GL_ERROR;
-
-    GLint okay = 0;
-    GLsizei length = 0;
-    const GLuint shader_id_array[2] = { vs_id, fs_id };
-    for (auto id : shader_id_array) {
-        glGetShaderiv(id, GL_COMPILE_STATUS, &okay);
-        if (okay) {
-            glAttachShader(program_id, id);
-        } else {
-            glGetShaderInfoLog(id, sizeof log, &length, log);
-            fprintf(stderr, "%s\n", id == vs_id ? vs_code : fs_code);
-            panic("Shader compilation error", log);
-        }
-    }
-
-    glLinkProgram(program_id);
-    glGetProgramiv(program_id, GL_LINK_STATUS, &okay);
-    if (!okay) {
-        glGetProgramInfoLog(program_id, sizeof log, &length, log);
-        panic("Shader link error", log);
-    }
-
-    PANIC_IF_GL_ERROR;
-    return program_id;
-}
 
 // Single vertex of the VBO for a chunk's mesh.
 struct MeshVertex
@@ -359,218 +314,6 @@ class BaseStore
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 class RaycastStore : public BaseStore<RaycastEntry, 4, 8> { };
-
-#define BORDER_WIDTH_STR "0.1"
-
-const char mesh_vs_source[] =
-"#version 330\n"
-"layout(location=0) in int packed_vertex;\n"
-"layout(location=1) in int packed_color;\n"
-"out vec3 color;\n"
-"out vec3 model_space_position_;\n"
-"uniform mat4 mvp_matrix;\n"
-"void main() {\n"
-    "float x = float(packed_vertex & 255);\n"
-    "float y = float((packed_vertex >> 8) & 255);\n"
-    "float z = float((packed_vertex >> 16) & 255);\n"
-    "vec4 model_space_position = vec4(x, y, z, 1);\n"
-    "gl_Position = mvp_matrix * model_space_position;\n"
-    "float red   = ((packed_color >> 16) & 255) * (1./255.);\n"
-    "float green = ((packed_color >> 8) & 255) * (1./255.);\n"
-    "float blue  = (packed_color & 255) * (1./255.);\n"
-    "color = vec3(red, green, blue);\n"
-    "model_space_position_ = model_space_position.xyz;\n"
-"}\n";
-
-constexpr int packed_vertex_idx = 0;
-constexpr int packed_color_idx = 1;
-
-const char mesh_fs_source[] =
-"#version 330\n"
-"in vec3 color;\n"
-"in vec3 model_space_position_;\n"
-"out vec4 out_color;\n"
-"void main() {\n"
-    "const float d = " BORDER_WIDTH_STR ";\n"
-    "float x = model_space_position_.x;\n"
-    "int x_border = (x - floor(x + d) < d) ? 1 : 0;\n"
-    "float y = model_space_position_.y;\n"
-    "int y_border = (y - floor(y + d) < d) ? 1 : 0;\n"
-    "float z = model_space_position_.z;\n"
-    "int z_border = (z - floor(z + d) < d) ? 1 : 0;\n"
-    "float scale = (x_border + y_border + z_border >= 2) ? 0.5 : 1.0;\n"
-    "out_color = vec4(color * scale, 1);\n"
-"}\n";
-
-// Really need to improve this...
-#define GROUP_SIZE_STR "64"
-static_assert(group_size == 64, "fix GROUP_SIZE_STR");
-
-constexpr int unit_box_vertex_idx = 0;
-constexpr int packed_aabb_low_idx = 1;
-constexpr int packed_aabb_high_idx = 2;
-
-static const char raycast_vs_source[] =
-"#version 330\n"
-"layout(location=0) in vec4 unit_box_vertex;\n"
-"layout(location=1) in int packed_aabb_low;\n"
-"layout(location=2) in int packed_aabb_high;\n"
-"out vec3 residue_coord;\n"
-"out float border_fade;\n"
-"flat out ivec3 aabb_low;\n"
-"flat out ivec3 aabb_high;\n"
-"uniform mat4 mvp_matrix;\n"
-"uniform vec3 eye_relative_group_origin;\n"
-"uniform int far_plane_squared;\n"
-"uniform int raycast_thresh_squared;\n"
-"void main() {\n"
-    "int low_x = packed_aabb_low & 255;\n"
-    "int low_y = (packed_aabb_low >> 8) & 255;\n"
-    "int low_z = (packed_aabb_low >> 16) & 255;\n"
-    "int high_x = packed_aabb_high & 255;\n"
-    "int high_y = (packed_aabb_high >> 8) & 255;\n"
-    "int high_z = (packed_aabb_high >> 16) & 255;\n"
-    "vec3 f_aabb_low = vec3(low_x, low_y, low_z);\n"
-    "vec3 sz = vec3(high_x, high_y, high_z) - f_aabb_low;\n"
-    "vec4 model_space_pos = vec4(unit_box_vertex.xyz * sz + f_aabb_low, 1);\n"
-    "vec3 disp = model_space_pos.xyz - eye_relative_group_origin;\n"
-    "float distance = sqrt(dot(disp, disp));\n"
-    "border_fade = clamp(distance * 0.003 + 0.11, 0.5, 1.0);\n"
-    "aabb_low = ivec3(low_x, low_y, low_z);\n"
-    "aabb_high = ivec3(high_x, high_y, high_z);\n"
-    // Re-implement decide_chunk(...) == draw_raycast on GPU.
-    "vec3 aabb_center = vec3(aabb_low + aabb_high) * 0.5;\n"
-    "vec3 floor_eye = floor(eye_relative_group_origin);\n"
-    "disp = aabb_center - floor_eye;\n"
-    "residue_coord = model_space_pos.xyz;\n"
-    "float squared_dist = dot(disp, disp);\n"
-    "bool draw_raycast = squared_dist\n"
-        "== clamp(squared_dist, raycast_thresh_squared, far_plane_squared);\n"
-    // Draw as degenerate triangle if this chunk is not meant for raycasting.
-    "gl_Position = draw_raycast ? mvp_matrix * model_space_pos\n"
-                               ": vec4(0,0,0,1);\n"
-"}\n";
-
-static const char raycast_fs_source[] =
-"#version 330\n"
-"in vec3 residue_coord;\n"
-"in float border_fade;\n"
-"flat in ivec3 aabb_low;\n"
-"flat in ivec3 aabb_high;\n"
-// TODO: Add bias (based on normal vector) to deal with floor/ceil
-// rounding errors. Also hide this mess in a glsl file somewhere.
-"uniform vec3 eye_relative_group_origin;\n"
-"uniform sampler3D chunk_blocks;\n"
-"uniform bool chunk_debug;\n"
-"uniform int far_plane_squared;\n"
-"out vec4 color;\n"
-"void main() {\n"
-"if (!chunk_debug) {\n"
-    "const float d = " BORDER_WIDTH_STR ";\n"
-    "float x0 = eye_relative_group_origin.x;\n"
-    "float y0 = eye_relative_group_origin.y;\n"
-    "float z0 = eye_relative_group_origin.z;\n"
-    "vec3 slope = vec3(residue_coord) - eye_relative_group_origin;\n"
-    "float xm = slope.x;\n"
-    "float ym = slope.y;\n"
-    "float zm = slope.z;\n"
-    "float rcp = 1.0/" GROUP_SIZE_STR ".0;\n"
-    "float best_t = 1.0 / 0.0;\n"
-    "vec4 best_color = vec4(0,0,0,0);\n"
-    "vec3 best_coord = vec3(0,0,0);\n"
-    "int iter = 0;\n"
-    "int x_init = int(xm > 0 ? ceil(residue_coord.x) \n"
-                            ": floor(residue_coord.x));\n"
-    "int x_end = xm > 0 ? aabb_high.x : aabb_low.x;\n"
-    "int x_step = xm > 0 ? 1 : -1;\n"
-    "float x_fudge = xm > 0 ? .25 : -.25;\n"
-    "for (int x = x_init; x != x_end; x += x_step) {\n"
-        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
-        "float t = (x - x0) / xm;\n"
-        "float y = y0 + ym * t;\n"
-        "float z = z0 + zm * t;\n"
-        "if (y < aabb_low.y || y > aabb_high.y) break;\n"
-        "if (z < aabb_low.z || z > aabb_high.z) break;\n"
-        "vec3 texcoord = vec3(x + x_fudge, y, z) * rcp;\n"
-        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
-        "if (lookup_color.a > 0 && t > 0) {\n"
-            "if (best_t > t) {\n"
-                "best_t = t;\n"
-                "best_color = lookup_color;\n"
-                "best_coord = vec3(x,y,z);\n"
-                "if (y - floor(y + d) < d || z - floor(z + d) < d) {\n"
-                    "best_color.rgb *= border_fade;\n"
-                "}\n"
-            "}\n"
-            "break;\n"
-        "}\n"
-    "}\n"
-    "int y_init = int(ym > 0 ? ceil(residue_coord.y) \n"
-                            ": floor(residue_coord.y));\n"
-    "int y_end = ym > 0 ? aabb_high.y : aabb_low.y;\n"
-    "int y_step = ym > 0 ? 1 : -1;\n"
-    "float y_fudge = ym > 0 ? .25 : -.25;\n"
-    "for (int y = y_init; y != y_end; y += y_step) {\n"
-        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
-        "float t = (y - y0) / ym;\n"
-        "float x = x0 + xm * t;\n"
-        "float z = z0 + zm * t;\n"
-        "if (x < aabb_low.x || x > aabb_high.x) break;\n"
-        "if (z < aabb_low.z || z > aabb_high.z) break;\n"
-        "vec3 texcoord = vec3(x, y + y_fudge, z) * rcp;\n"
-        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
-        "if (lookup_color.a > 0 && t > 0) {\n"
-            "if (best_t > t) {\n"
-                "best_t = t;\n"
-                "best_color = lookup_color;\n"
-                "best_coord = vec3(x,y,z);\n"
-                "if (x - floor(x + d) < d || z - floor(z + d) < d) {\n"
-                    "best_color.rgb *= border_fade;\n"
-                "}\n"
-            "}\n"
-            "break;\n"
-        "}\n"
-    "}\n"
-    "int z_init = int(zm > 0 ? ceil(residue_coord.z) \n"
-                            ": floor(residue_coord.z));\n"
-    "int z_end = zm > 0 ? aabb_high.z : aabb_low.z;\n"
-    "int z_step = zm > 0 ? 1 : -1;\n"
-    "float z_fudge = zm > 0 ? .25 : -.25;\n"
-    "for (int z = z_init; z != z_end; z += z_step) {\n"
-        "if (iter++ >= 255) { color = vec4(1,0,1,1); return; }\n"
-        "float t = (z - z0) / zm;\n"
-        "float x = x0 + xm * t;\n"
-        "float y = y0 + ym * t;\n"
-        "if (x < aabb_low.x || x > aabb_high.x) break;\n"
-        "if (y < aabb_low.y || y > aabb_high.y) break;\n"
-        "vec3 texcoord = vec3(x, y, z + z_fudge) * rcp;\n"
-        "vec4 lookup_color = texture(chunk_blocks, texcoord);\n"
-        "if (lookup_color.a > 0 && t > 0) {\n"
-            "if (best_t > t) {\n"
-                "best_t = t;\n"
-                "best_color = lookup_color;\n"
-                "best_coord = vec3(x,y,z);\n"
-                "if (x - floor(x + d) < d || y - floor(y + d) < d) {\n"
-                    "best_color.rgb *= border_fade;\n"
-                "}\n"
-            "}\n"
-            "break;\n"
-        "}\n"
-    "}\n"
-    "if (best_color.a == 0) discard;\n"
-    "vec3 disp = best_coord - eye_relative_group_origin;\n"
-    "float dist_squared = dot(disp, disp);\n"
-    "float fog_fade = clamp(2 * (1 - dist_squared/far_plane_squared), 0, 1);\n"
-    "color = vec4(best_color.rgb * fog_fade, 1);\n"
-    //"vec4 v = vp_matrix * vec4(best_coord + chunk_offset, 1);\n"
-    //"gl_FragDepth = .3;\n"
-"} else {\n"
-    "int x_floor = int(floor(residue_coord.x));\n"
-    "int y_floor = int(floor(residue_coord.y));\n"
-    "int z_floor = int(floor(residue_coord.z));\n"
-    "color = vec4(x_floor & 1, y_floor & 1, z_floor & 1, 1);\n"
-"}\n"
-"}\n";
 
 static const float unit_box_vertices[32] =
 {
@@ -1063,7 +806,7 @@ class Renderer
         static GLint mvp_matrix_idx;
 
         if (vao == 0) {
-            program_id = make_program(mesh_vs_source, mesh_fs_source);
+            program_id = make_program({ "mesh.vert", "mesh.frag" });
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_idx >= 0);
             glGenVertexArrays(1, &vao);
@@ -1287,7 +1030,7 @@ class Renderer
         static GLint chunk_debug_id;
 
         if (vao == 0) {
-            program_id = make_program(raycast_vs_source, raycast_fs_source);
+            program_id = make_program({ "raycast.vert", "raycast.frag" });
             mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_id >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,

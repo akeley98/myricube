@@ -90,7 +90,7 @@ std::string expand_filename(const std::string& in)
     if (data_directory.size() == 0) {
         throw std::logic_error("Cannot call expand_filename before main");
     }
-    return data_directory + in;
+    return in[0] == '/' ? in : data_directory + in;
 }
 
 bool ends_with_dash_bin(const std::string& in)
