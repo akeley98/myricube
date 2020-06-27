@@ -811,8 +811,8 @@ std::unordered_map<std::string, int> key_name_to_key_code_map {
 
     { "app1", SDL_SCANCODE_APP1 },
     { "app2", SDL_SCANCODE_APP2 },
-    { "audiorewind", SDL_SCANCODE_AUDIOREWIND },
-    { "audiofastforward", SDL_SCANCODE_AUDIOFASTFORWARD },
+    // { "audiorewind", SDL_SCANCODE_AUDIOREWIND },
+    // { "audiofastforward", SDL_SCANCODE_AUDIOFASTFORWARD },
 };
 
 }
