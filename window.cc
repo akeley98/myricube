@@ -50,7 +50,10 @@ Window::Window(OnWindowResize on_window_resize_)
 
 Window::~Window()
 {
-    fprintf(stderr, "Maybe I should write a destructor for Window...\n");
+    SDL_GL_DeleteContext(context);
+    SDL_DestroyWindow(window);
+    context = nullptr;
+    window = nullptr;
 }
 
 void Window::set_title(const std::string& title)
