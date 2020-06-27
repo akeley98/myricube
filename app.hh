@@ -11,9 +11,6 @@
 
 namespace myricube {
 
-// Name of the app.
-extern const char app_name[];
-
 // Called once at the start; also an opportunity to add key targets.
 void app_init(VoxelWorld& world, Window& window);
 

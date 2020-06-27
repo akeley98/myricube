@@ -9,7 +9,7 @@ CFLAGS=  -Wall -Wextra -O3 -g
 run: myricube-planet-bin
 	./myricube-planet
 
-all: myricube-planet-bin myricube-axis-bin myricube-random-walk-bin
+all: myricube-planet-bin myricube-axis-bin myricube-congestion-bin myricube-random-walk-bin myricube-skygrid-bin
 
 OBJS=cckiss/myricube.cc.s \
      cckiss/window.cc.s \
@@ -23,5 +23,11 @@ myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
 myricube-axis-bin: $(OBJS) cckiss/apps/axis.cc.s
 	$(CXX) $(OBJS) cckiss/apps/axis.cc.s -ldl -lGL -lSDL2 -o myricube-axis-bin
 
+myricube-congestion-bin: $(OBJS) cckiss/apps/congestion.cc.s
+	$(CXX) $(OBJS) cckiss/apps/congestion.cc.s -ldl -lGL -lSDL2 -o myricube-congestion-bin
+
 myricube-random-walk-bin: $(OBJS) cckiss/apps/random-walk.cc.s
 	$(CXX) $(OBJS) cckiss/apps/random-walk.cc.s -ldl -lGL -lSDL2 -o myricube-random-walk-bin
+
+myricube-skygrid-bin: $(OBJS) cckiss/apps/skygrid.cc.s
+	$(CXX) $(OBJS) cckiss/apps/skygrid.cc.s -ldl -lGL -lSDL2 -o myricube-skygrid-bin

@@ -7,7 +7,7 @@
 
 #include "app.hh"
 
-static constexpr int Size = 240;
+static constexpr int Size = 360;
 static constexpr int Border = 8;
 static constexpr double Load = 0.4;
 

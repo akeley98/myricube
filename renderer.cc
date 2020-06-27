@@ -313,7 +313,7 @@ class BaseStore
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
-class RaycastStore : public BaseStore<RaycastEntry, 4, 8> { };
+class RaycastStore : public BaseStore<RaycastEntry, 3, 12> { };
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
 // stretched and positioned to the right shape and position in space.
