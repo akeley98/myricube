@@ -11,10 +11,15 @@ run: myricube-planet-bin
 
 all: myricube-planet-bin \
      myricube-axis-bin \
+     cckiss/apps/axis.cc.s \
      myricube-congestion-bin \
+     cckiss/apps/congestion.cc.s \
      myricube-random-walk-bin \
+     cckiss/apps/random-walk.cc.s \
      myricube-skygrid-bin \
+     cckiss/apps/skygrid.cc.s \
      myricube-hexload-app-bin \
+     cckiss/apps/hexload-app.cc.s \
 # Empty line for backslash
 
 OBJS=cckiss/myricube.cc.s \
