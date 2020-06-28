@@ -365,8 +365,9 @@ class Renderer
     // drawn with raycasting, or drawn as a mesh, depending on whether
     // it is out-of-range of, far, or near the camera.
 
-    // Should this group be culled? If not, return through *the squared
-    // distance between the eye and the nearest point in the group.
+    // Should this group be culled? If not, return through
+    // *squared_dist the squared distance between the eye and the
+    // nearest point in the group.
     bool cull_group(PositionedChunkGroup& pcg, float* squared_dist=nullptr)
     {
         if (group(pcg).total_visible == 0) return true;
