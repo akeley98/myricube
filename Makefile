@@ -14,6 +14,7 @@ all: myricube-planet-bin \
      myricube-congestion-bin \
      myricube-random-walk-bin \
      myricube-skygrid-bin \
+     myricube-hexload-app-bin \
 # Empty line for backslash
 
 OBJS=cckiss/myricube.cc.s \
@@ -24,6 +25,7 @@ OBJS=cckiss/myricube.cc.s \
 
 myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
 	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lSDL2 -o myricube-planet-bin
+
 
 myricube-%-bin: $(OBJS) cckiss/apps/%.cc.s
 	$(CXX) $(OBJS) cckiss/apps/$*.cc.s -ldl -lGL -lSDL2 -o myricube-$*-bin

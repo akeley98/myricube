@@ -34,6 +34,9 @@ struct Voxel
     operator bool() const { return visible; }
 
     Voxel() = default;
+    Voxel(const Voxel&) = default;
+    Voxel& operator= (const Voxel&) = default;
+
     Voxel(uint8_t red_, uint8_t green_, uint8_t blue_)
     {
         visible = true;
@@ -381,6 +384,26 @@ class VoxelWorld
     {
         const PositionedChunkGroup* p_hint = &hint;
         return (*this)(c, &p_hint);
+    }
+
+    // For every visible voxel in the world, call the callback with
+    // the Voxel and its coordinate as glm::ivec3 (in that order).
+    template <typename Callback>
+    void map_voxels(Callback&& callback) const
+    {
+        for (const PositionedChunkGroup& pcg : group_map) {
+            glm::ivec3 group_offset = group_size * group_coord(pcg);
+            for (int z = 0; z < group_size; ++z) {
+                for (int y = 0; y < group_size; ++y) {
+                    for (int x = 0; x < group_size; ++x) {
+                        glm::ivec3 c = group_offset + glm::ivec3(x,y,z);
+                        Voxel voxel_here = (*this)(c, pcg);
+                        if (!voxel_here.visible) continue;
+                        callback(voxel_here, c);
+                    }
+                }
+            }
+        }
     }
 };
 

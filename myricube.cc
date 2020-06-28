@@ -74,6 +74,7 @@
 #include "app.hh"
 #include "camera.hh"
 #include "chunk.hh"
+#include "hexload.hh"
 #include "renderer.hh"
 #include "window.hh"
 
@@ -515,6 +516,10 @@ int Main(std::vector<std::string> args)
         render_world_mesh_step(world, camera);
         render_world_raycast_step(world, camera);
         set_window_title(window);
+    }
+    bool okay = write_hex(world, expand_filename("autosave.myricube.hex"));
+    if (!okay) {
+        fprintf(stderr, "Too bad, autosave failed.\n");
     }
     return 0;
 }
