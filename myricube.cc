@@ -517,6 +517,7 @@ int Main(std::vector<std::string> args)
         render_world_raycast_step(world, camera);
         set_window_title(window);
     }
+    window.set_title("Autosaving...");
     bool okay = write_hex(world, expand_filename("autosave.myricube.hex"));
     if (!okay) {
         fprintf(stderr, "Too bad, autosave failed.\n");

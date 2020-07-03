@@ -22,7 +22,7 @@ void app_init(VoxelWorld& world, Window&)
         return Voxel(red, green, blue);
     };
     
-    constexpr int radius = 512;
+    constexpr int radius = 360;
     for (int z = -radius; z <= radius; z += 4) {
         for (int y = -radius; y <= radius; y += 4) {
             for (int x = -radius; x <= radius; x += 4) {
