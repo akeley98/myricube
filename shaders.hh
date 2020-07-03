@@ -46,6 +46,7 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define UNIT_BOX_NORMAL_IDX " + std::to_string(unit_box_normal_idx),
         "#define PACKED_AABB_LOW_IDX " + std::to_string(packed_aabb_low_idx),
         "#define PACKED_AABB_HIGH_IDX " + std::to_string(packed_aabb_high_idx),
+        "#define FOG_SCALAR 1.125",
     };
 }
 

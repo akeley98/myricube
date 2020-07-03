@@ -17,7 +17,7 @@
 
 
 
-in vec3 residue_coord;
+in vec3 aabb_residue_coord;
 in float border_fade;
 flat in ivec3 aabb_low;
 flat in ivec3 aabb_high;
@@ -28,7 +28,7 @@ uniform bool chunk_debug;
 uniform int far_plane_squared;
 out vec4 color;
 void main() {
-    vec3 init_coord = residue_coord + floor_ceil_fudge;
+    vec3 init_coord = aabb_residue_coord + floor_ceil_fudge;
     if (chunk_debug) {
         int x_floor = int(floor(init_coord.x));
         int y_floor = int(floor(init_coord.y));
@@ -40,7 +40,7 @@ void main() {
     float x0 = eye_relative_group_origin.x;
     float y0 = eye_relative_group_origin.y;
     float z0 = eye_relative_group_origin.z;
-    vec3 slope = residue_coord - eye_relative_group_origin;
+    vec3 slope = aabb_residue_coord - eye_relative_group_origin;
     float xm = slope.x;
     float ym = slope.y;
     float zm = slope.z;
@@ -130,6 +130,7 @@ void main() {
     if (best_color.a == 0) discard;
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
-    float fog_fade = clamp(2 * (1 - dist_squared/far_plane_squared), 0, 1);
+    float raw_fog_fade = FOG_SCALAR * (1 - dist_squared/far_plane_squared);
+    float fog_fade = clamp(raw_fog_fade, 0, 1);
     color = vec4(best_color.rgb * fog_fade, 1);
 }

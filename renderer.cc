@@ -468,17 +468,18 @@ class Renderer
         if (chunk.total_visible == 0) return cull;
         glm::ivec3 aabb_low, aabb_high;
         chunk.get_aabb(&aabb_low, &aabb_high);
-        glm::vec3 aabb_center = glm::vec3(aabb_high + aabb_low) * 0.5f;
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
         camera.get_eye(&eye_group, &eye_residue);
         auto far_plane = camera.get_far_plane();
         auto raycast_thresh = camera.get_raycast_threshold();
 
-        // Compute the displacement between the eye and the center of
-        // the chunk's AABB.
-        glm::vec3 disp = aabb_center - glm::floor(eye_residue);
-        disp += glm::vec3(group_size * (group_coord - eye_group));
+        // Compute the displacement between the eye and the nearest point
+        // of the chunk's AABB (to the eye).
+        glm::ivec3 floor_eye = glm::ivec3(glm::floor(eye_residue))
+                             + group_size * (eye_group - group_coord);
+        glm::ivec3 aabb_nearest = glm::clamp(floor_eye, aabb_low, aabb_high);
+        auto disp = glm::vec3(aabb_nearest - floor_eye);
 
         float squared_dist = glm::dot(disp, disp);
         if (squared_dist > far_plane * far_plane) return cull;
@@ -812,10 +813,21 @@ class Renderer
         static GLuint program_id;
         static GLint mvp_matrix_idx;
 
+        // Position of camera eye relative to the origin of the group
+        // (origin == group_size times the group coordinate).
+        static GLint eye_relative_group_origin_id;
+        static GLint far_plane_squared_id;
+
         if (vao == 0) {
             program_id = make_program({ "mesh.vert", "mesh.frag" });
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_idx >= 0);
+            eye_relative_group_origin_id = glGetUniformLocation(program_id,
+                "eye_relative_group_origin");
+            assert(eye_relative_group_origin_id >= 0);
+            far_plane_squared_id = glGetUniformLocation(program_id,
+                "far_plane_squared");
+            assert(far_plane_squared_id >= 0);
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
@@ -823,6 +835,8 @@ class Renderer
 
         glBindVertexArray(vao);
         glUseProgram(program_id);
+        auto far_plane = camera.get_far_plane();
+        glUniform1i(far_plane_squared_id, far_plane * far_plane);
         PANIC_IF_GL_ERROR;
 
         auto draw_chunk = [&]
@@ -871,6 +885,12 @@ class Renderer
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
             glUniformMatrix4fv(mvp_matrix_idx, 1, 0, &mvp[0][0]);
+
+            // Similarly, the eye residue needs to be shifted by the
+            // group's position.
+            glm::vec3 eye_relative_group_origin = eye_residue - model_offset;
+            glUniform3fv(eye_relative_group_origin_id, 1,
+                &eye_relative_group_origin[0]);
 
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
