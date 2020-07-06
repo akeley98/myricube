@@ -62,7 +62,7 @@ void main() {
         if (y < aabb_low.y || y > aabb_high.y) break;
         if (z < aabb_low.z || z > aabb_high.z) break;
         vec3 texcoord = vec3(x + x_fudge, y, z) * rcp;
-        vec4 lookup_color = texture(chunk_blocks, texcoord);
+        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;
@@ -88,7 +88,7 @@ void main() {
         if (x < aabb_low.x || x > aabb_high.x) break;
         if (z < aabb_low.z || z > aabb_high.z) break;
         vec3 texcoord = vec3(x, y + y_fudge, z) * rcp;
-        vec4 lookup_color = texture(chunk_blocks, texcoord);
+        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;
@@ -114,7 +114,7 @@ void main() {
         if (x < aabb_low.x || x > aabb_high.x) break;
         if (y < aabb_low.y || y > aabb_high.y) break;
         vec3 texcoord = vec3(x, y, z + z_fudge) * rcp;
-        vec4 lookup_color = texture(chunk_blocks, texcoord);
+        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;

@@ -52,8 +52,8 @@ inline std::vector<std::string> get_preamble(std::string filename)
 
 // Compile and link a shader using the shader files in the list of
 // `filename_count` strings. (They are found in the
-// data_directory). Vertex shader files end with .vert"; fragment
-// shaders with ".frag".
+// data_directory). Vertex shader files end with .vert", geometry
+// shaders with ".geom", and fragment shaders with ".frag".
 inline GLuint make_program(const char* const* filenames, size_t filename_count);
 
 inline GLuint make_program(std::initializer_list<const char*> filenames)
@@ -131,6 +131,11 @@ inline bool is_vertex_shader_filename(const char* filename) {
     return len >= 5 and strcmp(".vert", &filename[len-5]) == 0;
 }
 
+inline bool is_geometry_shader_filename(const char* filename) {
+    auto len = strlen(filename);
+    return len >= 5 and strcmp(".geom", &filename[len-5]) == 0;
+}
+
 inline bool is_fragment_shader_filename(const char* filename) {
     auto len = strlen(filename);
     return len >= 5 and strcmp(".frag", &filename[len-5]) == 0;
@@ -138,19 +143,22 @@ inline bool is_fragment_shader_filename(const char* filename) {
 
 inline GLuint make_program(const char* const* filenames, size_t filename_count)
 {
+    // Output memory for compiler messages.
     std::vector<char> log(100000);
 
+    // Store vertex, geometry, and fragment shader sources
+    // separately. Use std::string to store shader source code (loaded
+    // from files), but we also need a parallel const char* array for
+    // the OpenGL C API.
     std::vector<std::string> vs_string_array;
+    std::vector<std::string> gs_string_array;
     std::vector<std::string> fs_string_array;
     std::vector<const char*> vs_c_str_array;
+    std::vector<const char*> gs_c_str_array;
     std::vector<const char*> fs_c_str_array;
 
-    GLuint program_id = glCreateProgram();
-    GLuint vs_id = glCreateShader(GL_VERTEX_SHADER);
-    GLuint fs_id = glCreateShader(GL_FRAGMENT_SHADER);
-
-    PANIC_IF_GL_ERROR;
-
+    // Load each shader file and shunt the source code to the correct
+    // array depending on its file extension.
     for (size_t i = 0; i < filename_count; ++i) {
         const char* f = filenames[i];
 
@@ -158,28 +166,66 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
             vs_string_array.push_back(read_shader_source(f));
             vs_c_str_array.push_back(vs_string_array.back().data());
         }
+        else if (is_geometry_shader_filename(f)) {
+            gs_string_array.push_back(read_shader_source(f));
+            gs_c_str_array.push_back(vs_string_array.back().data());
+        }
         else if (is_fragment_shader_filename(f)) {
             fs_string_array.push_back(read_shader_source(f));
             fs_c_str_array.push_back(fs_string_array.back().data());
         }
         else {
-            panic(f + std::string(" should end in .frag or .vert"));
+            panic(f + std::string(" should end in .frag or .geom or .vert"));
         }
     }
 
-    glShaderSource(vs_id, vs_c_str_array.size(),
-                   vs_c_str_array.data(), nullptr);
-    glShaderSource(fs_id, fs_c_str_array.size(),
-                   fs_c_str_array.data(), nullptr);
-    glCompileShader(vs_id);
-    glCompileShader(fs_id);
+    // Make OpenGL shader objects.
+    GLuint program_id = glCreateProgram();
+    GLuint vs_id = glCreateShader(GL_VERTEX_SHADER);
+    GLuint fs_id = glCreateShader(GL_FRAGMENT_SHADER);
+    GLuint gs_id = 0;
+
+    // Mandatory vertex shader.
+    if (vs_c_str_array.size() != 0) {
+        glShaderSource(vs_id, vs_c_str_array.size(),
+                       vs_c_str_array.data(), nullptr);
+        glCompileShader(vs_id);
+    }
+    else {
+        panic("No vertex shaders (.vert)");
+    }
+
+    // Mandatory fragment shader.
+    if (fs_c_str_array.size() != 0) {
+        glShaderSource(fs_id, fs_c_str_array.size(),
+                       fs_c_str_array.data(), nullptr);
+        glCompileShader(fs_id);
+    }
+    else {
+        panic("No fragment shaders (.frag)");
+    }
+
+    // Optional geometry shader.
+    if (gs_c_str_array.size() != 0) {
+        gs_id = glCreateShader(GL_GEOMETRY_SHADER);
+        glShaderSource(gs_id, gs_c_str_array.size(),
+                       gs_c_str_array.data(), nullptr);
+        glCompileShader(gs_id);
+    }
+    else {
+        fprintf(stderr, "Note: no geometry shaders (.geom).\n");
+    }
     PANIC_IF_GL_ERROR;
 
+    // Compile each shader.
     GLint okay = 0;
     GLsizei length = 0;
-    const GLuint shader_id_array[2] = { vs_id, fs_id };
+    const GLuint shader_id_array[3] = { vs_id, gs_id, fs_id };
 
     for (auto id : shader_id_array) {
+        // Skip geometry shader if there is none.
+        if (id == 0) continue;
+
         glGetShaderiv(id, GL_COMPILE_STATUS, &okay);
         if (okay) {
             glAttachShader(program_id, id);
@@ -187,7 +233,8 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         glGetShaderInfoLog(id, log.size()-1, &length, log.data());
 
         if (!okay or length > 0) {
-            auto& sources = id == vs_id ? vs_string_array : fs_string_array;
+            auto& sources = id == vs_id ? vs_string_array
+                          : id == fs_id ? fs_string_array : gs_string_array;
             for (const std::string& source : sources) {
                 print_source(source);
             }
@@ -196,11 +243,12 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
 
         if (!okay) panic("Shader compile error.");
     }
-    
+
+    // Link and return the program.
     glLinkProgram(program_id);
     glGetProgramiv(program_id, GL_LINK_STATUS, &okay);
     glGetProgramInfoLog(program_id, log.size()-1, &length, log.data());
-    
+
     if (!okay or length > 0) {
         fprintf(stderr, "%s\n", log.data());
     }
