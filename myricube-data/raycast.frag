@@ -17,6 +17,17 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
 in vec3 aabb_residue_coord;
 in float border_fade;
 flat in ivec3 aabb_low;

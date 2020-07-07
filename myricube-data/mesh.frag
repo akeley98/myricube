@@ -18,6 +18,16 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
 in vec3 color;
 in vec3 residue_coord;
 out vec4 out_color;

@@ -38,7 +38,9 @@ struct MeshVertex
     {
         static_assert(group_size <= 255,
                       "group too big for 8-bit unsigned coordinates.");
-        packed_vertex = x | uint32_t(y) << 8 | uint32_t(z) << 16;
+        packed_vertex = uint32_t(x) << x_shift
+                      | uint32_t(y) << y_shift
+                      | uint32_t(z) << z_shift;
         packed_color = blue | uint32_t(green) << 8 | uint32_t(red) << 16;
     }
 };
@@ -128,36 +130,40 @@ struct PackedAABB
         auto x = aabb_low.x;
         auto y = aabb_low.y;
         auto z = aabb_low.z;
-        packed_low = uint32_t(x) | uint32_t(y) << 8 | uint32_t(z) << 16;
+        packed_low = uint32_t(x) << x_shift
+                   | uint32_t(y) << y_shift
+                   | uint32_t(z) << z_shift;
         x = aabb_high.x;
         y = aabb_high.y;
         z = aabb_high.z;
-        packed_high = uint32_t(x) | uint32_t(y) << 8 | uint32_t(z) << 16;
+        packed_high = uint32_t(x) << x_shift
+                    | uint32_t(y) << y_shift
+                    | uint32_t(z) << z_shift;
     }
 
     uint8_t low_x() const
     {
-        return uint8_t(packed_low & 255);
+        return uint8_t((packed_low >> x_shift) & 255);
     }
     uint8_t low_y() const
     {
-        return uint8_t((packed_low >> 8) & 255);
+        return uint8_t((packed_low >> y_shift) & 255);
     }
     uint8_t low_z() const
     {
-        return uint8_t((packed_low >> 16) & 255);
+        return uint8_t((packed_low >> z_shift) & 255);
     }
     uint8_t high_x() const
     {
-        return uint8_t(packed_high & 255);
+        return uint8_t((packed_high >> x_shift) & 255);
     }
     uint8_t high_y() const
     {
-        return uint8_t((packed_high >> 8) & 255);
+        return uint8_t((packed_high >> y_shift) & 255);
     }
     uint8_t high_z() const
     {
-        return uint8_t((packed_high >> 16) & 255);
+        return uint8_t((packed_high >> z_shift) & 255);
     }
 };
 
@@ -604,15 +610,6 @@ class Renderer
                 }
             }
         }
-        // for (MeshVertex mv : verts) {
-        //     float x = float(mv.packed_vertex & 255);
-        //     float y = float((mv.packed_vertex >> 8) & 255);
-        //     float z = float((mv.packed_vertex >> 16) & 255);
-        //     float red   = ((mv.packed_color >> 16) & 255) * (1./255.);
-        //     float green = ((mv.packed_color >> 8) & 255) * (1./255.);
-        //     float blue  = (mv.packed_color & 255) * (1./255.);
-        //     printf("%f %f %f   %f %f %f\n", x, y, z, red, green, blue);
-        // }
         return verts;
     }
 

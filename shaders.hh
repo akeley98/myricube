@@ -32,6 +32,18 @@ constexpr int packed_aabb_high_idx = 1;
 constexpr int unit_box_vertex_idx = 2;
 constexpr int unit_box_normal_idx = 3;
 
+// bit assignments for packed verts.
+constexpr int x_shift = 0;
+constexpr int y_shift = 8;
+constexpr int z_shift = 16;
+
+constexpr int pos_x_face_bit = (1 << 24);
+constexpr int neg_x_face_bit = (1 << 25);
+constexpr int pos_y_face_bit = (1 << 26);
+constexpr int neg_y_face_bit = (1 << 27);
+constexpr int pos_z_face_bit = (1 << 28);
+constexpr int neg_z_face_bit = (1 << 29);
+
 // Return a vector of #define lines and stuff (not newline terminated).
 inline std::vector<std::string> get_preamble(std::string filename)
 {
@@ -48,6 +60,15 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define PACKED_AABB_LOW_IDX " + std::to_string(packed_aabb_low_idx),
         "#define PACKED_AABB_HIGH_IDX " + std::to_string(packed_aabb_high_idx),
         "#define FOG_SCALAR 1.125",
+        "#define X_SHIFT " + std::to_string(x_shift),
+        "#define Y_SHIFT " + std::to_string(y_shift),
+        "#define Z_SHIFT " + std::to_string(z_shift),
+        "#define POS_X_FACE_BIT " + std::to_string(pos_x_face_bit),
+        "#define NEG_X_FACE_BIT " + std::to_string(neg_x_face_bit),
+        "#define POS_Y_FACE_BIT " + std::to_string(pos_y_face_bit),
+        "#define NEG_Y_FACE_BIT " + std::to_string(neg_y_face_bit),
+        "#define POS_Z_FACE_BIT " + std::to_string(pos_z_face_bit),
+        "#define NEG_Z_FACE_BIT " + std::to_string(neg_z_face_bit),
     };
 }
 
@@ -210,9 +231,9 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         glShaderSource(gs_id, gs_c_str_array.size(),
                        gs_c_str_array.data(), nullptr);
     }
-    else {
-        fprintf(stderr, "Note: no geometry shaders (.geom).\n");
-    }
+    /// else {
+    //     fprintf(stderr, "Note: no geometry shaders (.geom).\n");
+    // }
     PANIC_IF_GL_ERROR;
 
     // Compile each shader.

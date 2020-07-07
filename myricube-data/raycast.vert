@@ -17,6 +17,17 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
 layout(location=UNIT_BOX_VERTEX_IDX) in vec3 unit_box_vertex;
 layout(location=UNIT_BOX_NORMAL_IDX) in vec3 unit_box_normal;
 layout(location=PACKED_AABB_LOW_IDX) in int packed_aabb_low;

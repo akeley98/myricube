@@ -14,6 +14,20 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 layout (triangles) in;
 layout (triangle_strip, max_vertices = 3) out;
 
@@ -30,7 +44,6 @@ void main() {
     EmitVertex();
 
     gl_Position = gl_in[1].gl_Position;
-    // color = v_color[1].rgb * 0.5;
     color = v_color[1].rgb;
     residue_coord = v_residue_coord[1];
     EmitVertex();
