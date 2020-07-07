@@ -819,7 +819,7 @@ class Renderer
         static GLint far_plane_squared_id;
 
         if (vao == 0) {
-            program_id = make_program({ "mesh.vert", "mesh.frag" });
+            program_id = make_program({ "mesh.vert", "mesh.geom", "mesh.frag" });
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_idx >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,

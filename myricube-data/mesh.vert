@@ -12,8 +12,8 @@
 
 layout(location=PACKED_VERTEX_IDX) in int packed_vertex;
 layout(location=PACKED_COLOR_IDX) in int packed_color;
-out vec3 color;
-out vec3 residue_coord;
+out vec3 v_color;
+out vec3 v_residue_coord;
 uniform mat4 mvp_matrix;
 void main() {
     float x = float(packed_vertex & 255);
@@ -24,6 +24,6 @@ void main() {
     float red   = ((packed_color >> 16) & 255) * (1./255.);
     float green = ((packed_color >> 8) & 255) * (1./255.);
     float blue  = (packed_color & 255) * (1./255.);
-    color = vec3(red, green, blue);
-    residue_coord = model_space_position.xyz;
+    v_color = vec3(red, green, blue);
+    v_residue_coord = model_space_position.xyz;
 }

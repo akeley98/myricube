@@ -38,6 +38,7 @@ inline std::vector<std::string> get_preamble(std::string filename)
     return {
         "#version 450",
         "// FILE: " + filename,
+        "#define CHUNK_SIZE " + std::to_string(chunk_size),
         "#define GROUP_SIZE " + std::to_string(group_size),
         "#define BORDER_WIDTH " + std::to_string(border_width),
         "#define PACKED_VERTEX_IDX " + std::to_string(packed_vertex_idx),
@@ -168,7 +169,7 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         }
         else if (is_geometry_shader_filename(f)) {
             gs_string_array.push_back(read_shader_source(f));
-            gs_c_str_array.push_back(vs_string_array.back().data());
+            gs_c_str_array.push_back(gs_string_array.back().data());
         }
         else if (is_fragment_shader_filename(f)) {
             fs_string_array.push_back(read_shader_source(f));
@@ -189,7 +190,6 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
     if (vs_c_str_array.size() != 0) {
         glShaderSource(vs_id, vs_c_str_array.size(),
                        vs_c_str_array.data(), nullptr);
-        glCompileShader(vs_id);
     }
     else {
         panic("No vertex shaders (.vert)");
@@ -199,7 +199,6 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
     if (fs_c_str_array.size() != 0) {
         glShaderSource(fs_id, fs_c_str_array.size(),
                        fs_c_str_array.data(), nullptr);
-        glCompileShader(fs_id);
     }
     else {
         panic("No fragment shaders (.frag)");
@@ -210,7 +209,6 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         gs_id = glCreateShader(GL_GEOMETRY_SHADER);
         glShaderSource(gs_id, gs_c_str_array.size(),
                        gs_c_str_array.data(), nullptr);
-        glCompileShader(gs_id);
     }
     else {
         fprintf(stderr, "Note: no geometry shaders (.geom).\n");
@@ -226,6 +224,7 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         // Skip geometry shader if there is none.
         if (id == 0) continue;
 
+        glCompileShader(id);
         glGetShaderiv(id, GL_COMPILE_STATUS, &okay);
         if (okay) {
             glAttachShader(program_id, id);
