@@ -22,97 +22,6 @@ namespace myricube {
 
 bool chunk_debug = false;
 
-// Single vertex of the VBO for a chunk's mesh.
-struct MeshVertex
-{
-    uint32_t packed_vertex;
-    uint32_t packed_color;
-
-    // Pack this vertex given the vertex's residue coordinates
-    // (i.e. local coordinate in coordinate system of a chunk group)
-    // and 24-bit color.
-    //
-    // This constructor defines the packed layout.
-    MeshVertex(uint8_t x, uint8_t y, uint8_t z,
-               uint8_t red, uint8_t green, uint8_t blue)
-    {
-        static_assert(group_size <= 255,
-                      "group too big for 8-bit unsigned coordinates.");
-        packed_vertex = uint32_t(x) << x_shift
-                      | uint32_t(y) << y_shift
-                      | uint32_t(z) << z_shift;
-        packed_color = blue | uint32_t(green) << 8 | uint32_t(red) << 16;
-    }
-};
-
-// CPU-side copy of the mesh for a single chunk.
-struct ChunkMesh
-{
-    // CPU vertex list.
-    std::vector<MeshVertex> verts;
-
-    // Offset of first byte in the VBO where the GPU copy of the
-    // vertex list is stored.
-    GLsizeiptr vbo_byte_offset;
-
-    // Number of bytes reserved in the VBO for this chunk.
-    GLsizeiptr vbo_bytes_reserved;
-};
-
-// Handle for GPU resources for the mesh of one chunk group.  The
-// CPU-side state of this MeshEntry should always accurately describe
-// the state of the copy of this data on the GPU and GL. (i.e. if you
-// modify the data within, it is your responsibility to update the GPU
-// state at the same time).
-struct MeshEntry
-{
-    // World ID and group coordinate of the chunk group this mesh is
-    // for. This can be used to tell if this entry is correct or needs
-    // to be replaced in MeshStore.
-    uint64_t world_id = uint64_t(-1);
-    glm::ivec3 group_coord;
-
-    // mesh_array[z][y][x] is the mesh for ChunkGroup::chunk_array[z][y][x].
-    ChunkMesh mesh_array[edge_chunks][edge_chunks][edge_chunks];
-
-    // OpenGL name for the VBO used to store the meshes of this chunk group.
-    // 0 when not yet allocated.
-    GLuint vbo_name = 0;
-
-    // Size in bytes of the vbo's data store on the GPU.
-    GLsizeiptr vbo_bytes = 0;
-
-    // Bytes used for the VBO (i.e. the byte offset where new data can be
-    // written to the vbo).
-    GLsizeiptr bytes_used = 0;
-
-    MeshEntry() = default;
-
-    // Get some RAII going.
-    ~MeshEntry()
-    {
-        glDeleteBuffers(1, &vbo_name);
-        vbo_name = 0;
-        vbo_bytes = 0;
-        bytes_used = 0;
-        world_id = uint64_t(-1);
-    }
-
-    // Disable moves, but, see swap below. (Harkens back to C++98 hacks :P )
-    MeshEntry(MeshEntry&&) = delete;
-};
-
-void swap(MeshEntry& left, MeshEntry& right)
-{
-    using std::swap;
-    swap(left.world_id, right.world_id);
-    swap(left.group_coord, right.group_coord);
-    swap(left.mesh_array, right.mesh_array);
-    swap(left.vbo_name, right.vbo_name);
-    swap(left.vbo_bytes, right.vbo_bytes);
-    swap(left.bytes_used, right.bytes_used);
-}
-
 // For memory efficiency, the AABB of a chunk is stored in packed
 // format on the GPU.
 struct PackedAABB
@@ -318,8 +227,8 @@ class BaseStore
     }
 };
 
-class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
-class RaycastStore : public BaseStore<RaycastEntry, 3, 12> { };
+class MeshStore { };
+class RaycastStore : public BaseStore<RaycastEntry, 6, 12> { };
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
 // stretched and positioned to the right shape and position in space.
@@ -493,312 +402,14 @@ class Renderer
         return draw_raycast;
     }
 
-    // Given a chunk, make the mesh needed to render it. I also need
-    // the residue coordinate of the lower-left of the chunk (i.e.
-    // the position of the chunk relative to the chunk group it is
-    // in) because the mesh is defined to be in residue coordinates.
-    //
-    // This is just ugly.
-    //
-    // TODO: consider properly handling edge cases with other chunks?
-    // It's less easy than it seems, as the mesh can change not only
-    // due to changes in this chunk, but also changes in neighbor
-    // chunks that reveal previously hidden voxel faces. This may
-    // not be worth it, so for now, I don't include a VoxelWorld
-    // argument needed to make this happen.
-    //
-    // The main argument for doing this correctly is not performance,
-    // but because if the voxels are actually textured or lit,
-    // "hidden" faces may result in ugly line-like artifacts due to
-    // depth buffer rounding.
-    static std::vector<MeshVertex> make_mesh_verts(const Chunk& chunk,
-                                                   glm::ivec3 chunk_residue)
-    {
-        // Look up whether the voxel at the given coordinate
-        // (relative to the lower-left of this chunk) is visible.
-        // Act as if voxels outside the chunk are always invisible.
-        auto visible_block = [&] (glm::ivec3 coord) -> bool
-        {
-            if (coord.x < 0 or coord.x >= chunk_size
-             or coord.y < 0 or coord.y >= chunk_size
-             or coord.z < 0 or coord.z >= chunk_size) return false;
-            // Note: the masking in Chunk::operator () won't mess up
-            // this coord. (I'm kind of violating my own comment in
-            // Chunk::operator() because coord won't actually be in
-            // the chunk unless that chunk is at (0,0,0)).
-            return chunk(coord).visible;
-        };
-
-        MeshVertex reference(
-                chunk_residue.x,
-                chunk_residue.y,
-                chunk_residue.z,
-                0, 0, 0);
-        std::vector<MeshVertex> verts;
-
-        auto verts_add_block = [&] (glm::ivec3 coord)
-        {
-            Voxel v = chunk(coord);
-            if (!v.visible) return;
-
-            // printf("%i %i %i\n", int(coord.x), int(coord.y), int(coord.z));
-
-            auto r = v.red;
-            auto g = v.green;
-            auto b = v.blue;
-            uint8_t x = uint8_t(coord.x) + chunk_residue.x;
-            uint8_t y = uint8_t(coord.y) + chunk_residue.y;
-            uint8_t z = uint8_t(coord.z) + chunk_residue.z;
-            uint8_t x1 = x+1;
-            uint8_t y1 = y+1;
-            uint8_t z1 = z+1;
-
-            if (!visible_block(coord + glm::ivec3(-1, 0, 0))) {
-                verts.emplace_back(x,  y1, z1, r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-                verts.emplace_back(x,  y,  z1, r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-                verts.emplace_back(x,  y,  z,  r, g, b);
-                verts.emplace_back(x,  y,  z1, r, g, b);
-            }
-            if (!visible_block(coord + glm::ivec3(1, 0, 0))) {
-                verts.emplace_back(x1, y,  z,  r, g, b);
-                verts.emplace_back(x1, y1, z,  r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-                verts.emplace_back(x1, y1, z,  r, g, b);
-                verts.emplace_back(x1, y1, z1, r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-            }
-            if (!visible_block(coord + glm::ivec3(0, -1, 0))) {
-                verts.emplace_back(x,  y,  z,  r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-                verts.emplace_back(x,  y,  z1, r, g, b);
-                verts.emplace_back(x,  y,  z,  r, g, b);
-                verts.emplace_back(x1, y,  z,  r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-            }
-            if (!visible_block(coord + glm::ivec3(0, 1, 0))) {
-                verts.emplace_back(x1, y1, z1, r, g, b);
-                verts.emplace_back(x1, y1, z,  r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-                verts.emplace_back(x,  y1, z1, r, g, b);
-                verts.emplace_back(x1, y1, z1, r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-            }
-            if (!visible_block(coord + glm::ivec3(0, 0, -1))) {
-                verts.emplace_back(x,  y,  z,  r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-                verts.emplace_back(x1, y,  z,  r, g, b);
-                verts.emplace_back(x1, y1, z,  r, g, b);
-                verts.emplace_back(x1, y,  z,  r, g, b);
-                verts.emplace_back(x,  y1, z,  r, g, b);
-            }
-            if (!visible_block(coord + glm::ivec3(0, 0, 1))) {
-                verts.emplace_back(x,  y1, z1, r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-                verts.emplace_back(x1, y1, z1, r, g, b);
-                verts.emplace_back(x1, y,  z1, r, g, b);
-                verts.emplace_back(x,  y1, z1, r, g, b);
-                verts.emplace_back(x,  y,  z1, r, g, b);
-            }
-        };
-
-        for (int z = 0; z < chunk_size; ++z) {
-            for (int y = 0; y < chunk_size; ++y) {
-                for (int x = 0; x < chunk_size; ++x) {
-                    verts_add_block(glm::ivec3(x, y, z));
-                }
-            }
-        }
-        return verts;
-    }
-
-    // Return the number of bytes that will be reserved in a VBO to
-    // store the given array of mesh vertices. This is not the number
-    // needed, but the number that will be allocated when we have a
-    // choice.
-    static GLsizeiptr verts_reserved_bytes(
-        const std::vector<MeshVertex>& verts)
-    {
-        return GLsizeiptr((64+verts.size()) * sizeof(verts[0]));
-    }
-
-    // Return the actual number of bytes needed to store the given
-    // mesh vertex array.
-    static GLsizeiptr verts_needed_bytes(
-        const std::vector<MeshVertex>& verts)
-    {
-        return GLsizeiptr(verts.size() * sizeof(verts[0]));
-    }
-
-    // Fill the given MeshEntry with mesh data for the given chunk
-    // group from the given world.
-    static void replace(PositionedChunkGroup& pcg,
-                        VoxelWorld& world,
-                        MeshEntry* entry)
-    {
-        entry->world_id = world.id();
-        entry->group_coord = group_coord(pcg);
-
-        GLsizeiptr bytes_to_alloc = 0;
-        for (int z = 0; z < edge_chunks; ++z) {
-            for (int y = 0; y < edge_chunks; ++y) {
-                for (int x = 0; x < edge_chunks; ++x) {
-                    ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
-                    std::vector<MeshVertex> verts =
-                        make_mesh_verts(chunk, residue);
-                    chunk.mesh_dirty = false;
-                    auto reserved_bytes = verts_reserved_bytes(verts);
-
-                    mesh.vbo_byte_offset = bytes_to_alloc;
-                    bytes_to_alloc += reserved_bytes;
-                    mesh.vbo_bytes_reserved = reserved_bytes;
-                    mesh.verts = std::move(verts);
-                }
-            }
-        }
-
-        if (entry->vbo_name == 0 or bytes_to_alloc > entry->vbo_bytes) {
-            if (entry->vbo_name == 0) glGenBuffers(1, &entry->vbo_name);
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
-            glBufferData(GL_ARRAY_BUFFER, bytes_to_alloc,
-                         nullptr, GL_DYNAMIC_DRAW);
-            entry->vbo_bytes = bytes_to_alloc;
-            entry->bytes_used = bytes_to_alloc;
-            PANIC_IF_GL_ERROR;
-        }
-
-        // Parasitically depend on the MeshEntry update function.
-        // This is a bit dicey -- the main violation is that MeshEntry
-        // doesn't accurately describe GPU state now, as the actual
-        // data has not been uploaded yet.
-        update(pcg, world, entry, true);
-    }
-
-    // Update the given mesh entry with new data from dirty chunks.
-    // (The always_dirty flag is used to allow replace to depend on
-    // this function, if true, re-upload all chunks' data).
-    //
-    // Requires that the MeshEntry corresponds to the given chunk
-    // group of the given world.
-    static void update(PositionedChunkGroup& pcg,
-                       VoxelWorld& world,
-                       MeshEntry* entry,
-                       bool always_dirty = false)
-    {
-        assert(entry->world_id == world.id());
-        assert(entry->group_coord == group_coord(pcg));
-        assert(entry->vbo_name != 0);
-
-        // First step is to recompute the mesh vertices of any chunk
-        // that needs it. This is also when we find out if a
-        // reallocation needs to be done due to some mesh growing too
-        // much.
-        //
-        // Don't reset the chunk dirty flag yet since we'll need it to
-        // know if re-upload has to happen.
-        bool requires_reallocation = false;
-        GLsizeiptr bytes_to_alloc = 0; // Only used in case of realloc.
-        for (int z = 0; z < edge_chunks; ++z) {
-            for (int y = 0; y < edge_chunks; ++y) {
-                for (int x = 0; x < edge_chunks; ++x) {
-                    ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                    std::vector<MeshVertex>& verts = mesh.verts;
-                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
-                    bool dirty = always_dirty | chunk.mesh_dirty;
-
-                    if (dirty)  {
-                        verts = make_mesh_verts(chunk, residue);
-                    }
-                    auto verts_bytes = verts_needed_bytes(verts);
-                    requires_reallocation |=
-                        (verts_bytes > mesh.vbo_bytes_reserved);
-                    bytes_to_alloc += verts_reserved_bytes(verts);
-                }
-            }
-        }
-
-        // Now actually upload the data. This depends on whether
-        // reallocation is needed or not. We also clear the mesh dirty
-        // flags at this time, now that we're actually uploading the
-        // mesh data.
-        if (requires_reallocation) {
-            // If realloc is required, resize the VBO and re-upload
-            // every chunk's mesh (I may find a more efficient way one
-            // day).
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
-            glBufferData(GL_ARRAY_BUFFER, bytes_to_alloc,
-                         nullptr, GL_DYNAMIC_DRAW);
-            entry->vbo_bytes = bytes_to_alloc;
-            entry->bytes_used = bytes_to_alloc;
-            PANIC_IF_GL_ERROR;
-
-            // fprintf(stderr, "Reallocating VBO for chunk group (%i %i %i) "
-            //                 "to %i bytes.\n",
-            //                 int(entry->group_coord.x),
-            //                 int(entry->group_coord.y),
-            //                 int(entry->group_coord.z),
-            //                 int(bytes_to_alloc));
-            GLsizeiptr offset = 0;
-
-            for (int z = 0; z < edge_chunks; ++z) {
-                for (int y = 0; y < edge_chunks; ++y) {
-                    for (int x = 0; x < edge_chunks; ++x) {
-                        ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                        std::vector<MeshVertex>& verts = mesh.verts;
-                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        chunk.mesh_dirty = false;
-
-                        auto bytes_reserved = verts_reserved_bytes(verts);
-                        auto bytes_needed = verts_needed_bytes(verts);
-                        mesh.vbo_byte_offset = offset;
-                        mesh.vbo_bytes_reserved = bytes_reserved;
-
-                        glBufferSubData(GL_ARRAY_BUFFER, offset,
-                                        bytes_needed, verts.data());
-                        offset += bytes_reserved;
-                    }
-                }
-            }
-            PANIC_IF_GL_ERROR;
-        }
-        // No reallocation case. Just re-upload the dirty chunks.
-        else {
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
-            PANIC_IF_GL_ERROR;
-            for (int z = 0; z < edge_chunks; ++z) {
-                for (int y = 0; y < edge_chunks; ++y) {
-                    for (int x = 0; x < edge_chunks; ++x) {
-                        ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                        std::vector<MeshVertex>& verts = mesh.verts;
-                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        bool dirty = always_dirty | chunk.mesh_dirty;
-
-                        if (!dirty) continue;
-
-                        chunk.mesh_dirty = false;
-                        auto bytes_needed = verts_needed_bytes(verts);
-                        assert(mesh.vbo_byte_offset + bytes_needed <= entry->vbo_bytes);
-                        assert(bytes_needed <= mesh.vbo_bytes_reserved);
-                        glBufferSubData(GL_ARRAY_BUFFER,
-                                        mesh.vbo_byte_offset,
-                                        bytes_needed,
-                                        verts.data());
-                    }
-                }
-            }
-            PANIC_IF_GL_ERROR;
-        }
-    }
-
     // Render, to the current framebuffer, chunks near the camera
     // using the conventional mesh-based algorithm.
+    //
+    // XXX currently testing out an alternate geometry-shader &
+    // texture lookup method.
     void render_world_mesh_step() noexcept
     {
-        MeshStore& store = camera.get_mesh_store();
+        RaycastStore& store = camera.get_raycast_store();
         store.eviction_count = 0;
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
@@ -808,23 +419,29 @@ class Renderer
 
         static GLuint vao = 0;
         static GLuint program_id;
-        static GLint mvp_matrix_idx;
-
+        static GLint mvp_matrix_id;
         // Position of camera eye relative to the origin of the group
         // (origin == group_size times the group coordinate).
         static GLint eye_relative_group_origin_id;
         static GLint far_plane_squared_id;
+        static GLint chunk_blocks_id;
+        static GLint chunk_offset_in_group_id;
 
         if (vao == 0) {
             program_id = make_program({ "mesh.vert", "mesh.geom", "mesh.frag" });
-            mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
-            assert(mvp_matrix_idx >= 0);
+            mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
+            assert(mvp_matrix_id >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
                 "eye_relative_group_origin");
             assert(eye_relative_group_origin_id >= 0);
             far_plane_squared_id = glGetUniformLocation(program_id,
                 "far_plane_squared");
             assert(far_plane_squared_id >= 0);
+            chunk_blocks_id = glGetUniformLocation(program_id, "chunk_blocks");
+            assert(chunk_blocks_id >= 0);
+            chunk_offset_in_group_id = glGetUniformLocation(program_id,
+                "chunk_offset_in_group");
+            assert(chunk_offset_in_group_id >= 0);
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
@@ -832,56 +449,32 @@ class Renderer
 
         glBindVertexArray(vao);
         glUseProgram(program_id);
+
         auto far_plane = camera.get_far_plane();
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
+        glActiveTexture(GL_TEXTURE0);
         PANIC_IF_GL_ERROR;
-
-        auto draw_chunk = [&]
-        (glm::ivec3 group_coord, Chunk& chunk, ChunkMesh& chunk_mesh)
-        {
-            if (decide_chunk(group_coord, chunk) != draw_mesh) {
-                return;
-            }
-            auto vertex_offset = chunk_mesh.vbo_byte_offset
-                               / sizeof (chunk_mesh.verts[0]);
-            auto vertex_count = chunk_mesh.verts.size();
-            glDrawArrays(GL_TRIANGLES, vertex_offset, vertex_count);
-        };
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
             if (group(pcg).total_visible == 0) return;
-            MeshEntry* entry = store.update<Renderer>(pcg, world);
+            RaycastEntry* entry = store.update<Renderer>(pcg, world);
 
-            assert(entry->vbo_name != 0);
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            assert(entry);
+            assert(entry->texture_name != 0);
 
-            // TODO: Maybe make one VAO per MeshEntry?
-            glVertexAttribIPointer(
-                packed_vertex_idx,
-                1,
-                GL_UNSIGNED_INT,
-                sizeof(MeshVertex),
-                (void*) offsetof(MeshVertex, packed_vertex));
-            glEnableVertexAttribArray(packed_vertex_idx);
-
-            glVertexAttribIPointer(
-                packed_color_idx,
-                1,
-                GL_UNSIGNED_INT,
-                sizeof(MeshVertex),
-                (void*) offsetof(MeshVertex, packed_color));
-            glEnableVertexAttribArray(packed_color_idx);
-            PANIC_IF_GL_ERROR;
+            glBindTexture(GL_TEXTURE_3D, entry->texture_name);
 
             // The view matrix only takes into account the eye's
             // residue coordinate, so the model position of the group
             // actually needs to be shifted by the eye's group coord.
-            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+            auto gc = group_coord(pcg);
+            glm::vec3 model_offset = glm::vec3(gc - eye_group)
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
-            glUniformMatrix4fv(mvp_matrix_idx, 1, 0, &mvp[0][0]);
+            glUniformMatrix4fv(mvp_matrix_id, 1, 0, &mvp[0][0]);
+            PANIC_IF_GL_ERROR;
 
             // Similarly, the eye residue needs to be shifted by the
             // group's position.
@@ -893,8 +486,16 @@ class Renderer
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
                         Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        draw_chunk(group_coord(pcg), chunk,
-                                   entry->mesh_array[z][y][x]);
+                        if (decide_chunk(gc, chunk) != draw_mesh) {
+                            continue;
+                        }
+                        glm::uvec3 chunk_offset(x * chunk_size,
+                                                y * chunk_size,
+                                                z * chunk_size);
+                        glUniform3uiv(
+                            chunk_offset_in_group_id, 1, &chunk_offset[0]);
+                        auto instances = chunk_size * chunk_size * chunk_size;
+                        glDrawArraysInstanced(GL_POINTS, 0, 1, instances);
                         PANIC_IF_GL_ERROR;
                     }
                 }
@@ -913,11 +514,6 @@ class Renderer
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
             draw_group(pcg);
-        }
-
-        if (store.eviction_count >= 5) {
-            fprintf(stderr, "%i MeshStore evictions.\n",
-                int(store.eviction_count));
         }
     }
 
@@ -947,9 +543,12 @@ class Renderer
             glBindTexture(GL_TEXTURE_3D, texture_name);
             glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
+            // Needed for experimental mesh geometry shader.
+            float clear[4] { 0, 0, 0, 0 };
+            glTexParameterfv(GL_TEXTURE_3D, GL_TEXTURE_BORDER_COLOR, clear);
             PANIC_IF_GL_ERROR;
             glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA,
                          group_size, group_size, group_size, 0,
@@ -1272,6 +871,9 @@ void gl_first_time_setup()
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
+    GLint p;
+    glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &p);
+    fprintf(stderr, "Max SSBO bytes: %u\n", unsigned(p));
 }
 
 void gl_clear()
