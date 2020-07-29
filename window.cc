@@ -31,6 +31,7 @@ Window::Window(OnWindowResize on_window_resize_)
         window_x, window_y,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
+
     if (window == nullptr) {
         panic("Could not initialize window", SDL_GetError());
     }
@@ -46,6 +47,7 @@ Window::Window(OnWindowResize on_window_resize_)
     if (!gladLoadGL()) {
         panic("gladLoadGL failure", "gladLoadGL failure");
     }
+    on_window_resize(window_x, window_y);
 }
 
 Window::~Window()

@@ -1291,4 +1291,112 @@ void toggle_culling_freeze(Camera& current_camera)
     }
 }
 
+static GLuint f32_depth_framebuffer = 0;
+static GLuint f32_depth_texture = 0;
+static GLuint f32_depth_renderbuffer = 0;
+static int f32_depth_framebuffer_x, f32_depth_framebuffer_y = 0;
+
+void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
+{
+    // Destroy the framebuffer and its attachments if the screen size changed.
+    if (screen_x != f32_depth_framebuffer_x
+    or screen_y != f32_depth_framebuffer_y) {
+        if (f32_depth_framebuffer != 0) {
+            fprintf(stderr, "Destroying old %i x %i framebuffer.\n",
+                f32_depth_framebuffer_x, f32_depth_framebuffer_y);
+            glDeleteFramebuffers(1, &f32_depth_framebuffer);
+            glDeleteTextures(1, &f32_depth_texture);
+            glDeleteRenderbuffers(1, &f32_depth_renderbuffer);
+        }
+
+        f32_depth_framebuffer = 0;
+        f32_depth_framebuffer_x = screen_x;
+        f32_depth_framebuffer_y = screen_y;
+        PANIC_IF_GL_ERROR;
+    }
+
+    // (Re-) create the framebuffer if needed, and bind it.
+    if (f32_depth_framebuffer == 0) {
+        // Create framebuffer.
+        fprintf(stderr, "Creating %i x %i framebuffer.\n",
+                f32_depth_framebuffer_x, f32_depth_framebuffer_y);
+        glCreateFramebuffers(1, &f32_depth_framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
+        PANIC_IF_GL_ERROR;
+
+        // Add depth buffer.
+        glCreateRenderbuffers(1, &f32_depth_renderbuffer);
+        glBindRenderbuffer(GL_RENDERBUFFER, f32_depth_renderbuffer); // XXX
+        glNamedRenderbufferStorage(f32_depth_renderbuffer,
+                                   GL_DEPTH_COMPONENT, // XXX
+                                   f32_depth_framebuffer_x,
+                                   f32_depth_framebuffer_y);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER,
+                                  GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER,
+                                  f32_depth_renderbuffer);
+        PANIC_IF_GL_ERROR;
+
+        // Add color buffer.
+        glCreateTextures(GL_TEXTURE_2D, 1, &f32_depth_texture);
+        glBindTexture(GL_TEXTURE_2D, f32_depth_texture); // XXX
+        glTextureParameteri(f32_depth_texture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(f32_depth_texture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTextureParameteri(f32_depth_texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(f32_depth_texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTextureStorage2D(f32_depth_texture, 1, GL_RGBA8,
+                           f32_depth_framebuffer_x, f32_depth_framebuffer_y);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,
+                               GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D,
+                               f32_depth_texture,
+                               0);
+        PANIC_IF_GL_ERROR;
+
+        // Wire up the only color output.
+        GLenum tmp = GL_COLOR_ATTACHMENT0;
+        glDrawBuffers(1, &tmp);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+            panic("Incomplete 32-bit depth framebuffer: "
+                 + std::to_string(glCheckFramebufferStatus(GL_FRAMEBUFFER)));
+        }
+    }
+    else {
+        glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
+    }
+    PANIC_IF_GL_ERROR;
+}
+
+void finish_global_f32_depth_framebuffer()
+{
+    assert(f32_depth_framebuffer != 0);
+    glBlitNamedFramebuffer(
+        f32_depth_framebuffer,
+        0, // Write to window framebuffer
+        0, 0,
+        f32_depth_framebuffer_x, f32_depth_framebuffer_y,
+        0, 0,
+        f32_depth_framebuffer_x, f32_depth_framebuffer_y,
+        GL_COLOR_BUFFER_BIT,
+        GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, f32_depth_framebuffer_x, f32_depth_framebuffer_y);
+    PANIC_IF_GL_ERROR;
+}
+
+void enable_debug_callback()
+{
+    fprintf(stderr, "Registering debug callback.\n");
+    auto callback = [] (GLenum source, GLenum type, GLuint id,
+                        GLenum severity, GLsizei length,
+                        const GLchar* message, const void* userParam)
+    {
+        fputs(message, stderr);
+    };
+
+    glDebugMessageCallback(callback, nullptr);
+}
+
 } // end namespace

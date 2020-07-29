@@ -44,5 +44,18 @@ void gl_clear();
 // is partially done on the GPU still with the real camera position.
 void toggle_culling_freeze(Camera&);
 
+// Experimental: Trying out 32-bit float depth buffer. This requires
+// (in practice) rendering to an offscreen framebuffer.
+
+// Bind the global off-screen framebuffer. Screen size is given in
+// case the framebuffer must be resized or created.
+void bind_global_f32_depth_framebuffer(int screen_x, int screen_y);
+
+// Blit the contents of the said framebuffer to the window
+// framebuffer, and bind the window framebuffer again.
+void finish_global_f32_depth_framebuffer();
+
+void enable_debug_callback();
+
 } // end namespace
 #endif /* !MYRICUBE_RENDERER_HH_ */

@@ -481,9 +481,8 @@ void set_window_title(Window& window)
 int Main(std::vector<std::string> args)
 {
     if (args.at(0)[0] != '/') {
-        fprintf(stderr, "%s should be absolute path\n"
+        fprintf(stderr, "Warning: %s expected to be absolute path\n"
             "(call through wrapper script).\n", args[0].c_str());
-        return 1;
     }
     data_directory = args[0];
     // if (!data_directory.ends_with("-bin")) {
@@ -497,13 +496,17 @@ int Main(std::vector<std::string> args)
 
     VoxelWorld world;
     Camera camera;
+    int screen_x = 0, screen_y = 0;
 
-    auto on_window_resize = [&camera] (int x, int y)
+    auto on_window_resize = [&camera, &screen_x, &screen_y] (int x, int y)
     {
         viewport(x, y);
         camera.set_window_size(x, y);
+        screen_x = x;
+        screen_y = y;
     };
     Window window(on_window_resize);
+    enable_debug_callback();
     add_key_targets(window, camera);
     bind_keys(window);
 
@@ -511,10 +514,15 @@ int Main(std::vector<std::string> args)
     gl_first_time_setup();
     while (window.update_swap_buffers(5)) {
         if (!paused) app_update(world);
-        gl_clear();
         camera.fix_dirty();
+
+        gl_clear();
+        bind_global_f32_depth_framebuffer(screen_x, screen_y);
+        gl_clear();
         render_world_mesh_step(world, camera);
         render_world_raycast_step(world, camera);
+        finish_global_f32_depth_framebuffer();
+
         set_window_title(window);
     }
     window.set_title("Autosaving...");
