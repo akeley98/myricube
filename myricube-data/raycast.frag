@@ -37,6 +37,7 @@ uniform vec3 eye_relative_group_origin;
 uniform sampler3D chunk_blocks;
 uniform bool chunk_debug;
 uniform int far_plane_squared;
+uniform bool fog_enabled;
 out vec4 color;
 void main() {
     vec3 init_coord = aabb_residue_coord + floor_ceil_fudge;
@@ -141,8 +142,10 @@ void main() {
     if (best_color.a == 0) discard;
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
-    float raw_fog_fade = FOG_SCALAR
-                       * (1 - sqrt(dist_squared/far_plane_squared));
+    float raw_fog_fade =
+        fog_enabled ?
+        FOG_SCALAR * (1 - sqrt(dist_squared/far_plane_squared)) :
+        1.0;
     float fog_fade = clamp(raw_fog_fade, 0, 1);
     color = vec4(best_color.rgb * fog_fade, 1);
 }

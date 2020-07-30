@@ -48,6 +48,9 @@ class Camera
     // Window size in pixels.
     int window_x = 1, window_y = 1;
 
+    // Fog setting.
+    bool fog_enabled = true;
+
     // *** True when members below need to be recomputed due to ***
     // *** changes in members above.                            ***
     bool dirty = true;
@@ -245,6 +248,16 @@ class Camera
         dirty = true;
         window_x = x;
         window_y = y;
+    }
+
+    bool get_fog() const
+    {
+        return fog_enabled;
+    }
+
+    void set_fog(bool in)
+    {
+        fog_enabled = in;
     }
 
     // Move by the specified multiples of the normal right, up, and

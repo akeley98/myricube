@@ -267,6 +267,15 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("pause", pause);
 
+    KeyTarget toggle_fog;
+    toggle_fog.down = [&camera] (KeyArg) -> bool
+    {
+        camera.set_fog(!camera.get_fog());
+        return true;
+    };
+    window.add_key_target("toggle_fog", toggle_fog);
+
+    // Maybe I should dehackify this variable one day.
     extern bool chunk_debug;
     KeyTarget toggle_chunk_debug;
     toggle_chunk_debug.down = [&] (KeyArg) -> bool

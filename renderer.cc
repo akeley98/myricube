@@ -857,7 +857,9 @@ class Renderer
         // Position of camera eye relative to the origin of the group
         // (origin == group_size times the group coordinate).
         static GLint eye_relative_group_origin_id;
+
         static GLint far_plane_squared_id;
+        static GLint fog_enabled_id;
 
         if (vao == 0) {
             program_id = make_program({ "mesh.vert", "mesh.frag" });
@@ -869,6 +871,9 @@ class Renderer
             far_plane_squared_id = glGetUniformLocation(program_id,
                 "far_plane_squared");
             assert(far_plane_squared_id >= 0);
+            fog_enabled_id = glGetUniformLocation(program_id,
+                "fog_enabled");
+            assert(fog_enabled_id >= 0);
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
@@ -878,6 +883,7 @@ class Renderer
         glUseProgram(program_id);
         auto far_plane = camera.get_far_plane();
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
+        glUniform1i(fog_enabled_id, camera.get_fog());
         PANIC_IF_GL_ERROR;
 
         auto draw_chunk = [&]
@@ -1099,6 +1105,7 @@ class Renderer
         static GLint eye_relative_group_origin_id;
         static GLint far_plane_squared_id;
         static GLint raycast_thresh_squared_id;
+        static GLint fog_enabled_id;
         static GLint chunk_blocks_id;
         static GLint chunk_debug_id;
 
@@ -1119,6 +1126,9 @@ class Renderer
             raycast_thresh_squared_id = glGetUniformLocation(program_id,
                 "raycast_thresh_squared");
             assert(raycast_thresh_squared_id >= 0);
+            fog_enabled_id = glGetUniformLocation(program_id,
+                "fog_enabled");
+            assert(fog_enabled_id >= 0);
 
             glGenBuffers(1, &vertex_buffer_id);
             glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
@@ -1139,6 +1149,7 @@ class Renderer
         glBindVertexArray(vao);
         glUseProgram(program_id);
         glUniform1i(chunk_debug_id, chunk_debug);
+        glUniform1i(fog_enabled_id, camera.get_fog());
         glActiveTexture(GL_TEXTURE0);
         glUniform1i(chunk_blocks_id, 0);
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
