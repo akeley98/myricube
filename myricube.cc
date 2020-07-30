@@ -291,6 +291,32 @@ void add_key_targets(Window& window, Camera& camera)
         return true;
     };
     window.add_key_target("unload_gpu_storage", unload);
+
+    KeyTarget increase_far_plane, decrease_far_plane;
+    increase_far_plane.down = [&] (KeyArg arg) -> bool
+    {
+        auto new_far_plane = 64 + camera.get_far_plane();
+
+        if (!arg.repeat) {
+            camera.set_far_plane(new_far_plane);
+            fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
+        }
+        return !arg.repeat;
+    };
+    window.add_key_target("increase_far_plane", increase_far_plane);
+
+    decrease_far_plane.down = [&] (KeyArg arg) -> bool
+    {
+        auto new_far_plane = -64 + camera.get_far_plane();
+        if (new_far_plane < 64) new_far_plane = 64;
+
+        if (!arg.repeat) {
+            camera.set_far_plane(new_far_plane);
+            fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
+        }
+        return !arg.repeat;
+    };
+    window.add_key_target("decrease_far_plane", decrease_far_plane);
 }
 
 extern std::unordered_map<std::string, int> key_name_to_key_code_map;

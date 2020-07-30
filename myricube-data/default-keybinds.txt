@@ -35,4 +35,24 @@ mouse-9         pop_future_camera       # right-key / thumb button 2
 f12             toggle_chunk_debug
 f6              toggle_culling_freeze
 f5              unload_gpu_storage
+f9              decrease_far_plane
+f10             increase_far_plane      # Careful, can crash GPU if too high.
+
+# Put my own keybinds in the git repo to make *my* life easier.
+# u               forward
+# space           backward
+# p               leftward
+# a               rightward
+# lalt            downward
+# lctrl           upward
+
+# o               sprint
+# i               speed_up
+# comma           slow_down
+
+# b               toggle_chunk_debug
+# c               toggle_culling_freeze
+# g               unload_gpu_storage
+
+# b               bogus_test
 

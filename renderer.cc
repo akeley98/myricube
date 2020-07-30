@@ -6,6 +6,7 @@
 #include "myricube.hh"
 
 #include <algorithm>
+#include <memory>
 #include <stdio.h>
 #include <typeinfo>
 #include <utility>
@@ -223,13 +224,10 @@ void swap(RaycastEntry& left, RaycastEntry& right)
 // wraparound fashion (i.e.  using modular arithmetic on group
 // coordinates) so that as the camera moves, the new groups being
 // rendered overwrites the old groups no longer being rendered.
-template <class Entry, uint32_t N, uint32_t Assoc>
+template <class Entry, uint32_t DefaultModulus, uint32_t Assoc>
 class BaseStore
 {
-    // N should be made tunable later depending on
-    // Camera::raycast_threshold or Camera::far_plane.
-
-    struct CacheEntry
+    struct CacheSet
     {
         uint64_t last_access[Assoc] = {0};
         Entry slots[Assoc];
@@ -237,10 +235,16 @@ class BaseStore
     // Monotonic increasing counter for least-recently accessed cache
     // eviction algorithm.
     uint64_t access_counter = 0;
-    CacheEntry entry_array[N][N][N];
 
-    // Victim cache
-    // Entry victim;
+    // Cache is (modulus x modulus x modulus x Assoc) in size.
+    uint32_t modulus = DefaultModulus;
+
+    // Conceptually, a 3D (modulus x modulus x modulus) array of cache
+    // sets (CacheSet itself comprises the Assoc dimension).
+    //
+    // Declared after modulus defensively.
+    std::unique_ptr<CacheSet[]> cache_sets {
+        new CacheSet[DefaultModulus * DefaultModulus * DefaultModulus] };
 
     // Return a pointer to the location that the Entry for the chunk
     // group with the given group coordinate and world id should be.
@@ -249,18 +253,19 @@ class BaseStore
     Entry* cached_location(
         bool* p_valid, glm::ivec3 group_coord, uint64_t world_id)
     {
-        uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % N;
-        uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % N;
-        uint32_t z = uint32_t(group_coord.z ^ 0x8000'0000) % N;
-        CacheEntry& cache_entry = entry_array[z][y][x];
+        uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % modulus;
+        uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % modulus;
+        uint32_t z = uint32_t(group_coord.z ^ 0x8000'0000) % modulus;
+        CacheSet& cache_set = cache_sets[
+            z * modulus * modulus + y * modulus + x];
 
         // Try to search for a valid Entry for the requested world &
         // group coordinate. Mark it as accessed if so
         for (unsigned i = 0; i < Assoc; ++i) {
-            Entry* entry = &cache_entry.slots[i];
+            Entry* entry = &cache_set.slots[i];
             if (entry->world_id == world_id
             and entry->group_coord == group_coord) {
-                cache_entry.last_access[i] = ++access_counter;
+                cache_set.last_access[i] = ++access_counter;
                 *p_valid = true;
                 return entry;
             }
@@ -268,20 +273,15 @@ class BaseStore
 
         // Not found at this point; need to choose the least-recently
         // used entry to evict. This is much colder code than above.
-        uint64_t min_access = cache_entry.last_access[0];
+        uint64_t min_access = cache_set.last_access[0];
         unsigned evict_idx = 0;
         for (unsigned i = 1; i < Assoc; ++i) {
-            if (cache_entry.last_access[i] < min_access) evict_idx = i;
+            if (cache_set.last_access[i] < min_access) evict_idx = i;
         }
-        Entry* entry = &cache_entry.slots[evict_idx];
+        Entry* entry = &cache_set.slots[evict_idx];
 
-        // Victim cache check (consider)
-        // using std::swap;
-        // swap(victim, *entry);
-        // *p_valid = entry->world_id == world_id
-        //        and entry->group_coord == group_coord;
         *p_valid = false;
-        cache_entry.last_access[evict_idx] = ++access_counter;
+        cache_set.last_access[evict_idx] = ++access_counter;
         return entry;
     }
 
@@ -316,6 +316,50 @@ class BaseStore
         ++eviction_count;
         return entry;
     }
+
+    // Shrink/grow the cache, moving every cache entry (belonging to
+    // the specified world) to its correct location in the new cache.
+    // Entries for other worlds are skipped over.
+    //
+    // I put a noexcept because I don't really know how to properly
+    // handle exceptions in the middle of OpenGL code, not because
+    // this is guaranteed foolproof.
+    void set_modulus(uint32_t new_modulus, uint64_t world_id) noexcept
+    {
+        if (new_modulus == modulus) return;
+        assert(int(new_modulus) > 0);
+
+        const uint32_t old_modulus = modulus;
+        modulus = new_modulus;
+
+        // Swap the new and old caches.
+        std::unique_ptr<CacheSet[]> old_cache_sets(
+            new CacheSet[new_modulus * new_modulus * new_modulus]);
+        swap(old_cache_sets, cache_sets);
+
+        fprintf(stderr, "Set modulus to %i\n", int(modulus));
+
+        // Put the old entries in their correct place.
+        if (world_id != 0) {
+            const size_t end = old_modulus * old_modulus * old_modulus;
+            for (size_t i = 0; i < end; ++i) {
+                CacheSet& old_set = old_cache_sets[i];
+                for (size_t a = 0; a < Assoc; ++a) {
+                    Entry& old_entry = old_set.slots[a];
+                    if (old_entry.world_id != world_id) continue;
+
+                    bool valid;
+                    Entry* new_location = cached_location(
+                        &valid, old_entry.group_coord, world_id);
+                    swap(*new_location, old_entry);
+                    // Note: May want to preserve the old last_accessed time.
+                    // For now, each cached_location updates the access time,
+                    // so earlier repositioned cache entries are arbitrarily
+                    // considered lower priority later.
+                }
+            }
+        }
+    }
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
@@ -324,7 +368,9 @@ class RaycastStore : public BaseStore<RaycastEntry, 3, 12> { };
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
 // stretched and positioned to the right shape and position in space.
 // The normals are "flat shaded" and needed for dealing with
-// floor/ceil rounding errors.
+// floor/ceil rounding errors. (Basically, I add a bit of the normal
+// vector to each face in order to ensure the voxels fit comfortably
+// within the AABB).
 //
 // [positions] [normal]
 static const float unit_box_vertices[48] =
@@ -1035,6 +1081,11 @@ class Renderer
         RaycastStore& store = camera.get_raycast_store();
         store.eviction_count = 0;
 
+        // Resize the cache to a size suitable for the given render distance.
+        auto far_plane = camera.get_far_plane();
+        uint32_t modulus = uint32_t(std::max(3.0, ceil(far_plane / 128.0)));
+        store.set_modulus(modulus, world.id());
+
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;
@@ -1092,7 +1143,6 @@ class Renderer
         glUniform1i(chunk_debug_id, chunk_debug);
         glActiveTexture(GL_TEXTURE0);
         glUniform1i(chunk_blocks_id, 0);
-        auto far_plane = camera.get_far_plane();
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
         auto raycast_thr = camera.get_raycast_threshold();
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
