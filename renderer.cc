@@ -69,7 +69,7 @@ struct MeshEntry
     // World ID and group coordinate of the chunk group this mesh is
     // for. This can be used to tell if this entry is correct or needs
     // to be replaced in MeshStore.
-    uint64_t world_id = uint64_t(-1);
+    uint64_t world_id = 0;
     glm::ivec3 group_coord;
 
     // mesh_array[z][y][x] is the mesh for ChunkGroup::chunk_array[z][y][x].
@@ -95,7 +95,7 @@ struct MeshEntry
         vbo_name = 0;
         vbo_bytes = 0;
         bytes_used = 0;
-        world_id = uint64_t(-1);
+        world_id = 0;
     }
 
     // Disable moves, but, see swap below. (Harkens back to C++98 hacks :P )
@@ -176,7 +176,7 @@ struct RaycastEntry
     // World ID and group coordinate of the chunk group this texture
     // and AABB array is for. This can be used to tell if this entry
     // is correct or needs to be replaced in RaycastStore.
-    uint64_t world_id = uint64_t(-1);
+    uint64_t world_id = 0;
     glm::ivec3 group_coord;
 
     // aabb_array[z][y][x] is the minimal AABB containing the visible
@@ -202,7 +202,7 @@ struct RaycastEntry
         glDeleteTextures(1, &texture_name);
         vbo_name = 0;
         texture_name = 0;
-        world_id = uint64_t(-1);
+        world_id = 0;
     }
 
     RaycastEntry(RaycastEntry&&) = delete;
