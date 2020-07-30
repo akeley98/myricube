@@ -141,7 +141,8 @@ void main() {
     if (best_color.a == 0) discard;
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
-    float raw_fog_fade = FOG_SCALAR * (1 - dist_squared/far_plane_squared);
+    float raw_fog_fade = FOG_SCALAR
+                       * (1 - sqrt(dist_squared/far_plane_squared));
     float fog_fade = clamp(raw_fog_fade, 0, 1);
     color = vec4(best_color.rgb * fog_fade, 1);
 }
