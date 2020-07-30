@@ -587,8 +587,6 @@ class Renderer
             Voxel v = chunk(coord);
             if (!v.visible) return;
 
-            // printf("%i %i %i\n", int(coord.x), int(coord.y), int(coord.z));
-
             auto r = v.red;
             auto g = v.green;
             auto b = v.blue;
@@ -862,7 +860,7 @@ class Renderer
         static GLint far_plane_squared_id;
 
         if (vao == 0) {
-            program_id = make_program({ "mesh.vert", "mesh.geom", "mesh.frag" });
+            program_id = make_program({ "mesh.vert", "mesh.frag" });
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_idx >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
