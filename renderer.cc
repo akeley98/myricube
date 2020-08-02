@@ -1108,6 +1108,9 @@ class Renderer
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
 
+            // The binding points for the non-instanced unit cube
+            // vertices, and the element buffer binding, will be
+            // stored forever in the VAO.
             glGenBuffers(1, &vertex_buffer_id);
             glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
             glBufferStorage(
@@ -1119,6 +1122,24 @@ class Renderer
             glBufferStorage(
                 GL_ELEMENT_ARRAY_BUFFER, sizeof unit_box_elements,
                 unit_box_elements, 0);
+
+            glVertexAttribPointer(
+                unit_box_vertex_idx,
+                3,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 6,
+                (void*)0);
+            glEnableVertexAttribArray(unit_box_vertex_idx);
+
+            glVertexAttribPointer(
+                unit_box_normal_idx,
+                3,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 6,
+                (void*)12);
+            glEnableVertexAttribArray(unit_box_normal_idx);
         }
 
         glBindVertexArray(vao);
@@ -1182,32 +1203,12 @@ class Renderer
             glUniform3fv(eye_relative_group_origin_id, 1,
                 &eye_relative_group_origin[0]);
 
-            // Get the vertex attribs going, I should probably make
-            // a VAO per chunk group in the RaycastEntry.
-
-            // Verts and normals of the unit box.
-            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
-            glVertexAttribPointer(
-                unit_box_vertex_idx,
-                3,
-                GL_FLOAT,
-                false,
-                sizeof(float) * 6,
-                (void*)0);
-            glEnableVertexAttribArray(unit_box_vertex_idx);
-
-            glVertexAttribPointer(
-                unit_box_normal_idx,
-                3,
-                GL_FLOAT,
-                false,
-                sizeof(float) * 6,
-                (void*)12);
-            glEnableVertexAttribArray(unit_box_normal_idx);
-
-            // AABB residue coords (packed as integers); these are per-
-            // chunk and thus instanced.
+            // The unit box vertex attribs should already be bound by VAO.
+            //
+            // Get the instanced vertex attribs going (i.e. bind the
+            // AABB residue coords, packed as integers). I should
+            // probably make a VAO per chunk group in the
+            // RaycastEntry.
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
             glVertexAttribIPointer(
                 packed_aabb_low_idx,
