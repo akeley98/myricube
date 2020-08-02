@@ -55,7 +55,5 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y);
 // framebuffer, and bind the window framebuffer again.
 void finish_global_f32_depth_framebuffer();
 
-void enable_debug_callback();
-
 } // end namespace
 #endif /* !MYRICUBE_RENDERER_HH_ */

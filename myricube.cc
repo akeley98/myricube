@@ -541,7 +541,6 @@ int Main(std::vector<std::string> args)
         screen_y = y;
     };
     Window window(on_window_resize);
-    enable_debug_callback();
     add_key_targets(window, camera);
     bind_keys(window);
 

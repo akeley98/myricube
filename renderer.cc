@@ -23,9 +23,10 @@ namespace myricube {
 
 bool chunk_debug = false;
 
-// My new plan for the GPU voxel mesh: each visible voxel will
-// be represented by ONE vertex in a VBO. This vertex encodes,
-// in a packed bitfield format,
+// My new plan for the GPU voxel mesh: each visible voxel will be
+// represented by ONE vertex in a VBO; instanced rendering will
+// transform this vertex into an actual cube. This vertex encodes, in
+// a packed bitfield format,
 //
 // The residue coordinates of the voxel
 //
@@ -66,7 +67,8 @@ struct MeshVoxelVertex
 // I'm desperate for GPU memory).
 constexpr size_t chunk_max_verts = chunk_size * chunk_size * chunk_size;
 
-// CPU-side copy of the mesh for a single chunk.
+// CPU-side copy of the "mesh" (i.e. list of visible voxels) for a
+// single chunk.
 struct ChunkMesh
 {
     MeshVoxelVertex verts[chunk_max_verts];
@@ -87,6 +89,7 @@ struct MeshEntry
     glm::ivec3 group_coord;
 
     // mesh_array[z][y][x] is the mesh for ChunkGroup::chunk_array[z][y][x].
+    // This is copied into the VBO.
     ChunkMesh mesh_array[edge_chunks][edge_chunks][edge_chunks];
 
     // OpenGL name for the VBO used to store the meshes of this chunk group.
@@ -94,9 +97,7 @@ struct MeshEntry
     GLuint vbo_name = 0;
 
     // Size in bytes of the vbo's data store on the GPU.
-    static constexpr GLsizeiptr vbo_bytes =
-        GLsizeiptr(sizeof(ChunkMesh::verts)
-                  * edge_chunks * edge_chunks * edge_chunks);
+    static constexpr GLsizeiptr vbo_bytes = sizeof mesh_array;
 
     // Return the offset (in number of MeshVoxelVertexes, not bytes)
     // into the VBO where the data from mesh_array[z][y][x] is copied
@@ -1416,19 +1417,6 @@ void finish_global_f32_depth_framebuffer()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, f32_depth_framebuffer_x, f32_depth_framebuffer_y);
     PANIC_IF_GL_ERROR;
-}
-
-void enable_debug_callback()
-{
-    fprintf(stderr, "Registering debug callback.\n");
-    auto callback = [] (GLenum source, GLenum type, GLuint id,
-                        GLenum severity, GLsizei length,
-                        const GLchar* message, const void* userParam)
-    {
-        fputs(message, stderr);
-    };
-
-    glDebugMessageCallback(callback, nullptr);
 }
 
 } // end namespace
