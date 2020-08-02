@@ -29,10 +29,11 @@
 
 
 
-#define BORDER_WIDTH 0.25
-#define BORDER_FADE  0.6
-#define BORDER_DIST_LOW  130
-#define BORDER_DIST_HIGH 340
+#define BORDER_WIDTH_LOW  0.075
+#define BORDER_WIDTH_HIGH 0.45
+#define BORDER_FADE  0.75
+#define BORDER_DIST_LOW  100
+#define BORDER_DIST_HIGH 350
 uniform bool fog_enabled;
 uniform int far_plane_squared;
 
@@ -54,12 +55,18 @@ vec4 fog_border_color(
 
     // Calculate how close this fragment is to the edge of the voxel.
     // Actual border fade is based on this.
-    float u_border_dist = abs(uv.x - floor(uv.x + 0.5));
-    float v_border_dist = abs(uv.y - floor(uv.y + 0.5));
-    float border_param = clamp(
-        1 - min(u_border_dist, v_border_dist) * (1 / BORDER_WIDTH),
-        0, 1);
-    float border_fade = 1 - border_param * (1-base_border_fade);
+    float u_center_dist = abs(uv.x - 0.5 - floor(uv.x));
+    float v_center_dist = abs(uv.y - 0.5 - floor(uv.y));
+    float l4 = u_center_dist * u_center_dist * u_center_dist * u_center_dist
+             + v_center_dist * v_center_dist * v_center_dist * v_center_dist;
+    const float magic_low = (0.5-BORDER_WIDTH_LOW) * (0.5-BORDER_WIDTH_LOW)
+                          * (0.5-BORDER_WIDTH_LOW) * (0.5-BORDER_WIDTH_LOW);
+    const float magic_high = (0.5-BORDER_WIDTH_HIGH) * (0.5-BORDER_WIDTH_HIGH)
+                           * (0.5-BORDER_WIDTH_HIGH) * (0.5-BORDER_WIDTH_HIGH);
+    float border_fade = clamp(
+        1 + (l4 - magic_high) * (base_border_fade - 1)
+        * (1 / (magic_low - magic_high)),
+        base_border_fade, 1.0);
 
     // Fog fade depends on linear distance from camera.
     float raw_fog_fade =
