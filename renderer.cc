@@ -1259,11 +1259,6 @@ class Renderer
             draw_group(*p_pcg, false);
         }
 
-        if (store.eviction_count >= 5) {
-            fprintf(stderr, "%i RaycastStore evictions.\n",
-                int(store.eviction_count));
-        }
-
         glBindVertexArray(0);
     }
 };
