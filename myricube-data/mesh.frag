@@ -53,5 +53,5 @@ void main() {
         1.0;
     float fog_fade = clamp(raw_fog_fade, 0, 1);
 
-    out_color = vec4(v_color * border_fade * fog_fade + vec3(0, 0, 1), 1);
+    out_color = vec4(v_color * border_fade * fog_fade, 1);
 }

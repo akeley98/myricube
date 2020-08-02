@@ -43,16 +43,17 @@ layout(location=UNIT_BOX_FACE_BIT_IDX) in int face_bit;
 out vec3 v_color;
 out vec3 v_residue_coord;
 uniform mat4 mvp_matrix;
+
 void main() {
     // Draw as a degenerate triangle if the face we're drawing is not
     // marked visible.
-    // XXX
-    // if ((face_bit & packed_residue_face_bits) == 0) {
-    //     gl_Position = vec4(0,0,0,1);
-    //     return;
-    // }
+    if ((face_bit & packed_residue_face_bits) == 0) {
+        gl_Position = vec4(0,0,0,1);
+        return;
+    }
 
     // Reposition the unit box in the correct location.
+
     float x = float((packed_residue_face_bits >> X_SHIFT) & 255)
             + unit_box_vertex.x;
     float y = float((packed_residue_face_bits >> Y_SHIFT) & 255)

@@ -35,8 +35,8 @@ bool chunk_debug = false;
 // (This depends on whether the neighboring voxels are filled or not)
 struct MeshVoxelVertex
 {
-    uint32_t packed_residue_face_bits = 0;
-    uint32_t packed_color = 0;
+    uint32_t packed_residue_face_bits = 0xFFFFFFFF;
+    uint32_t packed_color = 0xFFFFFFFF;
 
     MeshVoxelVertex() = default;
 
@@ -470,7 +470,7 @@ static const GLushort voxel_unit_box_elements[36] =
 {
     0, 1, 2,    1, 3, 2,
     4, 5, 6,    5, 7, 6,
-    8, 9, 10,   8, 11, 10,
+    8, 9, 10,   8, 11, 9,
     12, 13, 14, 15, 12, 14,
     16, 17, 18, 19, 18, 17,
     20, 21, 22, 21, 20, 23,
@@ -745,13 +745,14 @@ class Renderer
                 for (int x = 0; x < edge_chunks; ++x) {
                     Chunk& chunk = group(pcg).chunk_array[z][y][x];
                     if (!AlwaysDirty and !chunk.mesh_dirty) continue;
+                    if (chunk.total_visible == 0) continue;
 
                     ChunkMesh& mesh = entry->mesh_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
                     fill_mesh_verts(mesh, chunk, residue);
                     glNamedBufferSubData(vbo_name,
                                          entry->byte_offset(x, y, z),
-                                         sizeof(mesh.verts),
+                                         sizeof mesh.verts[0] * mesh.vert_count,
                                          mesh.verts);
                     chunk.mesh_dirty = false;
                 }
@@ -829,12 +830,15 @@ class Renderer
                 false,
                 sizeof(VoxelUnitBoxVertex),
                 (void*) offsetof(VoxelUnitBoxVertex, x));
+            glEnableVertexAttribArray(unit_box_vertex_idx);
             glVertexAttribIPointer(
                 unit_box_face_bit_idx,
                 1,
                 GL_UNSIGNED_INT,
                 sizeof(VoxelUnitBoxVertex),
                 (void*) offsetof(VoxelUnitBoxVertex, face_bit));
+            glEnableVertexAttribArray(unit_box_face_bit_idx);
+            PANIC_IF_GL_ERROR;
         }
 
         // If we're not using D-tier Intel drivers, this should
@@ -938,6 +942,8 @@ class Renderer
             fprintf(stderr, "%i MeshStore evictions.\n",
                 int(store.eviction_count));
         }
+
+        glBindVertexArray(0);
     }
 
     // Now time to write the AABB-raycasting renderer. Here goes...
@@ -1099,20 +1105,20 @@ class Renderer
                 "fog_enabled");
             assert(fog_enabled_id >= 0);
 
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+
             glGenBuffers(1, &vertex_buffer_id);
             glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
-            glBufferData(
+            glBufferStorage(
                 GL_ARRAY_BUFFER, sizeof unit_box_vertices,
-                unit_box_vertices, GL_STATIC_DRAW);
+                unit_box_vertices, 0);
 
             glGenBuffers(1, &element_buffer_id);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
-            glBufferData(
+            glBufferStorage(
                 GL_ELEMENT_ARRAY_BUFFER, sizeof unit_box_elements,
-                unit_box_elements, GL_STATIC_DRAW);
-
-            glGenVertexArrays(1, &vao);
-            glBindVertexArray(vao);
+                unit_box_elements, 0);
         }
 
         glBindVertexArray(vao);
@@ -1256,6 +1262,8 @@ class Renderer
             fprintf(stderr, "%i RaycastStore evictions.\n",
                 int(store.eviction_count));
         }
+
+        glBindVertexArray(0);
     }
 };
 
