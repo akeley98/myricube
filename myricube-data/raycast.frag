@@ -36,10 +36,17 @@ flat in vec3 floor_ceil_fudge;
 uniform vec3 eye_relative_group_origin;
 uniform sampler3D chunk_blocks;
 uniform bool chunk_debug;
-uniform int far_plane_squared;
-uniform bool fog_enabled;
 out vec4 color;
-void main() {
+
+vec4 fog_border_color(
+    vec3 base_color,
+    float dist_squared,
+    vec2 uv,
+    float base_border_fade,
+    vec3 fog_color);
+
+void main()
+{
     vec3 init_coord = aabb_residue_coord + floor_ceil_fudge;
     if (chunk_debug) {
         int x_floor = int(floor(init_coord.x));
@@ -61,6 +68,8 @@ void main() {
     vec4 best_color = vec4(0,0,0,0);
     vec3 best_coord = vec3(0,0,0);
     int iter = 0;
+    vec2 uv = vec2(0, 0);
+
     int x_init = int(xm > 0 ? ceil(init_coord.x)
                             : floor(init_coord.x));
     int x_end = xm > 0 ? aabb_high.x : aabb_low.x;
@@ -80,9 +89,8 @@ void main() {
                 best_t = t;
                 best_color = lookup_color;
                 best_coord = vec3(x,y,z);
-                if (y - floor(y + d) < d || z - floor(z + d) < d) {
-                    best_color.rgb *= border_fade;
-                }
+                uv.x = y;
+                uv.y = z;
             }
             break;
         }
@@ -106,9 +114,8 @@ void main() {
                 best_t = t;
                 best_color = lookup_color;
                 best_coord = vec3(x,y,z);
-                if (x - floor(x + d) < d || z - floor(z + d) < d) {
-                    best_color.rgb *= border_fade;
-                }
+                uv.x = x;
+                uv.y = z;
             }
             break;
         }
@@ -132,20 +139,16 @@ void main() {
                 best_t = t;
                 best_color = lookup_color;
                 best_coord = vec3(x,y,z);
-                if (x - floor(x + d) < d || y - floor(y + d) < d) {
-                    best_color.rgb *= border_fade;
-                }
+                uv.x = x;
+                uv.y = y;
             }
             break;
         }
     }
     if (best_color.a == 0) discard;
+
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
-    float raw_fog_fade =
-        fog_enabled ?
-        FOG_SCALAR * (1 - sqrt(dist_squared/far_plane_squared)) :
-        1.0;
-    float fog_fade = clamp(raw_fog_fade, 0, 1);
-    color = vec4(best_color.rgb * fog_fade, 1);
+    color = fog_border_color(
+        best_color.rgb, dist_squared, uv, border_fade, vec3(0, 0, 0));
 }

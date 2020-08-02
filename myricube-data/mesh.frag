@@ -30,28 +30,23 @@
 
 in vec3 v_color;
 in vec3 v_residue_coord;
+in vec2 v_uv;
+
 out vec4 out_color;
-uniform int far_plane_squared;
+
 uniform vec3 eye_relative_group_origin;
-uniform bool fog_enabled;
+
+vec4 fog_border_color(
+    vec3 base_color,
+    float dist_squared,
+    vec2 uv,
+    float base_border_fade,
+    vec3 fog_color);
 
 void main() {
-    const float d = BORDER_WIDTH;
-    float x = v_residue_coord.x;
-    int x_border = (x - floor(x + d) < d) ? 1 : 0;
-    float y = v_residue_coord.y;
-    int y_border = (y - floor(y + d) < d) ? 1 : 0;
-    float z = v_residue_coord.z;
-    int z_border = (z - floor(z + d) < d) ? 1 : 0;
-    float border_fade = (x_border + y_border + z_border >= 2) ? 0.5 : 1.0;
-
     vec3 disp = v_residue_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
-    float raw_fog_fade =
-        fog_enabled ?
-        FOG_SCALAR * (1 - sqrt(dist_squared/far_plane_squared)) :
-        1.0;
-    float fog_fade = clamp(raw_fog_fade, 0, 1);
 
-    out_color = vec4(v_color * border_fade * fog_fade, 1);
+    out_color = fog_border_color(
+        v_color, dist_squared, v_uv, 0.5, vec3(0,0,0));
 }

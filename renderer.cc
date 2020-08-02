@@ -432,39 +432,40 @@ struct VoxelUnitBoxVertex
 {
     int32_t face_bit;
     float x, y, z;
+    float u, v;
 };
 
 static const VoxelUnitBoxVertex voxel_unit_box_vertices[24] =
 {
-    { neg_x_face_bit, 0, 1, 1 },
-    { neg_x_face_bit, 0, 1, 0 },
-    { neg_x_face_bit, 0, 0, 1 },
-    { neg_x_face_bit, 0, 0, 0 },
+    { neg_x_face_bit, 0, 1, 1, 1, 1 },
+    { neg_x_face_bit, 0, 1, 0, 1, 0 },
+    { neg_x_face_bit, 0, 0, 1, 0, 1 },
+    { neg_x_face_bit, 0, 0, 0, 0, 0 },
 
-    { pos_x_face_bit, 1, 0, 0 },
-    { pos_x_face_bit, 1, 1, 0 },
-    { pos_x_face_bit, 1, 0, 1 },
-    { pos_x_face_bit, 1, 1, 1 },
+    { pos_x_face_bit, 1, 0, 0, 0, 0 },
+    { pos_x_face_bit, 1, 1, 0, 1, 0 },
+    { pos_x_face_bit, 1, 0, 1, 0, 1 },
+    { pos_x_face_bit, 1, 1, 1, 1, 1 },
 
-    { neg_y_face_bit, 0, 0, 0 },
-    { neg_y_face_bit, 1, 0, 1 },
-    { neg_y_face_bit, 0, 0, 1 },
-    { neg_y_face_bit, 1, 0, 0 },
+    { neg_y_face_bit, 0, 0, 0, 0, 0 },
+    { neg_y_face_bit, 1, 0, 1, 1, 1 },
+    { neg_y_face_bit, 0, 0, 1, 0, 1 },
+    { neg_y_face_bit, 1, 0, 0, 1, 0 },
 
-    { pos_y_face_bit, 1, 1, 1 },
-    { pos_y_face_bit, 1, 1, 0 },
-    { pos_y_face_bit, 0, 1, 0 },
-    { pos_y_face_bit, 0, 1, 1 },
+    { pos_y_face_bit, 1, 1, 1, 1, 1 },
+    { pos_y_face_bit, 1, 1, 0, 1, 0 },
+    { pos_y_face_bit, 0, 1, 0, 0, 0 },
+    { pos_y_face_bit, 0, 1, 1, 0, 1 },
 
-    { neg_z_face_bit, 0, 0, 0 },
-    { neg_z_face_bit, 0, 1, 0 },
-    { neg_z_face_bit, 1, 0, 0 },
-    { neg_z_face_bit, 1, 1, 0 },
+    { neg_z_face_bit, 0, 0, 0, 0, 0 },
+    { neg_z_face_bit, 0, 1, 0, 0, 1 },
+    { neg_z_face_bit, 1, 0, 0, 1, 0 },
+    { neg_z_face_bit, 1, 1, 0, 1, 1 },
 
-    { pos_z_face_bit, 0, 1, 1 },
-    { pos_z_face_bit, 1, 0, 1 },
-    { pos_z_face_bit, 1, 1, 1 },
-    { pos_z_face_bit, 0, 0, 1 },
+    { pos_z_face_bit, 0, 1, 1, 0, 1 },
+    { pos_z_face_bit, 1, 0, 1, 1, 0 },
+    { pos_z_face_bit, 1, 1, 1, 1, 1 },
+    { pos_z_face_bit, 0, 0, 1, 0, 0 },
 };
 
 static const GLushort voxel_unit_box_elements[36] =
@@ -792,7 +793,8 @@ class Renderer
         static GLint fog_enabled_id;
 
         if (vao == 0) {
-            program_id = make_program({ "mesh.vert", "mesh.frag" });
+            program_id = make_program({
+                "mesh.vert", "mesh.frag", "fog_border.frag" });
             mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_idx >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
@@ -832,6 +834,7 @@ class Renderer
                 sizeof(VoxelUnitBoxVertex),
                 (void*) offsetof(VoxelUnitBoxVertex, x));
             glEnableVertexAttribArray(unit_box_vertex_idx);
+
             glVertexAttribIPointer(
                 unit_box_face_bit_idx,
                 1,
@@ -839,6 +842,16 @@ class Renderer
                 sizeof(VoxelUnitBoxVertex),
                 (void*) offsetof(VoxelUnitBoxVertex, face_bit));
             glEnableVertexAttribArray(unit_box_face_bit_idx);
+
+            glVertexAttribPointer(
+                unit_box_uv_idx,
+                2,
+                GL_FLOAT,
+                false,
+                sizeof(VoxelUnitBoxVertex),
+                (void*) offsetof(VoxelUnitBoxVertex, u));
+            glEnableVertexAttribArray(unit_box_uv_idx);
+
             PANIC_IF_GL_ERROR;
         }
 
@@ -1086,7 +1099,8 @@ class Renderer
         static GLint chunk_debug_id;
 
         if (vao == 0) {
-            program_id = make_program({ "raycast.vert", "raycast.frag" });
+            program_id = make_program({
+                "raycast.vert", "raycast.frag", "fog_border.frag" });
             mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_id >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
