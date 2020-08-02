@@ -546,7 +546,7 @@ int Main(std::vector<std::string> args)
 
     app_init(world, window);
     gl_first_time_setup();
-    while (window.update_swap_buffers(5)) {
+    while (window.update_swap_buffers(camera.min_frame_time_ms)) {
         if (!paused) app_update(world);
         camera.fix_dirty();
 
