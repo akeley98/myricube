@@ -33,7 +33,6 @@ layout(location=UNIT_BOX_NORMAL_IDX) in vec3 unit_box_normal;
 layout(location=PACKED_AABB_LOW_IDX) in int packed_aabb_low;
 layout(location=PACKED_AABB_HIGH_IDX) in int packed_aabb_high;
 out vec3 aabb_residue_coord;
-out float border_fade;
 flat out ivec3 aabb_low;
 flat out ivec3 aabb_high;
 flat out vec3 floor_ceil_fudge;
@@ -53,7 +52,6 @@ void main() {
     vec4 model_space_pos = vec4(unit_box_vertex * sz + f_aabb_low, 1);
     vec3 disp = model_space_pos.xyz - eye_relative_group_origin;
     float distance = sqrt(dot(disp, disp));
-    border_fade = clamp(distance * 0.003 + 0.11, 0.5, 1.0);
     aabb_low = ivec3(low_x, low_y, low_z);
     aabb_high = ivec3(high_x, high_y, high_z);
     // Re-implement decide_chunk(...) == draw_raycast on GPU.

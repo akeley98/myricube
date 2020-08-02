@@ -40,7 +40,6 @@ vec4 fog_border_color(
     vec3 base_color,
     float dist_squared,
     vec2 uv,
-    float base_border_fade,
     vec3 fog_color);
 
 void main() {
@@ -48,5 +47,5 @@ void main() {
     float dist_squared = dot(disp, disp);
 
     out_color = fog_border_color(
-        v_color, dist_squared, v_uv, 0.5, vec3(0,0,0));
+        v_color, dist_squared, v_uv, vec3(0,0,0));
 }

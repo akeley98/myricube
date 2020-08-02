@@ -29,7 +29,6 @@
 
 
 in vec3 aabb_residue_coord;
-in float border_fade;
 flat in ivec3 aabb_low;
 flat in ivec3 aabb_high;
 flat in vec3 floor_ceil_fudge;
@@ -42,7 +41,6 @@ vec4 fog_border_color(
     vec3 base_color,
     float dist_squared,
     vec2 uv,
-    float base_border_fade,
     vec3 fog_color);
 
 void main()
@@ -55,7 +53,6 @@ void main()
         color = vec4(x_floor & 1, y_floor & 1, z_floor & 1, 1);
         return;
     }
-    const float d = BORDER_WIDTH;
     float x0 = eye_relative_group_origin.x;
     float y0 = eye_relative_group_origin.y;
     float z0 = eye_relative_group_origin.z;
@@ -150,5 +147,5 @@ void main()
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
     color = fog_border_color(
-        best_color.rgb, dist_squared, uv, border_fade, vec3(0, 0, 0));
+        best_color.rgb, dist_squared, uv, vec3(0, 0, 0));
 }

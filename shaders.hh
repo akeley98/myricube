@@ -21,8 +21,6 @@
 
 namespace myricube {
 
-constexpr float border_width = 0.1f;
-
 // Vertex shader input indices.
 constexpr int packed_color_idx = 0;
 constexpr int packed_vertex_idx = 1;
@@ -60,7 +58,7 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "// FILE: " + filename,
         "#define CHUNK_SIZE " + std::to_string(chunk_size),
         "#define GROUP_SIZE " + std::to_string(group_size),
-        "#define BORDER_WIDTH " + std::to_string(border_width),
+        // "#define BORDER_WIDTH " + std::to_string(border_width),
         "#define PACKED_VERTEX_IDX " + std::to_string(packed_vertex_idx),
         "#define PACKED_COLOR_IDX " + std::to_string(packed_color_idx),
         "#define UNIT_BOX_VERTEX_IDX " + std::to_string(unit_box_vertex_idx),
