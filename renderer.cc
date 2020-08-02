@@ -1373,9 +1373,8 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
 
         // Add depth buffer.
         glCreateRenderbuffers(1, &f32_depth_renderbuffer);
-        glBindRenderbuffer(GL_RENDERBUFFER, f32_depth_renderbuffer); // XXX
         glNamedRenderbufferStorage(f32_depth_renderbuffer,
-                                   GL_DEPTH_COMPONENT, // XXX
+                                   GL_DEPTH_COMPONENT32F,
                                    f32_depth_framebuffer_x,
                                    f32_depth_framebuffer_y);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER,
@@ -1386,7 +1385,6 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
 
         // Add color buffer.
         glCreateTextures(GL_TEXTURE_2D, 1, &f32_depth_texture);
-        glBindTexture(GL_TEXTURE_2D, f32_depth_texture); // XXX
         glTextureParameteri(f32_depth_texture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTextureParameteri(f32_depth_texture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTextureParameteri(f32_depth_texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
