@@ -15,18 +15,19 @@
 // shader that checks for collisions with the voxels contained in the
 // AABB. The voxel data itself (when raycasting is used) is stored
 // using a 3D texture -- this is considerably more memory efficient
-// than a triangle mesh.
+// than a triangle mesh. (Actually, now that I switched to instanced
+// rendering, this memory point may no longer be true...)
 //
 // Cubes of chunks are organized into larger chunk groups. For OpenGL
 // efficiency, chunks within the same chunk group share GPU resources
 // (3D textures, buffer storage, etc.). Points in space are frequently
 // expressed as "group" and "residue" coordinates -- these are the
 // coordinates (in chunk-group-size units) of the lower-left of the
-// chunk the point is in, and the remaining offset within the
-// chunk. (See split_coordinate for the precise floor-based
-// definition). For example, if chunk groups were 100 x 100 x 100
-// voxels, then point (1, 502.5, -1) has chunk coordinate (0, 5, -1)
-// and residue (1, 2.5, 99).
+// group the point is in, and the remaining offset (in voxel-size
+// units) within the group. (See split_coordinate for the precise
+// floor-based definition). For example, if chunk groups were 100 x
+// 100 x 100 voxels, then point (1, 502.5, -1) has group coordinate
+// (0, 5, -1) and residue (1, 2.5, 99).
 //
 // To be precise, note also that a voxel at coordinate (x,y,z) occupies
 // the cube from (x,y,z) to (x+1,y+1,z+1) in space.
