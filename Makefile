@@ -6,6 +6,12 @@ CFLAGS=  -Wall -Wextra -O3 -g
 
 -include cckiss/Makefile
 
+glfw-build/Makefile:
+	cd glfw-build && cmake ../glfw
+
+glfw-build/src/libglfw3.a: glfw-build/Makefile
+	cd glfw-build && make
+
 run: myricube-planet-bin
 	./myricube-planet
 
