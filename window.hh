@@ -11,7 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "SDL2/SDL.h"
+#define GLFW_INCLUDE_NONE
+#include "GLFW/glfw3.h"
 
 namespace myricube {
 
@@ -65,9 +66,8 @@ struct KeyArg
 
 class Window
 {
-    // SDL window pointer and OpenGL context.
-    SDL_Window* window = nullptr;
-    void* context = nullptr;
+    // GLFW window pointer and OpenGL context.
+    GLFWwindow* window = nullptr;
 
     // Current size in pixels of the window.
     int window_x = 1920, window_y = 1080;
@@ -88,19 +88,19 @@ class Window
     // Window resize callback.
     OnWindowResize on_window_resize;
 
-    // milliseconds (since SDL initialization?) of previous
+    // Seconds (since glfw initialization?) of previous
     // update_swap_buffers call.
-    int64_t previous_update_ms = SDL_GetTicks();
+    double previous_update = glfwGetTime();
 
     // Used for fps calculation.
-    int64_t previous_fps_update = SDL_GetTicks();
+    double previous_fps_update = glfwGetTime();
     int frames = 0;
-    static constexpr int fps_interval_ms = 250;
+    static constexpr double fps_interval = 0.250;
     double fps = 0.0;
 
     // Used to calculate maximum latency between frames.
-    int frame_time_ms = 0;
-    int next_frame_time = 0;
+    double frame_time = 0;
+    double next_frame_time = 0;
 
   public:
     // Construct the window with a callback that is called when the
@@ -111,6 +111,7 @@ class Window
 
     // Set window title.
     void set_title(const std::string& title);
+    void set_title(const char* title);
 
     // Get window size as pair of ints.
     void get_window_size(int* x, int* y) const
@@ -138,10 +139,8 @@ class Window
     }
 
     // Update events and swap OpenGL buffers. Return true iff the user
-    // hasn't ordered the window closed yet. Parameter is the minimum
-    // number of milliseconds between this call's completion and
-    // the previous call's completion.
-    bool update_swap_buffers(int64_t min_ms);
+    // hasn't ordered the window closed yet.
+    bool update_swap_buffers();
 
     double get_fps() const
     {
@@ -150,18 +149,11 @@ class Window
 
     int get_frame_time_ms() const
     {
-        return frame_time_ms;
+        return int(frame_time * 1000);
     }
   private:
     void handle_down(int, float, float);
     void handle_up(int);
-    void handle_key_down(const SDL_KeyboardEvent&, float);
-    void handle_key_up(const SDL_KeyboardEvent&);
-    void handle_mouse_wheel(const SDL_MouseWheelEvent&);
-    void handle_mouse_down(const SDL_MouseButtonEvent&, float);
-    void handle_mouse_up(const SDL_MouseButtonEvent&);
-    void handle_mouse_motion(const SDL_MouseMotionEvent&);
-    void handle_window_event(const SDL_WindowEvent&);
 };
 
 } // end namespace

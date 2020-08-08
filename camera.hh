@@ -81,9 +81,6 @@ class Camera
     // per frame. Mystery parameter.
     size_t max_raycast_evict = 3;
 
-    // Minimum milliseconds between frames.
-    int min_frame_time_ms = 2;
-
     // Respond if needed to dirty flag and recompute derived data.
     void fix_dirty()
     {

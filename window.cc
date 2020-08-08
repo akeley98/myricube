@@ -1,94 +1,90 @@
 #include "window.hh"
 
+#include <atomic>
 #include <stdio.h>
 
 #include "glad/glad.h"
-#include "SDL2/SDL.h"
-#include "SDL2/SDL_opengl.h"
 
 namespace myricube {
 
 // For now I'm just indicating mouse buttons with negative numbers.
 // I'm using the X11 numbers I'm used to.
-int keycode_from_button_event(const SDL_MouseButtonEvent& e)
-{
-    switch (e.button) {
-        default: return -10;
-        case SDL_BUTTON_LEFT: return -1;
-        case SDL_BUTTON_MIDDLE: return -2;
-        case SDL_BUTTON_RIGHT: return -3;
-        case SDL_BUTTON_X1: return -8;
-        case SDL_BUTTON_X2: return -9;
-    }
-}
+// int keycode_from_button_event(const SDL_MouseButtonEvent& e)
+// {
+//     switch (e.button) {
+//         default: return -10;
+//         case SDL_BUTTON_LEFT: return -1;
+//         case SDL_BUTTON_MIDDLE: return -2;
+//         case SDL_BUTTON_RIGHT: return -3;
+//         case SDL_BUTTON_X1: return -8;
+//         case SDL_BUTTON_X2: return -9;
+//     }
+// }
 
 Window::Window(OnWindowResize on_window_resize_)
 {
     on_window_resize = on_window_resize_;
-    window = SDL_CreateWindow(
-        "",
-        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-        window_x, window_y,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
-    );
+
+    // Should factor glfw initialization and hint setting out if I want
+    // Window to be threadsafe (not sure if I really care for now...)
+    if (!glfwInit()) {
+        panic("Failed to initialize glfw");
+    }
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+    window = glfwCreateWindow(window_x, window_y, "", nullptr, nullptr);
 
     if (window == nullptr) {
-        panic("Could not initialize window", SDL_GetError());
+        panic("Could not initialize window");
     }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
-
-    context = SDL_GL_CreateContext(window);
-    if (!context) {
-        panic("OpenGL context creation error:", SDL_GetError());
-    }
+    glfwSetWindowUserPointer(window, this);
     gl_make_current();
 
     if (!gladLoadGL()) {
-        panic("gladLoadGL failure", "gladLoadGL failure");
+        panic("gladLoadGL failure");
     }
     on_window_resize(window_x, window_y);
 }
 
 Window::~Window()
 {
-    SDL_GL_DeleteContext(context);
-    SDL_DestroyWindow(window);
-    context = nullptr;
+    glfwDestroyWindow(window);
     window = nullptr;
 }
 
 void Window::set_title(const std::string& title)
 {
-    SDL_SetWindowTitle(window, title.c_str());
+    glfwSetWindowTitle(window, title.c_str());
+}
+
+void Window::set_title(const char* title)
+{
+    glfwSetWindowTitle(window, title);
 }
 
 void Window::gl_make_current()
 {
-    if (SDL_GL_MakeCurrent(window, context) < 0) {
-        panic("SDL OpenGL context error", SDL_GetError());
-    }
+    glfwMakeContextCurrent(window);
 }
 
-bool Window::update_swap_buffers(int64_t min_ms)
+bool Window::update_swap_buffers()
 {
-    // Calculate dt & wait for min_ms elapsed before previous swap.
-    int64_t current_tick = 0;
-    int64_t dt_ms = 0;
-    for (; dt_ms < min_ms; SDL_Delay(1)) {
-        current_tick = SDL_GetTicks();
-        dt_ms = current_tick - previous_update_ms;
-    }
-    if (dt_ms > next_frame_time) next_frame_time = dt_ms;
-    previous_update_ms += dt_ms;
-    float dt = 1/1000.f * dt_ms;
+    if (glfwWindowShouldClose(window)) return false;
+
+    // Calculate dt.
+    double now = glfwGetTime();
+    double dt = now - previous_update;
+    previous_update = now;
 
     // Swap buffers as promised.
-    SDL_GL_SwapWindow(window);
+    glfwSwapBuffers(window);
 
     // Call per-frame callbacks of pressed keys.
+    glfwPollEvents();
     KeyArg arg;
-    arg.dt = std::min(dt, max_dt);
+    arg.dt = std::min(float(dt), float(max_dt));
     for (auto& pair : pressed_keys_map) {
         arg.mouse_rel_x = pair.second->mouse_rel_x;
         arg.mouse_rel_y = pair.second->mouse_rel_y;
@@ -96,33 +92,17 @@ bool Window::update_swap_buffers(int64_t min_ms)
         if (cb) cb(arg);
     }
 
-    // Check for new events.
-    bool quit = false;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-        switch (event.type) {
-            case SDL_KEYDOWN: handle_key_down(event.key, dt); break;
-            case SDL_KEYUP: handle_key_up(event.key); break;
-            case SDL_MOUSEWHEEL: handle_mouse_wheel(event.wheel); break;
-            case SDL_MOUSEBUTTONDOWN: handle_mouse_down(event.button, dt); break;
-            case SDL_MOUSEBUTTONUP: handle_mouse_up(event.button); break;
-            case SDL_MOUSEMOTION: handle_mouse_motion(event.motion); break;
-            case SDL_WINDOWEVENT: handle_window_event(event.window); break;
-            case SDL_QUIT: quit = true; break;
-        }
-    }
-
     // Update FPS and frame time.
     ++frames;
-    if (current_tick - previous_fps_update >= fps_interval_ms) {
-        fps = 1000.0 * frames
-            / (current_tick - previous_fps_update);
-        previous_fps_update = current_tick;
+    frame_time = std::max(frame_time, dt);
+    if (now - previous_fps_update >= fps_interval) {
+        fps = frames / (now - previous_fps_update);
+        previous_fps_update = now;
         frames = 0;
-        frame_time_ms = next_frame_time;
+        frame_time = next_frame_time;
         next_frame_time = 0;
     }
-    return !quit;
+    return true;
 }
 
 // Given that the key/mouse button with the specified key code has
@@ -206,69 +186,6 @@ void Window::handle_up(int keycode)
         it->second->up(arg);
     }
     pressed_keys_map.erase(it);
-}
-
-void Window::handle_key_down(const SDL_KeyboardEvent& e, float dt)
-{
-    handle_down(e.keysym.scancode, dt, 1.0f);
-}
-
-void Window::handle_key_up(const SDL_KeyboardEvent& e)
-{
-    handle_up(e.keysym.scancode);
-}
-
-void Window::handle_mouse_down(const SDL_MouseButtonEvent& e, float dt)
-{
-    handle_down(keycode_from_button_event(e), dt, 1.0f);
-}
-
-void Window::handle_mouse_up(const SDL_MouseButtonEvent& e)
-{
-    handle_up(keycode_from_button_event(e));
-}
-
-void Window::handle_mouse_wheel(const SDL_MouseWheelEvent& e)
-{
-    // Again I'm just using the Unix mouse numbers I know.
-    // x seems to be backwards from what I expect in SDL
-    if (e.x < 0) {
-        handle_down(-7, 0, e.x);
-        handle_up(-7);
-    }
-    if (e.x > 0) {
-        handle_down(-6, 0, e.x);
-        handle_up(-6);
-    }
-    if (e.y < 0) {
-        handle_down(-5, 0, e.y);
-        handle_up(-5);
-    }
-    if (e.y > 0) {
-        handle_down(-4, 0, e.y);
-        handle_up(-4);
-    }
-}
-
-void Window::handle_mouse_motion(const SDL_MouseMotionEvent& e)
-{
-    float dx = e.xrel;
-    float dy = e.yrel;
-    for (auto& pair : pressed_keys_map) {
-        pair.second->mouse_rel_x += dx;
-        pair.second->mouse_rel_y += dy;
-    }
-}
-
-void Window::handle_window_event(const SDL_WindowEvent& e)
-{
-    if (e.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
-        e.event == SDL_WINDOWEVENT_RESIZED) {
-            window_x = e.data1;
-            window_y = e.data2;
-    }
-    assert(on_window_resize);
-    on_window_resize(window_x, window_y);
 }
 
 } // end namespace

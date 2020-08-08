@@ -1,6 +1,6 @@
 default: run
 
-CPPFLAGS=-I ./glad/include -I .
+CPPFLAGS=-I glfw/include -I ./glad/include -I .
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g
 
@@ -32,11 +32,12 @@ OBJS=cckiss/myricube.cc.s \
      cckiss/window.cc.s \
      cckiss/renderer.cc.s \
      cckiss/glad/src/glad.c.s \
+     glfw-build/src/libglfw3.a \
 # Empty line for backslash
 
 myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
-	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lSDL2 -o myricube-planet-bin
+	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lpthread -o myricube-planet-bin
 
 
 myricube-%-bin: $(OBJS) cckiss/apps/%.cc.s
-	$(CXX) $(OBJS) cckiss/apps/$*.cc.s -ldl -lGL -lSDL2 -o myricube-$*-bin
+	$(CXX) $(OBJS) cckiss/apps/$*.cc.s -ldl -lGL -lpthread -o myricube-$*-bin
