@@ -48,6 +48,9 @@ class Camera
     // Window size in pixels.
     int window_x = 1, window_y = 1;
 
+    // Fog setting.
+    bool fog_enabled = true;
+
     // *** True when members below need to be recomputed due to ***
     // *** changes in members above.                            ***
     bool dirty = true;
@@ -76,7 +79,10 @@ class Camera
   public:
     // Maximum number of 3D voxel textures that may be sent to the GPU
     // per frame. Mystery parameter.
-    size_t max_raycast_evict = 5;
+    size_t max_raycast_evict = 3;
+
+    // Minimum milliseconds between frames.
+    int min_frame_time_ms = 2;
 
     // Respond if needed to dirty flag and recompute derived data.
     void fix_dirty()
@@ -245,6 +251,16 @@ class Camera
         dirty = true;
         window_x = x;
         window_y = y;
+    }
+
+    bool get_fog() const
+    {
+        return fog_enabled;
+    }
+
+    void set_fog(bool in)
+    {
+        fog_enabled = in;
     }
 
     // Move by the specified multiples of the normal right, up, and

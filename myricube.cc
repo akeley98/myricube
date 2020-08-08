@@ -15,18 +15,19 @@
 // shader that checks for collisions with the voxels contained in the
 // AABB. The voxel data itself (when raycasting is used) is stored
 // using a 3D texture -- this is considerably more memory efficient
-// than a triangle mesh.
+// than a triangle mesh. (Actually, now that I switched to instanced
+// rendering, this memory point may no longer be true...)
 //
 // Cubes of chunks are organized into larger chunk groups. For OpenGL
 // efficiency, chunks within the same chunk group share GPU resources
 // (3D textures, buffer storage, etc.). Points in space are frequently
 // expressed as "group" and "residue" coordinates -- these are the
 // coordinates (in chunk-group-size units) of the lower-left of the
-// chunk the point is in, and the remaining offset within the
-// chunk. (See split_coordinate for the precise floor-based
-// definition). For example, if chunk groups were 100 x 100 x 100
-// voxels, then point (1, 502.5, -1) has chunk coordinate (0, 5, -1)
-// and residue (1, 2.5, 99).
+// group the point is in, and the remaining offset (in voxel-size
+// units) within the group. (See split_coordinate for the precise
+// floor-based definition). For example, if chunk groups were 100 x
+// 100 x 100 voxels, then point (1, 502.5, -1) has group coordinate
+// (0, 5, -1) and residue (1, 2.5, 99).
 //
 // To be precise, note also that a voxel at coordinate (x,y,z) occupies
 // the cube from (x,y,z) to (x+1,y+1,z+1) in space.
@@ -267,6 +268,15 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("pause", pause);
 
+    KeyTarget toggle_fog;
+    toggle_fog.down = [&camera] (KeyArg) -> bool
+    {
+        camera.set_fog(!camera.get_fog());
+        return true;
+    };
+    window.add_key_target("toggle_fog", toggle_fog);
+
+    // Maybe I should dehackify this variable one day.
     extern bool chunk_debug;
     KeyTarget toggle_chunk_debug;
     toggle_chunk_debug.down = [&] (KeyArg) -> bool
@@ -291,6 +301,32 @@ void add_key_targets(Window& window, Camera& camera)
         return true;
     };
     window.add_key_target("unload_gpu_storage", unload);
+
+    KeyTarget increase_far_plane, decrease_far_plane;
+    increase_far_plane.down = [&] (KeyArg arg) -> bool
+    {
+        auto new_far_plane = 64 + camera.get_far_plane();
+
+        if (!arg.repeat) {
+            camera.set_far_plane(new_far_plane);
+            fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
+        }
+        return !arg.repeat;
+    };
+    window.add_key_target("increase_far_plane", increase_far_plane);
+
+    decrease_far_plane.down = [&] (KeyArg arg) -> bool
+    {
+        auto new_far_plane = -64 + camera.get_far_plane();
+        if (new_far_plane < 64) new_far_plane = 64;
+
+        if (!arg.repeat) {
+            camera.set_far_plane(new_far_plane);
+            fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
+        }
+        return !arg.repeat;
+    };
+    window.add_key_target("decrease_far_plane", decrease_far_plane);
 }
 
 extern std::unordered_map<std::string, int> key_name_to_key_code_map;
@@ -481,9 +517,8 @@ void set_window_title(Window& window)
 int Main(std::vector<std::string> args)
 {
     if (args.at(0)[0] != '/') {
-        fprintf(stderr, "%s should be absolute path\n"
+        fprintf(stderr, "Warning: %s expected to be absolute path\n"
             "(call through wrapper script).\n", args[0].c_str());
-        return 1;
     }
     data_directory = args[0];
     // if (!data_directory.ends_with("-bin")) {
@@ -497,11 +532,14 @@ int Main(std::vector<std::string> args)
 
     VoxelWorld world;
     Camera camera;
+    int screen_x = 0, screen_y = 0;
 
-    auto on_window_resize = [&camera] (int x, int y)
+    auto on_window_resize = [&camera, &screen_x, &screen_y] (int x, int y)
     {
         viewport(x, y);
         camera.set_window_size(x, y);
+        screen_x = x;
+        screen_y = y;
     };
     Window window(on_window_resize);
     add_key_targets(window, camera);
@@ -509,12 +547,17 @@ int Main(std::vector<std::string> args)
 
     app_init(world, window);
     gl_first_time_setup();
-    while (window.update_swap_buffers(5)) {
+    while (window.update_swap_buffers(camera.min_frame_time_ms)) {
         if (!paused) app_update(world);
-        gl_clear();
         camera.fix_dirty();
+
+        gl_clear();
+        bind_global_f32_depth_framebuffer(screen_x, screen_y);
+        gl_clear();
         render_world_mesh_step(world, camera);
         render_world_raycast_step(world, camera);
+        finish_global_f32_depth_framebuffer();
+
         set_window_title(window);
     }
     window.set_title("Autosaving...");

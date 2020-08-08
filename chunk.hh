@@ -300,7 +300,8 @@ class VoxelWorld
     };
 
     // ID of this world, unique within a single run of this program.
-    uint64_t unique_id;
+    // Zero is never used; may be used as "null".
+    uint64_t nonzero_unique_id;
 
     // Chunk groups mapped by group coordinate.
     //
@@ -312,14 +313,15 @@ class VoxelWorld
     VoxelWorld()
     {
         static std::atomic<uint64_t> next_id;
-        unique_id = next_id++;
+        nonzero_unique_id = ++next_id;
+        assert(nonzero_unique_id != 0);
     }
 
     VoxelWorld(VoxelWorld&&) = delete;
 
     uint64_t id() const
     {
-        return unique_id;
+        return nonzero_unique_id;
     }
 
     // Return voxel at the given coordinate. If a pointer to a
