@@ -95,12 +95,15 @@ class Window
     // Used for fps calculation.
     double previous_fps_update = glfwGetTime();
     int frames = 0;
-    static constexpr double fps_interval = 0.250;
     double fps = 0.0;
 
     // Used to calculate maximum latency between frames.
     double frame_time = 0;
     double next_frame_time = 0;
+
+    // Current cursor position; negative if not yet set.
+    double cursor_x = -1;
+    double cursor_y = -1;
 
   public:
     // Construct the window with a callback that is called when the
@@ -108,6 +111,7 @@ class Window
     Window(OnWindowResize);
     ~Window();
     Window(Window&&) = delete;
+    // If I make this moveable, remember to update the glfw user pointer.
 
     // Set window title.
     void set_title(const std::string& title);
@@ -152,9 +156,23 @@ class Window
         return int(frame_time * 1000);
     }
   private:
-    void handle_down(int, float, float);
+    void handle_down(int, float);
     void handle_up(int);
+
+    static void window_size_callback(GLFWwindow*, int, int);
+    static void key_callback(
+        GLFWwindow* window, int key, int scancode, int action, int mods);
+    static void character_callback(
+        GLFWwindow* window, unsigned int codepoint, int mods);
+    static void cursor_position_callback(
+        GLFWwindow* window, double xpos, double ypos);
+    static void mouse_button_callback(
+        GLFWwindow* window, int button, int action, int mods);
+    static void scroll_callback(
+        GLFWwindow* window, double x, double y);
 };
+
+int keycode_from_name(std::string name);
 
 } // end namespace
 #endif /* !MYRICUBE_WINDOW_HH_ */

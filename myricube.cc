@@ -68,7 +68,6 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -327,8 +326,6 @@ void add_key_targets(Window& window, Camera& camera)
     window.add_key_target("decrease_far_plane", decrease_far_plane);
 }
 
-extern std::unordered_map<std::string, int> key_name_to_key_code_map;
-
 // Given the full path of a key binds file, parse it for key bindings
 // and add it to the window's database of key bindings (physical
 // key/mouse button to KeyTarget name associations).
@@ -383,7 +380,7 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
             if (c == '\n') goto end_line;
             if (isspace(c)) break;
             if (c == '#') goto comment;
-            key_name.push_back(tolower(c));
+            key_name.push_back(c);
         }
 
         skip_whitespace();
@@ -451,8 +448,8 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
             goto bad_eof;
         }
 
-        auto it = key_name_to_key_code_map.find(key_name);
-        if (it == key_name_to_key_code_map.end()) {
+        auto keycode = keycode_from_name(key_name);
+        if (keycode == 0) {
             fprintf(stderr, "%s:%i unknown key name %s.\n",
                 filename.c_str(), line_number, key_name.c_str());
             errno = EINVAL;
@@ -460,8 +457,8 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
         }
 
         fprintf(stderr, "Binding %s (%i) to %s\n",
-            key_name.c_str(), it->second, target_name.c_str());
-        window.bind_keycode(it->second, target_name);
+            key_name.c_str(), keycode, target_name.c_str());
+        window.bind_keycode(keycode, target_name);
     }
 
     if (fclose(file) != 0) {
@@ -574,12 +571,4 @@ int main(int argc, char** argv)
         args.emplace_back(argv[i]);
     }
     return myricube::Main(std::move(args));
-}
-
-namespace myricube {
-
-std::unordered_map<std::string, int> key_name_to_key_code_map {
-
-};
-
 }

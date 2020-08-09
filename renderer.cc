@@ -17,7 +17,6 @@
 #include "glad/glad.h"
 #include "renderer.hh"
 #include "shaders.hh"
-#include "SDL2/SDL.h"
 
 namespace myricube {
 

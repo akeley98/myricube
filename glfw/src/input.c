@@ -307,8 +307,10 @@ void _glfwInputKey(_GLFWwindow* window, int key, int scancode, int action, int m
 //
 void _glfwInputChar(_GLFWwindow* window, unsigned int codepoint, int mods, GLFWbool plain)
 {
-    if (codepoint < 32 || (codepoint > 126 && codepoint < 160))
-        return;
+    // Modification by David Akeley:
+    // Stop pointlessly filtering out control codes.
+    // if (codepoint < 32 || (codepoint > 126 && codepoint < 160))
+    //     return;
 
     if (!window->lockKeyMods)
         mods &= ~(GLFW_MOD_CAPS_LOCK | GLFW_MOD_NUM_LOCK);

@@ -1,25 +1,41 @@
 #include "window.hh"
 
 #include <atomic>
+#include <ctype.h>
 #include <stdio.h>
+#include <unordered_map>
 
 #include "glad/glad.h"
+
+static constexpr double fps_report_interval = 0.5;
 
 namespace myricube {
 
 // For now I'm just indicating mouse buttons with negative numbers.
 // I'm using the X11 numbers I'm used to.
-// int keycode_from_button_event(const SDL_MouseButtonEvent& e)
-// {
-//     switch (e.button) {
-//         default: return -10;
-//         case SDL_BUTTON_LEFT: return -1;
-//         case SDL_BUTTON_MIDDLE: return -2;
-//         case SDL_BUTTON_RIGHT: return -3;
-//         case SDL_BUTTON_X1: return -8;
-//         case SDL_BUTTON_X2: return -9;
-//     }
-// }
+static inline int keycode_from_glfw_button(int button)
+{
+    switch (button) {
+        case GLFW_MOUSE_BUTTON_LEFT: return -1;
+        case GLFW_MOUSE_BUTTON_MIDDLE: return -2;
+        case GLFW_MOUSE_BUTTON_RIGHT: return -3;
+        case 3: return -8;
+        case 4: return -9;
+        case 5: return -10;
+        case 6: return -11;
+        default: return -12;
+    }
+}
+
+// A pointer to the myricube Window object that created a glfw window
+// is stored as the user pointer by the GLFW window. This function
+// gets it back.
+static inline Window& get_Window(GLFWwindow* window)
+{
+    Window* result = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    assert(result != nullptr);
+    return *result;
+}
 
 Window::Window(OnWindowResize on_window_resize_)
 {
@@ -39,9 +55,16 @@ Window::Window(OnWindowResize on_window_resize_)
     if (window == nullptr) {
         panic("Could not initialize window");
     }
-    glfwSetWindowUserPointer(window, this);
-    gl_make_current();
 
+    glfwSetWindowUserPointer(window, this);
+    glfwSetWindowSizeCallback(window, window_size_callback);
+    glfwSetKeyCallback(window, key_callback);
+    glfwSetCharModsCallback(window, character_callback);
+    glfwSetCursorPosCallback(window, cursor_position_callback);
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetScrollCallback(window, scroll_callback);
+
+    gl_make_current();
     if (!gladLoadGL()) {
         panic("gladLoadGL failure");
     }
@@ -94,8 +117,8 @@ bool Window::update_swap_buffers()
 
     // Update FPS and frame time.
     ++frames;
-    frame_time = std::max(frame_time, dt);
-    if (now - previous_fps_update >= fps_interval) {
+    next_frame_time = std::max(next_frame_time, dt);
+    if (now - previous_fps_update >= fps_report_interval) {
         fps = frames / (now - previous_fps_update);
         previous_fps_update = now;
         frames = 0;
@@ -111,12 +134,12 @@ bool Window::update_swap_buffers()
 // activated KeyTarget in the pressed_keys_map so we will do the right
 // thing when the key is released (even if the key is re-bound in the
 // meantime).
-void Window::handle_down(int keycode, float dt, float amount)
+void Window::handle_down(int keycode, float amount)
 {
     auto it = pressed_keys_map.find(keycode);
     KeyArg arg;
     arg.repeat = it != pressed_keys_map.end();
-    arg.dt = dt;
+    arg.dt = 0.0;
     arg.amount = amount;
 
     // In the repeat case, just recycle the cached KeyTarget ptr in the
@@ -187,5 +210,249 @@ void Window::handle_up(int keycode)
     }
     pressed_keys_map.erase(it);
 }
+
+void Window::window_size_callback(GLFWwindow* window, int x, int y)
+{
+    Window& w = get_Window(window);
+    if (w.on_window_resize) w.on_window_resize(x, y);
+}
+
+void Window::key_callback(
+    GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    Window& w = get_Window(window);
+    action != GLFW_RELEASE ? w.handle_down(key, 1) : w.handle_up(key);
+}
+
+void Window::character_callback(
+    GLFWwindow* window, unsigned int codepoint, int mods)
+{
+    // Might be useful later.
+    fprintf(stderr, "Codepoint input: %Xh   mods %i\n", codepoint, mods);
+}
+
+void Window::cursor_position_callback(
+    GLFWwindow* window, double xpos, double ypos)
+{
+    Window& w = get_Window(window);
+    bool valid = (w.cursor_x >= 0 and w.cursor_y >= 0);
+
+    double dx = xpos - w.cursor_x;
+    double dy = ypos - w.cursor_y;
+    w.cursor_x = xpos;
+    w.cursor_y = ypos;
+
+    if (valid) {
+        for (auto& pair : w.pressed_keys_map) {
+            pair.second->mouse_rel_x += dx;
+            pair.second->mouse_rel_y += dy;
+        }
+    }
+}
+
+void Window::mouse_button_callback(
+    GLFWwindow* window, int button, int action, int mods)
+{
+    Window& w = get_Window(window);
+    int keycode = keycode_from_glfw_button(button);
+    action != GLFW_RELEASE ? w.handle_down(keycode, 1) : w.handle_up(keycode);
+}
+
+void Window::scroll_callback(GLFWwindow* window, double x, double y)
+{
+    Window& w = get_Window(window);
+    // Again I'm just using the Unix mouse numbers I know.
+    if (x < 0) {
+        w.handle_down(-7, x);
+        w.handle_up(-7);
+    }
+    if (x > 0) {
+        w.handle_down(-6, x);
+        w.handle_up(-6);
+    }
+    if (y < 0) {
+        w.handle_down(-5, y);
+        w.handle_up(-5);
+    }
+    if (y > 0) {
+        w.handle_down(-4, y);
+        w.handle_up(-4);
+    }
+}
+
+static std::unordered_map<std::string, int> make_key_name_map();
+
+int keycode_from_name(std::string name)
+{
+    static const std::unordered_map<std::string, int> m = make_key_name_map();
+    for (char& c : name) {
+        c = toupper(c);
+        if (c == '-') c = '_';
+    }
+    auto it = m.find(name);
+    return it != m.end() ? it->second : 0;
+}
+
+static std::unordered_map<std::string, int> make_key_name_map()
+{
+    std::unordered_map<std::string, int> m;
+
+    m["MOUSE_1"] = -1;
+    m["LEFT_MOUSE"] = -1;
+    m["MOUSE_2"] = -2;
+    m["MIDDLE_MOUSE"] = -2;
+    m["MOUSE_3"] = -3;
+    m["RIGHT_MOUSE"] = -3;
+    m["MOUSE_4"] = -4;
+    m["SCROLL_UP"] = -4;
+    m["MOUSE_5"] = -5;
+    m["SCROLL_DOWN"] = -5;
+    m["MOUSE_6"] = -6;
+    m["SCROLL_LEFT"] = -6;
+    m["MOUSE_7"] = -7;
+    m["SCROLL_RIGHT"] = -7;
+    m["MOUSE_8"] = -8;
+    m["THUMB_BUTTON"] = -8;
+    m["X1"] = -8;
+    m["MOUSE_9"] = -9;
+    m["THUMB_BUTTON_2"] = -9;
+    m["X2"] = -9;
+    m["MOUSE_10"] = -10;
+    m["MOUSE_11"] = -11;
+    m["MOUSE_12"] = -12;
+
+    m["SPACE"] = GLFW_KEY_SPACE;
+    m["APOSTROPHE"] = GLFW_KEY_APOSTROPHE;
+    m["COMMA"] = GLFW_KEY_COMMA;
+    m["MINUS"] = GLFW_KEY_MINUS;
+    m["PERIOD"] = GLFW_KEY_PERIOD;
+    m["SLASH"] = GLFW_KEY_SLASH;
+    m["0"] = GLFW_KEY_0;
+    m["1"] = GLFW_KEY_1;
+    m["2"] = GLFW_KEY_2;
+    m["3"] = GLFW_KEY_3;
+    m["4"] = GLFW_KEY_4;
+    m["5"] = GLFW_KEY_5;
+    m["6"] = GLFW_KEY_6;
+    m["7"] = GLFW_KEY_7;
+    m["8"] = GLFW_KEY_8;
+    m["9"] = GLFW_KEY_9;
+    m["SEMICOLON"] = GLFW_KEY_SEMICOLON;
+    m["EQUAL"] = GLFW_KEY_EQUAL;
+    m["A"] = GLFW_KEY_A;
+    m["B"] = GLFW_KEY_B;
+    m["C"] = GLFW_KEY_C;
+    m["D"] = GLFW_KEY_D;
+    m["E"] = GLFW_KEY_E;
+    m["F"] = GLFW_KEY_F;
+    m["G"] = GLFW_KEY_G;
+    m["H"] = GLFW_KEY_H;
+    m["I"] = GLFW_KEY_I;
+    m["J"] = GLFW_KEY_J;
+    m["K"] = GLFW_KEY_K;
+    m["L"] = GLFW_KEY_L;
+    m["M"] = GLFW_KEY_M;
+    m["N"] = GLFW_KEY_N;
+    m["O"] = GLFW_KEY_O;
+    m["P"] = GLFW_KEY_P;
+    m["Q"] = GLFW_KEY_Q;
+    m["R"] = GLFW_KEY_R;
+    m["S"] = GLFW_KEY_S;
+    m["T"] = GLFW_KEY_T;
+    m["U"] = GLFW_KEY_U;
+    m["V"] = GLFW_KEY_V;
+    m["W"] = GLFW_KEY_W;
+    m["X"] = GLFW_KEY_X;
+    m["Y"] = GLFW_KEY_Y;
+    m["Z"] = GLFW_KEY_Z;
+    m["LEFT_BRACKET"] = GLFW_KEY_LEFT_BRACKET;
+    m["BACKSLASH"] = GLFW_KEY_BACKSLASH;
+    m["RIGHT_BRACKET"] = GLFW_KEY_RIGHT_BRACKET;
+    m["GRAVE_ACCENT"] = GLFW_KEY_GRAVE_ACCENT;
+    m["WORLD_1"] = GLFW_KEY_WORLD_1;
+    m["WORLD_2"] = GLFW_KEY_WORLD_2;
+
+    m["ESCAPE"] = GLFW_KEY_ESCAPE;
+    m["ENTER"] = GLFW_KEY_ENTER;
+    m["TAB"] = GLFW_KEY_TAB;
+    m["BACKSPACE"] = GLFW_KEY_BACKSPACE;
+    m["INSERT"] = GLFW_KEY_INSERT;
+    m["DELETE"] = GLFW_KEY_DELETE;
+    m["RIGHT"] = GLFW_KEY_RIGHT;
+    m["LEFT"] = GLFW_KEY_LEFT;
+    m["DOWN"] = GLFW_KEY_DOWN;
+    m["UP"] = GLFW_KEY_UP;
+    m["PAGE_UP"] = GLFW_KEY_PAGE_UP;
+    m["PAGE_DOWN"] = GLFW_KEY_PAGE_DOWN;
+    m["HOME"] = GLFW_KEY_HOME;
+    m["END"] = GLFW_KEY_END;
+    m["CAPS_LOCK"] = GLFW_KEY_CAPS_LOCK;
+    m["SCROLL_LOCK"] = GLFW_KEY_SCROLL_LOCK;
+    m["NUM_LOCK"] = GLFW_KEY_NUM_LOCK;
+    m["PRINT_SCREEN"] = GLFW_KEY_PRINT_SCREEN;
+    m["PAUSE"] = GLFW_KEY_PAUSE;
+    m["F1"] = GLFW_KEY_F1;
+    m["F2"] = GLFW_KEY_F2;
+    m["F3"] = GLFW_KEY_F3;
+    m["F4"] = GLFW_KEY_F4;
+    m["F5"] = GLFW_KEY_F5;
+    m["F6"] = GLFW_KEY_F6;
+    m["F7"] = GLFW_KEY_F7;
+    m["F8"] = GLFW_KEY_F8;
+    m["F9"] = GLFW_KEY_F9;
+    m["F10"] = GLFW_KEY_F10;
+    m["F11"] = GLFW_KEY_F11;
+    m["F12"] = GLFW_KEY_F12;
+    m["F13"] = GLFW_KEY_F13;
+    m["F14"] = GLFW_KEY_F14;
+    m["F15"] = GLFW_KEY_F15;
+    m["F16"] = GLFW_KEY_F16;
+    m["F17"] = GLFW_KEY_F17;
+    m["F18"] = GLFW_KEY_F18;
+    m["F19"] = GLFW_KEY_F19;
+    m["F20"] = GLFW_KEY_F20;
+    m["F21"] = GLFW_KEY_F21;
+    m["F22"] = GLFW_KEY_F22;
+    m["F23"] = GLFW_KEY_F23;
+    m["F24"] = GLFW_KEY_F24;
+    m["F25"] = GLFW_KEY_F25;
+    m["KP_0"] = GLFW_KEY_KP_0;
+    m["KP_1"] = GLFW_KEY_KP_1;
+    m["KP_2"] = GLFW_KEY_KP_2;
+    m["KP_3"] = GLFW_KEY_KP_3;
+    m["KP_4"] = GLFW_KEY_KP_4;
+    m["KP_5"] = GLFW_KEY_KP_5;
+    m["KP_6"] = GLFW_KEY_KP_6;
+    m["KP_7"] = GLFW_KEY_KP_7;
+    m["KP_8"] = GLFW_KEY_KP_8;
+    m["KP_9"] = GLFW_KEY_KP_9;
+    m["KP_DECIMAL"] = GLFW_KEY_KP_DECIMAL;
+    m["KP_DIVIDE"] = GLFW_KEY_KP_DIVIDE;
+    m["KP_MULTIPLY"] = GLFW_KEY_KP_MULTIPLY;
+    m["KP_SUBTRACT"] = GLFW_KEY_KP_SUBTRACT;
+    m["KP_ADD"] = GLFW_KEY_KP_ADD;
+    m["KP_ENTER"] = GLFW_KEY_KP_ENTER;
+    m["KP_EQUAL"] = GLFW_KEY_KP_EQUAL;
+    m["LEFT_SHIFT"] = GLFW_KEY_LEFT_SHIFT;
+    m["LSHIFT"] = GLFW_KEY_LEFT_SHIFT;
+    m["LEFT_CONTROL"] = GLFW_KEY_LEFT_CONTROL;
+    m["LCTRL"] = GLFW_KEY_LEFT_CONTROL;
+    m["LEFT_ALT"] = GLFW_KEY_LEFT_ALT;
+    m["LALT"] = GLFW_KEY_LEFT_ALT;
+    m["LEFT_SUPER"] = GLFW_KEY_LEFT_SUPER;
+    m["LGUI"] = GLFW_KEY_LEFT_SUPER;
+    m["RIGHT_SHIFT"] = GLFW_KEY_RIGHT_SHIFT;
+    m["RSHIFT"] = GLFW_KEY_RIGHT_SHIFT;
+    m["RIGHT_CONTROL"] = GLFW_KEY_RIGHT_CONTROL;
+    m["RCTRL"] = GLFW_KEY_RIGHT_CONTROL;
+    m["RIGHT_ALT"] = GLFW_KEY_RIGHT_ALT;
+    m["RALT"] = GLFW_KEY_RIGHT_ALT;
+    m["RIGHT_SUPER"] = GLFW_KEY_RIGHT_SUPER;
+    m["RGUI"] = GLFW_KEY_RIGHT_SUPER;
+    m["MENU"] = GLFW_KEY_MENU;
+
+    return m;
+}
+
 
 } // end namespace
