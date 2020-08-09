@@ -215,6 +215,8 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         if (!okay or length > 0) {
             print_source(source);
             fputs(log.data(), stderr);
+        }
+        if (!okay) {
             panic("Shader compile error: " + std::string(f));
         }
     }
