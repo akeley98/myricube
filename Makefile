@@ -1,6 +1,6 @@
 default: run
 
-CPPFLAGS=-I glfw/include -I ./glad/include -I .
+CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g
 
@@ -28,9 +28,9 @@ all: myricube-planet-bin \
      cckiss/apps/hexload-app.cc.s \
 # Empty line for backslash
 
-OBJS=cckiss/myricube.cc.s \
-     cckiss/window.cc.s \
-     cckiss/renderer.cc.s \
+OBJS=cckiss/src/myricube.cc.s \
+     cckiss/src/window.cc.s \
+     cckiss/src/renderer.cc.s \
      cckiss/glad/src/glad.c.s \
      glfw-build/src/libglfw3.a \
 # Empty line for backslash

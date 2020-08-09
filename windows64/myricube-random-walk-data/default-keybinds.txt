@@ -1,0 +1,59 @@
+# This is a comment
+# Simple syntax for binding keys, every nonempty line should be
+# a whitespace-separated pair of {key name} {KeyTarget name}.
+#
+# Note: to override these controls, mimic the syntax of this file
+# in a file named keybinds.txt in this directory. This way, your
+# custom keybinds will not be detected by git.
+
+w               forward
+s               backward
+a               leftward
+d               rightward
+lctrl           downward
+space           upward
+
+lshift          sprint
+e               speed_up
+q               slow_down
+
+right-mouse     look_around
+mouse-4         vertical_scroll
+mouse-5         vertical_scroll
+mouse-6         horizontal_scroll
+mouse-7         horizontal_scroll
+
+k               do_it
+k               add_random_walk
+z               pause
+left            pop_old_camera          # left-key / thumb button
+mouse-8         pop_old_camera          # to go to previous camera position.
+right           pop_future_camera
+mouse-9         pop_future_camera       # right-key / thumb button 2
+                                        # to undo said action.
+
+f               toggle_fog
+f12             toggle_chunk_debug
+f6              toggle_culling_freeze
+f5              unload_gpu_storage
+f9              decrease_far_plane
+f10             increase_far_plane      # Careful, can crash GPU if too high.
+
+# Put my own keybinds in the git repo to make *my* life easier.
+# u               forward
+# space           backward
+# p               leftward
+# a               rightward
+# lalt            downward
+# lctrl           upward
+
+# o               sprint
+# i               speed_up
+# comma           slow_down
+
+# b               toggle_chunk_debug
+# c               toggle_culling_freeze
+# g               unload_gpu_storage
+
+# b               bogus_test
+
