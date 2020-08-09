@@ -12,7 +12,7 @@ glfw-cmake:
 	cd glfw-build && cmake ../glfw
 
 glfw-build/src/libglfw3.a: glfw-cmake
-	cd glfw-build && make
+	cd glfw-build && $(MAKE)
 
 all: myricube-planet-bin \
      myricube-axis-bin \
@@ -25,11 +25,12 @@ all: myricube-planet-bin \
      cckiss/apps/skygrid.cc.s \
      myricube-hexload-app-bin \
      cckiss/apps/hexload-app.cc.s \
+     $(OBJS) \
 # Empty line for backslash
 
 # Target all-w64 to REALLY make everything for Windows and Linux.
 all-w64: all
-	cd windows64 && make
+	cd windows64 && $(MAKE)
 
 myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
 	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lpthread -o myricube-planet-bin

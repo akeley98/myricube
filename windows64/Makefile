@@ -15,7 +15,7 @@ glfw-cmake:
 	cd glfw-build && cmake -DCMAKE_TOOLCHAIN_FILE=CMake/x86_64-w64-mingw32.cmake ../../glfw
 
 glfw-build/src/libglfw3.a: glfw-cmake
-	cd glfw-build && make
+	cd glfw-build && $(MAKE)
 
 all: cckiss/apps/random-walk.cc.o \
      myricube-random-walk.exe \
