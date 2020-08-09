@@ -1,0 +1,10 @@
+# List of objects that must be compiled and linked together for
+# myricube, excluding stuff in the apps folder.
+
+OBJS=cckiss/src/myricube.cc.o \
+     cckiss/src/window.cc.o \
+     cckiss/src/renderer.cc.o \
+     cckiss/glad/src/glad.c.o \
+     glfw-build/src/libglfw3.a \
+# Empty line for backslash
+

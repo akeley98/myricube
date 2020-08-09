@@ -1,19 +1,18 @@
-default: run
+default: all myricube-random-walk-bin
+	./myricube-random-walk
 
 CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g
 
 -include cckiss/Makefile
+-include OBJS-list
 
 glfw-cmake:
 	cd glfw-build && cmake ../glfw
 
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && make
-
-run: myricube-planet-bin
-	./myricube-planet
 
 all: myricube-planet-bin \
      myricube-axis-bin \
@@ -28,12 +27,9 @@ all: myricube-planet-bin \
      cckiss/apps/hexload-app.cc.s \
 # Empty line for backslash
 
-OBJS=cckiss/src/myricube.cc.s \
-     cckiss/src/window.cc.s \
-     cckiss/src/renderer.cc.s \
-     cckiss/glad/src/glad.c.s \
-     glfw-build/src/libglfw3.a \
-# Empty line for backslash
+# Target all-w64 to REALLY make everything for Windows and Linux.
+all-w64: all
+	cd windows64 && make
 
 myricube-planet-bin: $(OBJS) cckiss/apps/marlo-planet.cc.s
 	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.s -ldl -lGL -lpthread -o myricube-planet-bin

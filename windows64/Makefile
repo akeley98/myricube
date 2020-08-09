@@ -9,18 +9,13 @@ CFLAGS=  -Wall -Wextra -O3 -g
 default: all
 
 -include cckiss/Makefile
+-include ../OBJS-list
 
 glfw-cmake:
 	cd glfw-build && cmake -DCMAKE_TOOLCHAIN_FILE=CMake/x86_64-w64-mingw32.cmake ../../glfw
 
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && make
-
-OBJS=cckiss/src/myricube.cc.o \
-     cckiss/src/window.cc.o \
-     cckiss/src/renderer.cc.o \
-     cckiss/glad/src/glad.c.o \
-     glfw-build/src/libglfw3.a \
 
 all: cckiss/apps/random-walk.cc.o \
      myricube-random-walk.exe \
