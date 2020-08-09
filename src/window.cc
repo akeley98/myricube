@@ -215,6 +215,9 @@ void Window::window_size_callback(GLFWwindow* window, int x, int y)
 {
     Window& w = get_Window(window);
     if (w.on_window_resize) w.on_window_resize(x, y);
+    // Invalidate cursor position on window resize.
+    w.cursor_x = -1;
+    w.cursor_y = -1;
 }
 
 void Window::key_callback(
