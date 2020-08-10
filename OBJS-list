@@ -1,5 +1,5 @@
 # List of objects that must be compiled and linked together for
-# myricube, excluding stuff in the apps folder.
+# myricube.
 
 # If you add an App, put it in the apps folder with filename
 #     apps/[ClassName].cc
