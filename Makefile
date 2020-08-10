@@ -15,7 +15,7 @@ glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
 # Target all-w64 to REALLY make everything for Windows and Linux.
-all-w64: all
+all-w64: myricube-bin
 	cd windows64 && $(MAKE)
 
 myricube-bin: $(OBJS)
