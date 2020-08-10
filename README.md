@@ -1,4 +1,6 @@
-# Myricube -- OpenGL Hybrid Mesh/Raycasting Voxel Renderer
+![myricube screenshot](./screenshot.png)
+
+## Myricube – OpenGL Hybrid Mesh/Raycasting Voxel Renderer
 
 Welcome to the rudimentary readme. This project is a work-in-progress.
 A technical essay on my goals in this project is in `src/myricube.cc`.
@@ -49,5 +51,3 @@ the `myricube_app` environment variable,
 e.g. `myricube_app=MarloPlanet ./myricube` generates my <!--
 brilliant, knockout GORGEOUS --> roommate Marlon's awesome Perlin
 noise cave planet. Look in the `apps` directory for more choices.
-
-![myricube screenshot](./screenshot.png)
