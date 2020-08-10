@@ -143,8 +143,9 @@ class Window
     }
 
     // Update events and swap OpenGL buffers. Return true iff the user
-    // hasn't ordered the window closed yet.
-    bool update_swap_buffers();
+    // hasn't ordered the window closed yet. Optionally write out dt
+    // to the given pointer.
+    bool update_swap_buffers(float* out_dt=nullptr);
 
     double get_fps() const
     {

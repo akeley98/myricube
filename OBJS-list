@@ -1,10 +1,24 @@
 # List of objects that must be compiled and linked together for
 # myricube, excluding stuff in the apps folder.
 
+# If you add an App, put it in the apps folder with filename
+#     apps/[ClassName].cc
+# and add a line below of the form
+#     cckiss/apps/[ClassName].cc.o \
+
+# (Empty line for backslash)
+
 OBJS=cckiss/src/myricube.cc.o \
      cckiss/src/window.cc.o \
+     cckiss/src/app.cc.o \
      cckiss/src/renderer.cc.o \
+     cckiss/apps/AxisTest.cc.o \
+     cckiss/apps/Congestion.cc.o \
+     cckiss/apps/Hexload.cc.o \
+     cckiss/apps/MarloPlanet.cc.o \
+     cckiss/apps/RandomWalk.cc.o \
+     cckiss/apps/Skygrid.cc.o \
      cckiss/glad/src/glad.c.o \
      glfw-build/src/libglfw3.a \
-# Empty line for backslash
+# (Empty line for backslash)
 

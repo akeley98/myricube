@@ -8,34 +8,40 @@
 
 namespace myricube {
 
-// Called once at the start; also an opportunity to add key targets.
-void app_init(VoxelWorld& world, Window&)
+class Skygrid : public App
 {
-    std::mt19937 rng;
-    
-    auto random_voxel = [&rng] () -> Voxel
+    VoxelWorld world;
+
+  public:
+    Skygrid()
     {
-        auto n = rng();
-        uint8_t red = (n >> 8) & 255;
-        uint8_t green = (n >> 16) & 255;
-        uint8_t blue = (n >> 24) & 255;
-        return Voxel(red, green, blue);
-    };
-    
-    constexpr int radius = 360;
-    for (int z = -radius; z <= radius; z += 4) {
-        for (int y = -radius; y <= radius; y += 4) {
-            for (int x = -radius; x <= radius; x += 4) {
-                world.set(glm::ivec3(x,y,z), random_voxel());
+        std::mt19937 rng;
+
+        auto random_voxel = [&rng] () -> Voxel
+        {
+            auto n = rng();
+            uint8_t red = (n >> 8) & 255;
+            uint8_t green = (n >> 16) & 255;
+            uint8_t blue = (n >> 24) & 255;
+            return Voxel(red, green, blue);
+        };
+
+        constexpr int radius = 360;
+        for (int z = -radius; z <= radius; z += 4) {
+            for (int y = -radius; y <= radius; y += 4) {
+                for (int x = -radius; x <= radius; x += 4) {
+                    world.set(glm::ivec3(x,y,z), random_voxel());
+                }
             }
         }
     }
-}
 
-// Called per frame.
-void app_update(VoxelWorld&)
-{
+    VoxelWorld& update(float) override
+    {
+        return world;
+    }
+};
 
-}
+MYRICUBE_ADD_APP(Skygrid)
 
 }

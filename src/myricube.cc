@@ -64,7 +64,9 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -524,10 +526,11 @@ int Main(std::vector<std::string> args)
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
 
-    VoxelWorld world;
+    // Instantiate the camera.
     Camera camera;
-    int screen_x = 0, screen_y = 0;
 
+    // Create a window; callback ensures these window dimensions stay accurate.
+    int screen_x = 0, screen_y = 0;
     auto on_window_resize = [&camera, &screen_x, &screen_y] (int x, int y)
     {
         viewport(x, y);
@@ -536,29 +539,50 @@ int Main(std::vector<std::string> args)
         screen_y = y;
     };
     Window window(on_window_resize);
+
+    // Set up keyboard controls.
     add_key_targets(window, camera);
     bind_keys(window);
 
-    app_init(world, window);
+    // Instantiate the app (which owns the VoxelWorld to render) based
+    // on the user's myricube_app environment variable, if any.
+    const char* app_name = getenv("myricube_app");
+    if (app_name == nullptr) app_name = "RandomWalk";
+    std::unique_ptr<App> app(new_named_app(app_name));
+    if (app == nullptr) {
+        fprintf(stderr, "Known app names:\n");
+        stderr_dump_app_names();
+        panic("myricube_app environment variable set to unknown name",
+            app_name);
+    }
+    app->add_key_targets(window);
+    float dt = 0;
+    VoxelWorld* world = &app->update(dt);
+
+    // Render loop.
     gl_first_time_setup();
-    while (window.update_swap_buffers()) {
-        if (!paused) app_update(world);
+    while (window.update_swap_buffers(&dt)) {
+        if (!paused) world = &app->update(dt);
         camera.fix_dirty();
 
         gl_clear();
         bind_global_f32_depth_framebuffer(screen_x, screen_y);
         gl_clear();
-        render_world_mesh_step(world, camera);
-        render_world_raycast_step(world, camera);
+        render_world_mesh_step(*world, camera);
+        render_world_raycast_step(*world, camera);
         finish_global_f32_depth_framebuffer();
 
         set_window_title(window);
     }
+
+    // Test out the silly hexload class.
     window.set_title("Autosaving...");
-    bool okay = write_hex(world, expand_filename("autosave.myricube.hex"));
+    auto autosave_filename = expand_filename("autosave.myricube.hex");
+    bool okay = write_hex(*world, autosave_filename);
     if (!okay) {
         fprintf(stderr, "Too bad, autosave failed.\n");
     }
+
     return 0;
 }
 

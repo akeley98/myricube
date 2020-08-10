@@ -1,4 +1,4 @@
-// Load the VoxelWorld (in myricube:hex format) named by the MYRICUBE_WORLD
+// Load the VoxelWorld (in myricube:hex format) named by the myricube_world
 // environment variable.
 
 #include "app.hh"
@@ -9,21 +9,29 @@
 
 namespace myricube {
 
-void app_init(VoxelWorld& world, Window&)
+class Hexload : public App
 {
-    const char* filename = getenv("MYRICUBE_WORLD");
-    if (filename == nullptr) {
-        fprintf(stderr, "Missing MYRICUBE_WORLD environment variable.\n");
-    }
-    bool okay = read_hex(world, filename);
-    if (!okay) {
-        fprintf(stderr, "Load from %s failed.\n", filename);
-    }
-}
+    VoxelWorld world;
 
-void app_update(VoxelWorld&)
-{
+  public:
+    Hexload()
+    {
+        const char* filename = getenv("myricube_world");
+        if (filename == nullptr) {
+            panic("Missing myricube_world environment variable.");
+        }
+        bool okay = read_hex(world, filename);
+        if (!okay) {
+            fprintf(stderr, "Load from %s failed.\n", filename);
+        }
+    }
 
-}
+    VoxelWorld& update(float) override
+    {
+        return world;
+    }
+};
+
+MYRICUBE_ADD_APP(Hexload)
 
 } // end namespace

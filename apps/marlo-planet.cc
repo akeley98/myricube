@@ -100,17 +100,22 @@ void marlo(int radius, VoxelWorld& world)
 
 namespace myricube {
 
-VoxelWorld* p_world;
-std::mt19937 rng;
-
-void app_init(VoxelWorld& world, Window& window)
+class MarloPlanet : public App
 {
-    marlo(300, world);
-}
+    VoxelWorld world;
 
-void app_update(VoxelWorld& world)
-{
+  public:
+    MarloPlanet()
+    {
+        marlo(300, world);
+    }
 
-}
+    VoxelWorld& update(float) override
+    {
+        return world;
+    }
+};
+
+MYRICUBE_ADD_APP(MarloPlanet)
 
 } // end namespace

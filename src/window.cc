@@ -92,14 +92,16 @@ void Window::gl_make_current()
     glfwMakeContextCurrent(window);
 }
 
-bool Window::update_swap_buffers()
+bool Window::update_swap_buffers(float* out_dt)
 {
-    if (glfwWindowShouldClose(window)) return false;
 
     // Calculate dt.
     double now = glfwGetTime();
     double dt = now - previous_update;
     previous_update = now;
+    if (out_dt) *out_dt = dt;
+
+    if (glfwWindowShouldClose(window)) return false;
 
     // Swap buffers as promised.
     glfwSwapBuffers(window);

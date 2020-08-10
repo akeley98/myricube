@@ -6,7 +6,7 @@ CPPFLAGS=-I ../glfw/include -I ../glad/include -I ../include -I ../glm
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17
 CFLAGS=  -Wall -Wextra -O3 -g
 
-default: all
+default: myricube.exe
 
 -include cckiss/Makefile
 -include ../OBJS-list
@@ -17,15 +17,5 @@ glfw-cmake:
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
-all: cckiss/apps/random-walk.cc.o \
-     myricube-random-walk.exe \
-     $(OBJS)
-
-# Empty line for backslash
-
-# myricube-planet.exe: $(OBJS) cckiss/apps/marlo-planet.cc.o
-# 	$(CXX) $(OBJS) cckiss/apps/marlo-planet.cc.o -ldl -lGL -lpthread -o myricube-planet.exe
-
-
-myricube-%.exe: $(OBJS) cckiss/apps/%.cc.o
-	$(CXX) $(OBJS) cckiss/apps/$*.cc.o -static -o myricube-$*.exe -lgdi32
+myricube.exe: $(OBJS)
+	$(CXX) $(OBJS) -static -o myricube.exe -lgdi32

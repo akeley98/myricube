@@ -3,7 +3,6 @@
 
 #include <random>
 #include <stdint.h>
-#include <time.h>
 
 #include "app.hh"
 
@@ -280,46 +279,51 @@ class congestion_model
     }
 };
 
-static congestion_model<Size, Border>* ptr_congestion_model = nullptr;
-
 namespace myricube {
 
-void app_init(VoxelWorld& world, Window& window)
+class Congestion : public App
 {
-    ptr_congestion_model = new congestion_model<Size, Border>(Load, world);
+    VoxelWorld world; // Declare before the model.
+    congestion_model<Size, Border> model;
+    double previous_update = 0;
+    double time_counter = 0;
 
-    KeyTarget skip_100;
-    skip_100.down = [&world] (KeyArg a)
+  public:
+    Congestion() : model(Load, world) {}
+
+    VoxelWorld& update(float dt) override
     {
-        if (a.repeat) return false;
-        for (int i = 0; i < 100; ++i) {
-            ptr_congestion_model->update(world);
+        time_counter += double(dt);
+        const double slip = time_counter - previous_update;
+        constexpr double interval = 0.075;
+        if (slip > interval * 1.5) {
+            previous_update = time_counter;
         }
-        return true;
-    };
-    window.add_key_target("do_it", skip_100);
-}
-
-static double previous_update = -1.0/0.0;
-
-void app_update(VoxelWorld& world)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_BOOTTIME, &ts);
-    double ns = ts.tv_sec + 1e-9 * ts.tv_nsec;
-    double dt = ns - previous_update;
-    constexpr double interval = 0.075;
-    if (dt > interval * 1.5) {
-        previous_update = ns;
-    }
-    else if (dt >= interval) {
-        previous_update += interval;
-    }
-    else {
-        return;
+        else if (slip >= interval) {
+            previous_update += interval;
+        }
+        else {
+            return world;
+        }
+        model.update(world);
+        return world;
     }
 
-    ptr_congestion_model->update(world);
-}
+    void add_key_targets(Window& window) override
+    {
+        KeyTarget skip_100;
+        skip_100.down = [this] (KeyArg a)
+        {
+            if (a.repeat) return false;
+            for (int i = 0; i < 100; ++i) {
+                model.update(world);
+            }
+            return true;
+        };
+        window.add_key_target("do_it", skip_100);
+    }
+};
+
+MYRICUBE_ADD_APP(Congestion)
 
 }

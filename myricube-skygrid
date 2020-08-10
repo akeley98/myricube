@@ -1,3 +1,0 @@
-#!/bin/sh
-FILE=$(readlink -fv "$0")
-"${FILE}-bin" "$@" || sleep 1000000
