@@ -20,7 +20,7 @@ of what error you see.
 You need OpenGL 4.5, `git`, and `cmake` (for my modified version of
 GLFW).
 
-Git clone the library and run `make -j`. If you don't have the GLM
+Git clone the repo and run `make -j`. If you don't have the GLM
 library you have to clone recursively.
 
 ## Controls
