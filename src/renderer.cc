@@ -1047,11 +1047,13 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         // Now re-upload AABBs if any changed.
-        glNamedBufferSubData(entry->vbo_name, 0,
-                             sizeof entry->aabb_array, entry->aabb_array);
+        if (vbo_dirty) {
+            glNamedBufferSubData(entry->vbo_name, 0,
+                                 sizeof entry->aabb_array, entry->aabb_array);
+            PANIC_IF_GL_ERROR;
+        }
         static_assert(sizeof entry->aabb_array >= 64,
             "Suspiciously small aabb_array, did it get replaced by a ptr?");
-        PANIC_IF_GL_ERROR;
     }
 
     // Render, to the current framebuffer, chunks around the camera
