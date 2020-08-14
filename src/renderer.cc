@@ -314,11 +314,21 @@ class BaseStore
   public:
     uint64_t eviction_count = 0;
     // Return a valid, updated Entry for the given chunk group
-    // extracted from the given world. TODO document templates needed
-    // for this to work.
+    // extracted from the given world. If allow_failure is true,
+    // return null instead of evicting a cache entry if the needed
+    // entry is not found.
     //
-    // If allow_failure is true, return null instead of evicting a
-    // cache entry if the needed entry is not found.
+    // This requires a template parameter providing static functions:
+    //
+    // replace(PositionedChunkGroup, VoxelWorld, Entry*)
+    //
+    //     Fill the Entry with data for this new chunk group,
+    //     initializing OpenGL resources if needed.
+    //
+    // update(PositionedChunkGroup, VoxelWorld, Entry*)
+    //
+    //     Assuming replace was already called with identical
+    //     arguments, above, just re-upload any changed data.
     template <typename EntryFiller>
     Entry* update(PositionedChunkGroup& pcg,
                   VoxelWorld& world,
@@ -336,6 +346,8 @@ class BaseStore
             return entry;
         }
 
+        // Otherwise, either fail if allowed, or evict and replace a
+        // cache entry with data for the new chunk group.
         if (allow_failure) return nullptr;
 
         EntryFiller::replace(pcg, world, entry);
