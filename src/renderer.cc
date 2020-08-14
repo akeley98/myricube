@@ -477,11 +477,6 @@ static const GLushort voxel_unit_box_elements[36] =
     20, 21, 22, 21, 20, 23,
 };
 
-static bool culling_freeze = false;
-static glm::mat4 frozen_vp;
-static glm::ivec3 frozen_eye_group;
-static glm::vec3 frozen_eye_residue;
-
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
 class Renderer
@@ -507,15 +502,10 @@ class Renderer
     {
         if (group(pcg).total_visible == 0) return true;
 
-        glm::mat4 vp = culling_freeze ? frozen_vp : camera.get_residue_vp();
+        glm::mat4 vp = camera.get_residue_vp();
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
-        if (culling_freeze) {
-            eye_group = frozen_eye_group;
-            eye_residue = frozen_eye_residue;
-        } else {
-            camera.get_eye(&eye_group, &eye_residue);
-        }
+        camera.get_eye(&eye_group, &eye_residue);
 
         // Never cull the group the eye is in (this avoids
         // pathological cases e.g. 7 corners behind eye and 1 in front
@@ -1323,18 +1313,6 @@ void gl_first_time_setup()
 void gl_clear()
 {
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-}
-
-void toggle_culling_freeze(Camera& current_camera)
-{
-    if (culling_freeze) {
-        culling_freeze = false;
-    }
-    else {
-        culling_freeze = true;
-        frozen_vp = current_camera.get_residue_vp();
-        current_camera.get_eye(&frozen_eye_group, &frozen_eye_residue);
-    }
 }
 
 static GLuint f32_depth_framebuffer = 0;

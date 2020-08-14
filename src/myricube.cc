@@ -283,14 +283,6 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_chunk_debug", toggle_chunk_debug);
 
-    KeyTarget toggle_culling_freeze_target;
-    toggle_culling_freeze_target.down = [&] (KeyArg) -> bool
-    {
-        toggle_culling_freeze(camera);
-        return true;
-    };
-    window.add_key_target("toggle_culling_freeze", toggle_culling_freeze_target);
-
     KeyTarget unload;
     unload.down = [&] (KeyArg) -> bool
     {

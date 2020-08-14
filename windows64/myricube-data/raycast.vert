@@ -41,12 +41,12 @@ uniform vec3 eye_relative_group_origin;
 uniform int far_plane_squared;
 uniform int raycast_thresh_squared;
 void main() {
-    int low_x = packed_aabb_low & 255;
-    int low_y = (packed_aabb_low >> 8) & 255;
-    int low_z = (packed_aabb_low >> 16) & 255;
-    int high_x = packed_aabb_high & 255;
-    int high_y = (packed_aabb_high >> 8) & 255;
-    int high_z = (packed_aabb_high >> 16) & 255;
+    int low_x = (packed_aabb_low >> X_SHIFT) & 255;
+    int low_y = (packed_aabb_low >> Y_SHIFT) & 255;
+    int low_z = (packed_aabb_low >> Z_SHIFT) & 255;
+    int high_x = (packed_aabb_high >> X_SHIFT) & 255;
+    int high_y = (packed_aabb_high >> Y_SHIFT) & 255;
+    int high_z = (packed_aabb_high >> Z_SHIFT) & 255;
     vec3 f_aabb_low = vec3(low_x, low_y, low_z);
     vec3 sz = vec3(high_x, high_y, high_z) - f_aabb_low;
     vec4 model_space_pos = vec4(unit_box_vertex * sz + f_aabb_low, 1);
