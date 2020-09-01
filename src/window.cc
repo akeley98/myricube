@@ -50,7 +50,7 @@ Window::Window(OnWindowResize on_window_resize_)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    window = glfwCreateWindow(window_x, window_y, "", nullptr, nullptr);
+    window = glfwCreateWindow(window_x, window_y, "Myricube", nullptr, nullptr);
 
     if (window == nullptr) {
         panic("Could not initialize window");
