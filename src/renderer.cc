@@ -1041,15 +1041,10 @@ class Renderer
 
                     if (tex_dirty) {
                         if (cg_voxels == nullptr) {
-                            fprintf(stderr, "Map %i.\n", int(entry->ssbo_name));
-                            // cg_voxels = static_cast<ChunkGroupVoxels*>
-                            //     (glMapNamedBuffer(entry->ssbo_name,
-                            //      GL_WRITE_ONLY));
-                            glBindBuffer(GL_SHADER_STORAGE_BUFFER, entry->ssbo_name);
                             cg_voxels = static_cast<ChunkGroupVoxels*>
-                                (glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY));
+                                (glMapNamedBuffer(entry->ssbo_name,
+                                 GL_WRITE_ONLY));
                             PANIC_IF_GL_ERROR;
-                            fprintf(stderr, "Map done.\n");
                         }
 
                         chunk.texture_dirty = false;
