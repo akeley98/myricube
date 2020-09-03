@@ -77,10 +77,6 @@ class Camera
     glm::mat4 residue_vp_matrix;
 
   public:
-    // Maximum number of 3D voxel textures that may be sent to the GPU
-    // per frame. Mystery parameter.
-    size_t max_raycast_evict = 3;
-
     // Respond if needed to dirty flag and recompute derived data.
     void fix_dirty()
     {

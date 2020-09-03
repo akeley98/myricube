@@ -320,6 +320,7 @@ class BaseStore
             if (cache_set.last_access[i] < min_access) evict_idx = i;
         }
         Entry* entry = &cache_set.slots[evict_idx];
+        fprintf(stderr, "Evict %i %i %i ; %i\n", int(x), int(y), int(z), int(evict_idx));
 
         *p_valid = false;
         cache_set.last_access[evict_idx] = ++access_counter;
@@ -1141,6 +1142,7 @@ class Renderer
     // not be re-drawn.
     void render_world_raycast_step() noexcept
     {
+        fprintf(stderr, "Raycast step.\n");
         RaycastStore& store = camera.get_raycast_store();
         store.eviction_count = 0;
 
@@ -1253,14 +1255,10 @@ class Renderer
         // true AABB.
         //
         // This is a bit of an experimental after-the-fact hack but
-        // the allow_defer and deferred_pcg variables are used to
-        //
-        // A. Throttle the number of RaycastStore updates done subject
-        //    to the limits of camera.max_raycast_evict.
-        //
-        // B. Put some time between updating a missing RaycastEntry and
-        //    drawing its corresponding chunk group. This /in principle/
-        //    prevents texture updates from stalling the GPU so much.
+        // the allow_defer and deferred_pcg variables are used to put
+        // some time between updating a missing RaycastEntry and
+        // drawing its corresponding chunk group. This /in principle/
+        // prevents texture updates from stalling the GPU so much.
         auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
         {
             RaycastEntry* entry = nullptr;
@@ -1277,16 +1275,12 @@ class Renderer
                     // only if no modification is needed.
                     if (status != GL_CONDITION_SATISFIED) {
                         entry = store.get_if_not_dirty<Renderer>(pcg, world);
-                        if (entry == nullptr) {
-                            deferred_pcg.push_back(&pcg);
-                            return;
-                        }
                     }
                     // Otherwise delete the sync and update as normal.
                     else {
                         glDeleteSync(store.write_ptr_sync);
                         store.write_ptr_sync = nullptr;
-                        entry = store.update<Renderer>(pcg, world, allow_defer);
+                        entry = store.update<Renderer>(pcg, world);
                     }
                 }
                 // Unconditionally wait (until we really lose patience) if
@@ -1295,23 +1289,21 @@ class Renderer
                     glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
                     glDeleteSync(store.write_ptr_sync);
                     store.write_ptr_sync = nullptr;
-                    entry = store.update<Renderer>(pcg, world, allow_defer);
+                    entry = store.update<Renderer>(pcg, world);
                 }
                 PANIC_IF_GL_ERROR;
             }
             else {
-                entry = store.update<Renderer>(pcg, world, allow_defer);
+                entry = store.update<Renderer>(pcg, world);
             }
 
-            // Reason A for non-readiness: we allowed deferring, and
-            // this chunk group wasn't yet in the RaycastStore
-            // (i.e. wasn't uploaded to device memory).
+            // Reason A for non-readiness: nullptr -- either the sync
+            // is still busy and we couldn't upload the dirty data we
+            // need, or we allowed deferring, and this chunk group
+            // wasn't yet in the RaycastStore (i.e. wasn't uploaded to
+            // device memory).
             if (entry == nullptr) {
-                assert(allow_defer);
-                if (deferred_pcg.size() < camera.max_raycast_evict) {
-                    store.update<Renderer>(pcg, world, false);
-                    deferred_pcg.push_back(&pcg);
-                }
+                deferred_pcg.push_back(&pcg);
                 return;
             }
             // Reason B: voxels were modified and we're giving the
