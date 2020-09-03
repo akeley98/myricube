@@ -416,7 +416,15 @@ class BaseStore
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
-class RaycastStore : public BaseStore<RaycastEntry, 3, 12> { };
+
+class RaycastStore : public BaseStore<RaycastEntry, 3, 12>
+{
+  public:
+    // Fragile thingie to fix AZDO synchronization problems. If this
+    // is non-null, we have wait on it before trying to modify this
+    // RaycastStore.
+    GLsync write_ptr_sync = nullptr;
+};
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
 // stretched and positioned to the right shape and position in space.
@@ -1217,6 +1225,19 @@ class Renderer
         //    prevents texture updates from stalling the GPU so much.
         auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
         {
+            // Part 1/2 of synchronization: need to wait for previous
+            // frame's raycast step to finish before attempting to
+            // update any RaycastEntry.
+            //
+            // TODO: Allow groups that don't actually need an `update`
+            // to proceed?
+            if (store.write_ptr_sync != nullptr) {
+                glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
+                glDeleteSync(store.write_ptr_sync);
+                store.write_ptr_sync = nullptr;
+                PANIC_IF_GL_ERROR;
+            }
+
             // if (group(pcg).total_visible == 0) return;
             RaycastEntry* entry = store.update<Renderer>(
                 pcg, world, allow_defer);
@@ -1327,6 +1348,10 @@ class Renderer
         for (PositionedChunkGroup* p_pcg : deferred_pcg) {
             draw_group(*p_pcg, false);
         }
+
+        // Part 2/2 for avoiding AZDO write-while-buffer-used problem.
+        store.write_ptr_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        PANIC_IF_GL_ERROR;
 
         glBindVertexArray(0);
     }
