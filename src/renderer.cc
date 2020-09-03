@@ -226,13 +226,19 @@ struct RaycastEntry
     // voxels on the GPU. 0 when not yet allocated.
     GLuint ssbo_name = 0;
 
-    // TODO: Persistent map.
-    volatile ChunkGroupVoxels* mapped_ssbo = nullptr;
+    // Persistent write-only mapping of the SSBO.
+    ChunkGroupVoxels* ssbo_write_ptr = nullptr;
+
+    // Set to true when we write through ssbo_write_ptr (and thus need
+    // to flush the SSBO). This is pretty fragile; I'm not really sure
+    // if there's any non-gimmick way to use C++ to enforce this better.
+    bool ssbo_dirty = false;
 
     RaycastEntry() = default;
 
     ~RaycastEntry()
     {
+        if (ssbo_write_ptr != nullptr) glUnmapNamedBuffer(ssbo_name);
         GLuint buffers[2] = { vbo_name, ssbo_name };
         glDeleteBuffers(2, buffers);
         vbo_name = 0;
@@ -251,6 +257,7 @@ void swap(RaycastEntry& left, RaycastEntry& right)
     swap(left.aabb_array, right.aabb_array);
     swap(left.vbo_name, right.vbo_name);
     swap(left.ssbo_name, right.ssbo_name);
+    swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
 }
 
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
@@ -977,7 +984,7 @@ class Renderer
         entry->world_id = world.id();
         entry->group_coord = group_coord(pcg);
 
-        // I only allocate
+        // I only allocate the buffers for now.
         if (entry->vbo_name == 0) {
             glCreateBuffers(1, &entry->vbo_name);
             auto flags = GL_DYNAMIC_STORAGE_BIT;
@@ -988,16 +995,22 @@ class Renderer
 
         if (entry->ssbo_name == 0) {
             glCreateBuffers(1, &entry->ssbo_name);
-            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            auto flags = GL_MAP_PERSISTENT_BIT
+                       | GL_MAP_WRITE_BIT;
             auto sz = sizeof(ChunkGroupVoxels);
-            glNamedBufferData(entry->ssbo_name, sz, nullptr, GL_DYNAMIC_DRAW);
+            glNamedBufferStorage(entry->ssbo_name, sz, nullptr, flags);
+            flags = GL_MAP_WRITE_BIT
+                  | GL_MAP_PERSISTENT_BIT
+                  | GL_MAP_FLUSH_EXPLICIT_BIT;
+            void* mapping = glMapNamedBufferRange(
+                entry->ssbo_name, 0, sizeof(ChunkGroupVoxels), flags);
+            entry->ssbo_write_ptr = static_cast<ChunkGroupVoxels*>(mapping);
             PANIC_IF_GL_ERROR;
-            // TODO: Persistent mapped buffers.
         }
 
-        // Then, again parasitically depend on the update RaycastEntry
-        // function to actually fill the buffers with data, using an
-        // overriding always_dirty flag.
+        // Then, parasitically depend on the update RaycastEntry
+        // function to actually fill the buffers with data, again
+        // using an overriding always_dirty flag.
         update(pcg, world, entry, true);
     }
 
@@ -1016,8 +1029,8 @@ class Renderer
         assert(entry->vbo_name != 0);
         assert(entry->ssbo_name != 0);
 
-        // TODO: Persistent mapped buffers.
-        ChunkGroupVoxels* cg_voxels = nullptr;
+        ChunkGroupVoxels* cg_voxels = entry->ssbo_write_ptr;
+        assert(cg_voxels != nullptr);
 
         // I just need to visit the chunks in one pass and upload
         // dirty chunks and AABBs (but defer upload of AABB to
@@ -1039,14 +1052,14 @@ class Renderer
                             PackedAABB(aabb_low, aabb_high);
                     }
 
+                    // Write any changed chunks' voxels to the mapped
+                    // 3D voxel array. I'm supposed to use
+                    // double-buffering and stuff to avoid modifying a
+                    // buffer while it's still in use, but I can't
+                    // afford that, so things glitch for a frame
+                    // here-and-there :/
                     if (tex_dirty) {
-                        if (cg_voxels == nullptr) {
-                            cg_voxels = static_cast<ChunkGroupVoxels*>
-                                (glMapNamedBuffer(entry->ssbo_name,
-                                 GL_WRITE_ONLY));
-                            PANIC_IF_GL_ERROR;
-                        }
-
+                        entry->ssbo_dirty = true;
                         chunk.texture_dirty = false;
                         for (int zl = 0; zl < chunk_size; ++zl) {
                             int z = zh * chunk_size + zl;
@@ -1065,8 +1078,6 @@ class Renderer
             }
         }
         PANIC_IF_GL_ERROR;
-        // TODO
-        if (cg_voxels) glUnmapNamedBuffer(entry->ssbo_name);
 
         // Now re-upload AABBs if any changed.
         if (vbo_dirty) {
@@ -1185,6 +1196,9 @@ class Renderer
             chunk_group_voxels_binding_index);
         PANIC_IF_GL_ERROR;
 
+        // Chunk groups whose RaycastEntry (voxel data storage) weren't
+        // quite ready are pushed onto this naughty list and rendered
+        // in the second pass.
         std::vector<PositionedChunkGroup*> deferred_pcg;
 
         // My plan is to use instanced rendering to draw the chunk AABBs
@@ -1207,6 +1221,9 @@ class Renderer
             RaycastEntry* entry = store.update<Renderer>(
                 pcg, world, allow_defer);
 
+            // Reason A for non-readiness: this chunk group wasn't yet
+            // in the RaycastStore (i.e. wasn't uploaded to device
+            // memory).
             if (entry == nullptr) {
                 if (deferred_pcg.size() < camera.max_raycast_evict) {
                     store.update<Renderer>(pcg, world, false);
@@ -1214,6 +1231,13 @@ class Renderer
                 }
                 return;
             }
+            // Reason B: voxels were modified and we're giving the
+            // driver some time to stage and upload the modified voxel
+            // SSBO.
+            if (entry->ssbo_dirty and allow_defer) {
+                deferred_pcg.push_back(&pcg);
+            }
+
             assert(entry->ssbo_name != 0);
             assert(entry->vbo_name != 0);
 
@@ -1260,11 +1284,19 @@ class Renderer
             PANIC_IF_GL_ERROR;
 
             // Wire up this chunk group's SSBO (voxel array) into the
-            // SSBO index reserved for this purpose.
+            // SSBO index reserved for this purpose. We check here to
+            // see if the SSBO needs to be flushed.
             glBindBufferBase(
                 GL_SHADER_STORAGE_BUFFER,
                 chunk_group_voxels_binding_index,
                 entry->ssbo_name);
+            PANIC_IF_GL_ERROR;
+            if (entry->ssbo_dirty) {
+                glFlushMappedNamedBufferRange(
+                    entry->ssbo_name, 0, sizeof(ChunkGroupVoxels));
+                entry->ssbo_dirty = false;
+                PANIC_IF_GL_ERROR;
+            }
 
             // Draw all edge_chunks^3 chunks in the chunk group.
             auto instances = edge_chunks * edge_chunks * edge_chunks;
