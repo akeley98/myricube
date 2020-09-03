@@ -24,7 +24,6 @@ namespace myricube {
 // Vertex shader input indices.
 constexpr int packed_color_idx = 0;
 constexpr int packed_vertex_idx = 1;
-
 constexpr int packed_aabb_low_idx = 0;
 constexpr int packed_aabb_high_idx = 1;
 constexpr int unit_box_vertex_idx = 2;
@@ -32,23 +31,44 @@ constexpr int unit_box_face_bit_idx = 3; // Used in mesh renderer.
 constexpr int unit_box_normal_idx = 3;   // Used in raycast renderer.
 constexpr int unit_box_uv_idx = 4;
 
-// bit assignments for packed verts.
-constexpr int x_shift = 0;
-constexpr int y_shift = 8;
-constexpr int z_shift = 16;
+// bit assignments for packed colors. At the moment, these names are
+// not used everywhere; not safe to change.
+constexpr uint32_t red_shift = 16;
+constexpr uint32_t green_shift = 8;
+constexpr uint32_t blue_shift = 0;
+constexpr uint32_t visible_bit = (1 << 24);
 
-constexpr int pos_x_face_bit = (1 << 24);
-constexpr int neg_x_face_bit = (1 << 25);
-constexpr int pos_y_face_bit = (1 << 26);
-constexpr int neg_y_face_bit = (1 << 27);
-constexpr int pos_z_face_bit = (1 << 28);
-constexpr int neg_z_face_bit = (1 << 29);
-constexpr int all_face_bits = pos_x_face_bit
+// bit assignments for packed verts.
+constexpr uint32_t x_shift = 0;
+constexpr uint32_t y_shift = 8;
+constexpr uint32_t z_shift = 16;
+constexpr uint32_t pos_x_face_bit = (1 << 24);
+constexpr uint32_t neg_x_face_bit = (1 << 25);
+constexpr uint32_t pos_y_face_bit = (1 << 26);
+constexpr uint32_t neg_y_face_bit = (1 << 27);
+constexpr uint32_t pos_z_face_bit = (1 << 28);
+constexpr uint32_t neg_z_face_bit = (1 << 29);
+constexpr uint32_t all_face_bits = pos_x_face_bit
                             | neg_x_face_bit
                             | pos_y_face_bit
                             | neg_y_face_bit
                             | pos_z_face_bit
                             | neg_z_face_bit;
+
+// Book-keeping for my plan to deliver arrays of voxel data to raycast
+// shaders using shader storage buffer objects.
+
+// glShaderStorageBlock argument 2 (storageBlockIndex).
+constexpr int chunk_group_voxels_program_index = 0;
+
+// glShaderStorageBlock argument 3 (storageBlockBinding).
+constexpr int chunk_group_voxels_binding_index = 0;
+
+// Data layout of said SSBO.
+struct ChunkGroupVoxels
+{
+    uint32_t voxel_colors[group_size][group_size][group_size];
+};
 
 // Return a vector of #define lines and stuff (not newline terminated).
 inline std::vector<std::string> get_preamble(std::string filename)
@@ -68,6 +88,10 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define PACKED_AABB_LOW_IDX " + std::to_string(packed_aabb_low_idx),
         "#define PACKED_AABB_HIGH_IDX " + std::to_string(packed_aabb_high_idx),
         "#define FOG_SCALAR 1.125",
+        "#define RED_SHIFT " + std::to_string(red_shift),
+        "#define GREEN_SHIFT " + std::to_string(green_shift),
+        "#define BLUE_SHIFT " + std::to_string(blue_shift),
+        "#define VISIBLE_BIT " + std::to_string(visible_bit),
         "#define X_SHIFT " + std::to_string(x_shift),
         "#define Y_SHIFT " + std::to_string(y_shift),
         "#define Z_SHIFT " + std::to_string(z_shift),
@@ -77,6 +101,8 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define NEG_Y_FACE_BIT " + std::to_string(neg_y_face_bit),
         "#define POS_Z_FACE_BIT " + std::to_string(pos_z_face_bit),
         "#define NEG_Z_FACE_BIT " + std::to_string(neg_z_face_bit),
+        "#define CHUNK_GROUP_VOXELS_PROGRAM_INDEX "
+            + std::to_string(chunk_group_voxels_program_index),
     };
 }
 

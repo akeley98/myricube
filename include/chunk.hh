@@ -16,17 +16,7 @@ namespace myricube {
 class Renderer;
 class ChunkGroup;
 
-// A texel of the 3D texture used to represent the voxel grid on the GPU.
-//
-// This will probably become 8-bit palettized color if I really start
-// to optimize aggressively.
-struct VoxelTexel
-{
-    uint8_t red = 0, green = 0, blue = 0, alpha = 0;
-};
-
-// CPU-side Voxel storage. Just a color for now, but more may come
-// later (hence the distinction from the VoxelTexel struct).
+// CPU-side Voxel storage. Just a color for now.
 struct Voxel
 {
     bool visible = false;
@@ -44,20 +34,9 @@ struct Voxel
         green = green_;
         blue = blue_;
     }
-
-    explicit operator VoxelTexel() const
-    {
-        VoxelTexel t;
-        t.red = red;
-        t.green = green;
-        t.blue = blue;
-        t.alpha = visible ? 255 : 0;
-        return t;
-    }
 };
 
-// Small cubic collection of voxels, with its associated (copy of) the
-// 3D texture representing it on the graphics card.
+// Small cubic collection of voxels.
 class Chunk
 {
     friend class Renderer;
@@ -82,9 +61,6 @@ class Chunk
     // Array of voxels within the chunk, in [z][y][x] order (to match
     // GPU texture).
     Voxel voxel_array[chunk_size][chunk_size][chunk_size];
-
-    // Mirror image of voxel_array, but with texels instead.
-    VoxelTexel voxel_texture[chunk_size][chunk_size][chunk_size];
 
     // {xyz}_visible[n] is the number of visible voxels in this chunk
     // with {xyz} == n.
@@ -141,7 +117,6 @@ class Chunk
         z_visible[z] += delta;
         total_visible += delta;
         voxel_array[z][y][x] = v;
-        voxel_texture[z][y][x] = VoxelTexel(v);
         return delta;
     }
 

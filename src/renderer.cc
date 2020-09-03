@@ -22,6 +22,15 @@ namespace myricube {
 
 bool chunk_debug = false;
 
+// Extract color from voxel and pack as 32-bit integer.
+inline uint32_t to_packed_color(Voxel v)
+{
+    return uint32_t(v.blue) << blue_shift
+         | uint32_t(v.green) << green_shift
+         | uint32_t(v.red) << red_shift
+         | (v.visible ? visible_bit : 0);
+}
+
 // My new plan for the GPU voxel mesh: each visible voxel will be
 // represented by ONE vertex in a VBO; instanced rendering will
 // transform this vertex into an actual cube. This vertex encodes, in
@@ -40,23 +49,19 @@ struct MeshVoxelVertex
 
     MeshVoxelVertex() = default;
 
-    // Pack this vertex given the vertex's residue coordinates
-    // (i.e. local coordinate in coordinate system of a chunk group)
-    // and 24-bit color.
+    // Given a _visible_ voxel and its residue coordinate, return the
+    // VBO vertex carrying this information.
     //
     // This constructor defines the packed layout.
-    MeshVoxelVertex(uint8_t x, uint8_t y, uint8_t z,
-                    uint8_t red, uint8_t green, uint8_t blue,
-                    uint32_t visible_face_bits)
+    MeshVoxelVertex(Voxel v, uint8_t x, uint8_t y, uint8_t z)
     {
         static_assert(group_size <= 255,
                       "group too big for 8-bit unsigned coordinates.");
-        assert(visible_face_bits == (visible_face_bits & all_face_bits));
         packed_residue_face_bits = uint32_t(x) << x_shift
                                  | uint32_t(y) << y_shift
-                                 | uint32_t(z) << z_shift
-                                 | visible_face_bits;
-        packed_color = blue | uint32_t(green) << 8 | uint32_t(red) << 16;
+                                 | uint32_t(z) << z_shift;
+        packed_color = to_packed_color(v);
+        assert(packed_color & visible_bit);
     }
 };
 
@@ -194,10 +199,10 @@ struct PackedAABB
     }
 };
 
-// All voxels within a chunk group share a single 3D texture on the
-// GPU, as well as one VBO used to store the array of AABB for the
-// chunks within the group. This is the handle for the GPU data needed
-// to raycast one chunk group.
+// All voxels within a chunk group share a single 3D voxel array on
+// the GPU (stored as a SSBO), as well as one VBO used to store the
+// array of AABB for the chunks within the group. This is the handle
+// for the GPU data needed to raycast one chunk group.
 struct RaycastEntry
 {
     // World ID and group coordinate of the chunk group this texture
@@ -217,18 +222,21 @@ struct RaycastEntry
     // allocated.
     GLuint vbo_name = 0;
 
-    // OpenGL name for the 3D texture representing this group of
+    // OpenGL name for the 3D array (SSBO) representing this group of
     // voxels on the GPU. 0 when not yet allocated.
-    GLuint texture_name = 0;
+    GLuint ssbo_name = 0;
+
+    // TODO: Persistent map.
+    volatile ChunkGroupVoxels* mapped_ssbo = nullptr;
 
     RaycastEntry() = default;
 
     ~RaycastEntry()
     {
-        glDeleteBuffers(1, &vbo_name);
-        glDeleteTextures(1, &texture_name);
+        GLuint buffers[2] = { vbo_name, ssbo_name };
+        glDeleteBuffers(2, buffers);
         vbo_name = 0;
-        texture_name = 0;
+        ssbo_name = 0;
         world_id = 0;
     }
 
@@ -242,7 +250,7 @@ void swap(RaycastEntry& left, RaycastEntry& right)
     swap(left.group_coord, right.group_coord);
     swap(left.aabb_array, right.aabb_array);
     swap(left.vbo_name, right.vbo_name);
-    swap(left.texture_name, right.texture_name);
+    swap(left.ssbo_name, right.ssbo_name);
 }
 
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
@@ -654,14 +662,11 @@ class Renderer
             Voxel v = chunk(coord);
             if (!v.visible) return;
 
-            auto r = v.red;
-            auto g = v.green;
-            auto b = v.blue;
             uint8_t x = uint8_t(coord.x) + chunk_residue.x;
             uint8_t y = uint8_t(coord.y) + chunk_residue.y;
             uint8_t z = uint8_t(coord.z) + chunk_residue.z;
 
-            MeshVoxelVertex vert(x, y, z, r, g, b, 0);
+            MeshVoxelVertex vert(v, x, y, z);
 
             // Check which of the six faces are visible.
             if (!visible_block(coord + glm::ivec3(-1, 0, 0))) {
@@ -963,8 +968,8 @@ class Renderer
 
     // Now time to write the AABB-raycasting renderer. Here goes...
 
-    // Fill the given RaycastEntry with the 3D texture + AABB
-    // for the given chunk group from the given world.
+    // Fill the given RaycastEntry with the 3D array + AABBs for
+    // the given chunk group from the given world.
     static void replace(PositionedChunkGroup& pcg,
                         VoxelWorld& world,
                         RaycastEntry* entry)
@@ -972,6 +977,7 @@ class Renderer
         entry->world_id = world.id();
         entry->group_coord = group_coord(pcg);
 
+        // I only allocate
         if (entry->vbo_name == 0) {
             glCreateBuffers(1, &entry->vbo_name);
             auto flags = GL_DYNAMIC_STORAGE_BIT;
@@ -980,27 +986,18 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
 
-        if (entry->texture_name == 0) {
-            glGenTextures(1, &entry->texture_name);
-            GLint texture_name = entry->texture_name;
-
-            glBindTexture(GL_TEXTURE_3D, texture_name);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        if (entry->ssbo_name == 0) {
+            glCreateBuffers(1, &entry->ssbo_name);
+            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            auto sz = sizeof(ChunkGroupVoxels);
+            glNamedBufferData(entry->ssbo_name, sz, nullptr, GL_DYNAMIC_DRAW);
             PANIC_IF_GL_ERROR;
-            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA,
-                         group_size, group_size, group_size, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            PANIC_IF_GL_ERROR;
-            static_assert(sizeof(VoxelTexel) == 4,
-                          "Need to change texture format to match VoxelTexel");
+            // TODO: Persistent mapped buffers.
         }
 
-        // Again, I parasitically depend on the update RaycastEntry
-        // function using an overriding always_dirty flag.
+        // Then, again parasitically depend on the update RaycastEntry
+        // function to actually fill the buffers with data, using an
+        // overriding always_dirty flag.
         update(pcg, world, entry, true);
     }
 
@@ -1016,20 +1013,20 @@ class Renderer
     {
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
-        assert(entry->texture_name != 0);
         assert(entry->vbo_name != 0);
+        assert(entry->ssbo_name != 0);
 
-        // This is actually a hell of a lot easier than the MeshEntry.
+        // TODO: Persistent mapped buffers.
+        ChunkGroupVoxels* cg_voxels = nullptr;
+
         // I just need to visit the chunks in one pass and upload
-        // dirty sub-textures and AABBs (but defer upload of AABB to
+        // dirty chunks and AABBs (but defer upload of AABB to
         // later to reduce calls; the vbo_dirty flag is useful here).
         bool vbo_dirty = false;
-        auto texture_name = entry->texture_name;
-        for (int z = 0; z < edge_chunks; ++z) {
-            for (int y = 0; y < edge_chunks; ++y) {
-                for (int x = 0; x < edge_chunks; ++x) {
-                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
+        for (int zh = 0; zh < edge_chunks; ++zh) {
+            for (int yh = 0; yh < edge_chunks; ++yh) {
+                for (int xh = 0; xh < edge_chunks; ++xh) {
+                    Chunk& chunk = group(pcg).chunk_array[zh][yh][xh];
                     bool tex_dirty = always_dirty | chunk.texture_dirty;
                     bool aabb_dirty = always_dirty | chunk.aabb_gpu_dirty;
                     vbo_dirty |= aabb_dirty;
@@ -1038,25 +1035,43 @@ class Renderer
                         glm::ivec3 aabb_low, aabb_high;
                         chunk.get_aabb(&aabb_low, &aabb_high);
                         chunk.aabb_gpu_dirty = false;
-                        entry->aabb_array[z][y][x] =
+                        entry->aabb_array[zh][yh][xh] =
                             PackedAABB(aabb_low, aabb_high);
                     }
 
                     if (tex_dirty) {
+                        if (cg_voxels == nullptr) {
+                            fprintf(stderr, "Map %i.\n", int(entry->ssbo_name));
+                            // cg_voxels = static_cast<ChunkGroupVoxels*>
+                            //     (glMapNamedBuffer(entry->ssbo_name,
+                            //      GL_WRITE_ONLY));
+                            glBindBuffer(GL_SHADER_STORAGE_BUFFER, entry->ssbo_name);
+                            cg_voxels = static_cast<ChunkGroupVoxels*>
+                                (glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY));
+                            PANIC_IF_GL_ERROR;
+                            fprintf(stderr, "Map done.\n");
+                        }
+
                         chunk.texture_dirty = false;
-                        glTextureSubImage3D(
-                            texture_name, 0,
-                            residue.x, residue.y, residue.z,
-                            chunk_size, chunk_size, chunk_size,
-                            GL_RGBA, GL_UNSIGNED_BYTE,
-                            chunk.voxel_texture);
+                        for (int zl = 0; zl < chunk_size; ++zl) {
+                            int z = zh * chunk_size + zl;
+                            for (int yl = 0; yl < chunk_size; ++yl) {
+                                int y = yh * chunk_size + yl;
+                                for (int xl = 0; xl < chunk_size; ++xl) {
+                                    int x = xh * chunk_size + xl;
+                                    Voxel v = chunk.voxel_array[zl][yl][xl];
+                                    cg_voxels->voxel_colors[z][y][x] =
+                                        to_packed_color(v);
+                                }
+                            }
+                        }
                     }
-                    static_assert(sizeof(VoxelTexel) == 4,
-                          "Need to change texture format to match VoxelTexel");
                 }
             }
         }
         PANIC_IF_GL_ERROR;
+        // TODO
+        if (cg_voxels) glUnmapNamedBuffer(entry->ssbo_name);
 
         // Now re-upload AABBs if any changed.
         if (vbo_dirty) {
@@ -1098,19 +1113,17 @@ class Renderer
         static GLint far_plane_squared_id;
         static GLint raycast_thresh_squared_id;
         static GLint fog_enabled_id;
-        static GLint chunk_blocks_id;
         static GLint chunk_debug_id;
 
         if (vao == 0) {
             program_id = make_program({
-                "raycast.vert", "raycast.frag", "fog_border.frag" });
+                "raycast.vert", "raycast.frag",
+                "fog_border.frag", "ssbo.frag" });
             mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_id >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
                 "eye_relative_group_origin");
             assert(eye_relative_group_origin_id >= 0);
-            chunk_blocks_id = glGetUniformLocation(program_id, "chunk_blocks");
-            assert(chunk_blocks_id >= 0);
             chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
             assert(chunk_debug_id >= 0);
             far_plane_squared_id = glGetUniformLocation(program_id,
@@ -1162,13 +1175,19 @@ class Renderer
 
         glBindVertexArray(vao);
         glUseProgram(program_id);
+
+        // Set uniforms unchanged per-chunk-group.
         glUniform1i(chunk_debug_id, chunk_debug);
         glUniform1i(fog_enabled_id, camera.get_fog());
-        glActiveTexture(GL_TEXTURE0);
-        glUniform1i(chunk_blocks_id, 0);
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
         auto raycast_thr = camera.get_raycast_threshold();
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
+
+        // Hook up the SSBO binding to the SSBO index that will
+        // be used to deliver voxel data.
+        glShaderStorageBlockBinding(program_id,
+            chunk_group_voxels_program_index,
+            chunk_group_voxels_binding_index);
         PANIC_IF_GL_ERROR;
 
         std::vector<PositionedChunkGroup*> deferred_pcg;
@@ -1200,10 +1219,8 @@ class Renderer
                 }
                 return;
             }
-            assert(entry->texture_name != 0);
+            assert(entry->ssbo_name != 0);
             assert(entry->vbo_name != 0);
-
-            glBindTexture(GL_TEXTURE_3D, entry->texture_name);
 
             // The view matrix only takes into account the eye's
             // residue coordinate, so the model position of the group
@@ -1246,6 +1263,13 @@ class Renderer
             glEnableVertexAttribArray(packed_aabb_high_idx);
             glVertexAttribDivisor(packed_aabb_high_idx, 1);
             PANIC_IF_GL_ERROR;
+
+            // Wire up this chunk group's SSBO (voxel array) into the
+            // SSBO index reserved for this purpose.
+            glBindBufferBase(
+                GL_SHADER_STORAGE_BUFFER,
+                chunk_group_voxels_binding_index,
+                entry->ssbo_name);
 
             // Draw all edge_chunks^3 chunks in the chunk group.
             auto instances = edge_chunks * edge_chunks * edge_chunks;

@@ -33,9 +33,10 @@ flat in ivec3 aabb_low;
 flat in ivec3 aabb_high;
 flat in vec3 floor_ceil_fudge;
 uniform vec3 eye_relative_group_origin;
-uniform sampler3D chunk_blocks;
 uniform bool chunk_debug;
 out vec4 color;
+
+vec4 read_group_voxel(ivec3 residue);
 
 vec4 fog_border_color(
     vec3 base_color,
@@ -71,7 +72,7 @@ void main()
                             : floor(init_coord.x));
     int x_end = xm > 0 ? aabb_high.x : aabb_low.x;
     int x_step = xm > 0 ? 1 : -1;
-    float x_fudge = xm > 0 ? .25 : -.25;
+    float x_bias = xm > 0 ? .25 : -.25;
     for (int x = x_init; x != x_end; x += x_step) {
         if (iter++ >= 255) { color = vec4(1,0,1,1); return; }
         float t = (x - x0) / xm;
@@ -79,8 +80,8 @@ void main()
         float z = z0 + zm * t;
         if (y < aabb_low.y || y > aabb_high.y) break;
         if (z < aabb_low.z || z > aabb_high.z) break;
-        vec3 texcoord = vec3(x + x_fudge, y, z) * rcp;
-        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
+        ivec3 texcoord = ivec3(floor(vec3(x + x_bias, y, z)));
+        vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;
@@ -96,7 +97,7 @@ void main()
                             : floor(init_coord.y));
     int y_end = ym > 0 ? aabb_high.y : aabb_low.y;
     int y_step = ym > 0 ? 1 : -1;
-    float y_fudge = ym > 0 ? .25 : -.25;
+    float y_bias = ym > 0 ? .25 : -.25;
     for (int y = y_init; y != y_end; y += y_step) {
         if (iter++ >= 255) { color = vec4(1,0,1,1); return; }
         float t = (y - y0) / ym;
@@ -104,8 +105,8 @@ void main()
         float z = z0 + zm * t;
         if (x < aabb_low.x || x > aabb_high.x) break;
         if (z < aabb_low.z || z > aabb_high.z) break;
-        vec3 texcoord = vec3(x, y + y_fudge, z) * rcp;
-        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
+        ivec3 texcoord = ivec3(floor(vec3(x, y + y_bias, z)));
+        vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;
@@ -121,7 +122,7 @@ void main()
                             : floor(init_coord.z));
     int z_end = zm > 0 ? aabb_high.z : aabb_low.z;
     int z_step = zm > 0 ? 1 : -1;
-    float z_fudge = zm > 0 ? .25 : -.25;
+    float z_bias = zm > 0 ? .25 : -.25;
     for (int z = z_init; z != z_end; z += z_step) {
         if (iter++ >= 255) { color = vec4(1,0,1,1); return; }
         float t = (z - z0) / zm;
@@ -129,8 +130,8 @@ void main()
         float y = y0 + ym * t;
         if (x < aabb_low.x || x > aabb_high.x) break;
         if (y < aabb_low.y || y > aabb_high.y) break;
-        vec3 texcoord = vec3(x, y, z + z_fudge) * rcp;
-        vec4 lookup_color = textureLod(chunk_blocks, texcoord, 0);
+        ivec3 texcoord = ivec3(floor(vec3(x, y, z + z_bias)));
+        vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
             if (best_t > t) {
                 best_t = t;
