@@ -8,12 +8,13 @@
 
 namespace myricube {
 
-class Skygrid : public App
+template <int Radius, int Spacing>
+class BaseSkygrid : public App
 {
     VoxelWorld world;
 
   public:
-    Skygrid()
+    BaseSkygrid()
     {
         std::mt19937 rng;
 
@@ -26,10 +27,9 @@ class Skygrid : public App
             return Voxel(red, green, blue);
         };
 
-        constexpr int radius = 360;
-        for (int z = -radius; z <= radius; z += 4) {
-            for (int y = -radius; y <= radius; y += 4) {
-                for (int x = -radius; x <= radius; x += 4) {
+        for (int z = -Radius; z <= Radius; z += Spacing) {
+            for (int y = -Radius; y <= Radius; y += Spacing) {
+                for (int x = -Radius; x <= Radius; x += Spacing) {
                     world.set(glm::ivec3(x,y,z), random_voxel());
                 }
             }
@@ -42,6 +42,10 @@ class Skygrid : public App
     }
 };
 
+class Skygrid : public BaseSkygrid<360, 4> {};
 MYRICUBE_ADD_APP(Skygrid)
+
+class SparseGrid : public BaseSkygrid<600, 32> {};
+MYRICUBE_ADD_APP(SparseGrid)
 
 }

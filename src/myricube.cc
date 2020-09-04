@@ -283,6 +283,15 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_chunk_debug", toggle_chunk_debug);
 
+    extern bool evict_stats_debug;
+    KeyTarget toggle_evict_stats_debug;
+    toggle_evict_stats_debug.down = [&] (KeyArg) -> bool
+    {
+        evict_stats_debug = !evict_stats_debug;
+        return true;
+    };
+    window.add_key_target("toggle_evict_stats_debug", toggle_evict_stats_debug);
+
     KeyTarget unload;
     unload.down = [&] (KeyArg) -> bool
     {

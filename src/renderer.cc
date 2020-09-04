@@ -20,7 +20,9 @@
 
 namespace myricube {
 
+// Hacky debug variables.
 bool chunk_debug = false;
+bool evict_stats_debug = false;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -132,18 +134,20 @@ struct MeshEntry
         world_id = 0;
     }
 
-    // Disable moves, but, see swap below. (Harkens back to C++98 hacks :P )
-    MeshEntry(MeshEntry&&) = delete;
-};
+    MeshEntry(MeshEntry&& other)
+    {
+        swap(*this, other);
+    }
 
-void swap(MeshEntry& left, MeshEntry& right)
-{
-    using std::swap;
-    swap(left.world_id, right.world_id);
-    swap(left.group_coord, right.group_coord);
-    swap(left.mesh_array, right.mesh_array);
-    swap(left.vbo_name, right.vbo_name);
-}
+    friend void swap(MeshEntry& left, MeshEntry& right)
+    {
+        using std::swap;
+        swap(left.world_id, right.world_id);
+        swap(left.group_coord, right.group_coord);
+        swap(left.mesh_array, right.mesh_array);
+        swap(left.vbo_name, right.vbo_name);
+    }
+};
 
 // For memory efficiency, the AABB of a chunk is stored in packed
 // format on the GPU.
@@ -246,19 +250,22 @@ struct RaycastEntry
         world_id = 0;
     }
 
-    RaycastEntry(RaycastEntry&&) = delete;
-};
+    RaycastEntry(RaycastEntry&& other)
+    {
+        swap(*this, other);
+    }
 
-void swap(RaycastEntry& left, RaycastEntry& right)
-{
-    using std::swap;
-    swap(left.world_id, right.world_id);
-    swap(left.group_coord, right.group_coord);
-    swap(left.aabb_array, right.aabb_array);
-    swap(left.vbo_name, right.vbo_name);
-    swap(left.ssbo_name, right.ssbo_name);
-    swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
-}
+    friend void swap(RaycastEntry& left, RaycastEntry& right)
+    {
+        using std::swap;
+        swap(left.world_id, right.world_id);
+        swap(left.group_coord, right.group_coord);
+        swap(left.aabb_array, right.aabb_array);
+        swap(left.vbo_name, right.vbo_name);
+        swap(left.ssbo_name, right.ssbo_name);
+        swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
+    }
+};
 
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
 // structs for chunk groups near the camera. They are stored in a
@@ -277,6 +284,9 @@ class BaseStore
     // eviction algorithm.
     uint64_t access_counter = 0;
 
+    // Used for tracking how many cache entries were read for this frame.
+    uint64_t frame_begin_access_counter = 0;
+
     // Cache is (modulus x modulus x modulus x Assoc) in size.
     uint32_t modulus = DefaultModulus;
 
@@ -286,6 +296,15 @@ class BaseStore
     // Declared after modulus defensively.
     std::unique_ptr<CacheSet[]> cache_sets {
         new CacheSet[DefaultModulus * DefaultModulus * DefaultModulus] };
+
+    // Fully-associative victim cache. Evicted Entry objects are
+    // swapped into here.
+    struct VictimCacheSlot
+    {
+        uint64_t last_access = 0;
+        Entry entry;
+    };
+    std::vector<VictimCacheSlot> victim_cache;
 
     // Return a pointer to the location that the Entry for the chunk
     // group with the given group coordinate and world id should be.
@@ -312,19 +331,54 @@ class BaseStore
             }
         }
 
+
         // Not found at this point; need to choose the least-recently
         // used entry to evict. This is much colder code than above.
         uint64_t min_access = cache_set.last_access[0];
         unsigned evict_idx = 0;
         for (unsigned i = 1; i < Assoc; ++i) {
-            if (cache_set.last_access[i] < min_access) evict_idx = i;
+            auto this_last_access = cache_set.last_access[i];
+            if (this_last_access < min_access) {
+                evict_idx = i;
+                min_access = this_last_access;
+            }
+            if (evict_stats_debug) {
+                fprintf(stderr, "%u %lu\n", i, this_last_access);
+            }
         }
-        Entry* entry = &cache_set.slots[evict_idx];
-        fprintf(stderr, "Evict %i %i %i ; %i\n", int(x), int(y), int(z), int(evict_idx));
-
-        *p_valid = false;
+        Entry* evict_entry = &cache_set.slots[evict_idx];
         cache_set.last_access[evict_idx] = ++access_counter;
-        return entry;
+        if (evict_stats_debug) {
+            fprintf(stderr, "Evict [%u][%u][%u] %u\n\n", x, y, z, evict_idx);
+        }
+
+        // Now we need to check the victim cache (if it exists),
+        // either for the Entry being searched for (which will be
+        // swapped back out of the victim cache), or for the oldest
+        // victim cache entry to overwrite.
+        bool found_in_victim_cache = false;
+        if (!victim_cache.empty()) {
+            VictimCacheSlot* victim_slot = &victim_cache[0];
+            min_access = victim_slot->last_access;
+
+            for (VictimCacheSlot& slot : victim_cache) {
+                if (slot.entry.world_id == world_id
+                and slot.entry.group_coord == group_coord) {
+                    victim_slot = &slot;
+                    found_in_victim_cache = true;
+                    break;
+                }
+                else if (slot.last_access < min_access) {
+                    victim_slot = &slot;
+                    min_access = slot.last_access;
+                }
+            }
+            using std::swap;
+            swap(victim_slot->entry, *evict_entry);
+            victim_slot->last_access = ++access_counter;
+        }
+        *p_valid = found_in_victim_cache;
+        return evict_entry;
     }
 
   public:
@@ -417,6 +471,7 @@ class BaseStore
         // Swap the new and old caches.
         std::unique_ptr<CacheSet[]> old_cache_sets(
             new CacheSet[new_modulus * new_modulus * new_modulus]);
+        using std::swap;
         swap(old_cache_sets, cache_sets);
 
         fprintf(stderr, "Set modulus to %i\n", int(modulus));
@@ -442,11 +497,58 @@ class BaseStore
             }
         }
     }
+
+    // Set the size of the victim cache. Same disclaimer about
+    // noexcept applies.
+    void resize_victim_cache(uint32_t cache_size) noexcept
+    {
+        victim_cache.resize(cache_size);
+    }
+
+    // Performance debug code. Used to measure how many cache entries
+    // were read in this frame.
+    void stats_begin_frame()
+    {
+        frame_begin_access_counter = ++access_counter;
+    }
+
+    void print_stats_end_frame()
+    {
+        for (unsigned z = 0; z < modulus; ++z) {
+            for (unsigned y = 0; y < modulus; ++y) {
+                for (unsigned x = 0; x < modulus; ++x) {
+                    auto& sets =
+                        cache_sets[z * modulus * modulus + y * modulus + x];
+                    unsigned count = 0;
+                    for (size_t i = 0; i < Assoc; ++i) {
+                        auto access = sets.last_access[i];
+                        count += (access > frame_begin_access_counter);
+                    }
+                    if (count == Assoc) {
+                        fprintf(stderr, "\x1b[1m\x1b[31m");
+                    }
+                    fprintf(stderr, "[%u][%u][%u] %u/%u  ",
+                        z, y, x, count, Assoc);
+                    for (unsigned i = 0; i < count; ++i) fprintf(stderr, "*");
+                    fprintf(stderr, "\x1b[0m\n");
+                }
+            }
+        }
+        unsigned count = 0;
+        for (const VictimCacheSlot& slot : victim_cache) {
+            count += (slot.last_access > frame_begin_access_counter);
+        }
+        if (count == victim_cache.size()) {
+            fprintf(stderr, "\x1b[1m\x1b[31m");
+        }
+        fprintf(stderr, "Victim Cache %u/%u\x1b[0m\n",
+            count, unsigned(victim_cache.size()));
+    }
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
-class RaycastStore : public BaseStore<RaycastEntry, 3, 12>
+class RaycastStore : public BaseStore<RaycastEntry, 4, 10>
 {
   public:
     // Fragile thingie to fix AZDO synchronization problems. If this
@@ -1006,11 +1108,6 @@ class Renderer
             draw_group(pcg);
         }
 
-        if (store.eviction_count >= 5) {
-            fprintf(stderr, "%i MeshStore evictions.\n",
-                int(store.eviction_count));
-        }
-
         glBindVertexArray(0);
     }
 
@@ -1142,14 +1239,15 @@ class Renderer
     // not be re-drawn.
     void render_world_raycast_step() noexcept
     {
-        fprintf(stderr, "Raycast step.\n");
         RaycastStore& store = camera.get_raycast_store();
+        store.stats_begin_frame();
         store.eviction_count = 0;
 
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = camera.get_far_plane();
-        uint32_t modulus = uint32_t(std::max(3.0, ceil(far_plane / 128.0)));
+        uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
+        store.resize_victim_cache(4);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1408,6 +1506,11 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         glBindVertexArray(0);
+
+        if (evict_stats_debug) {
+            store.print_stats_end_frame();
+            evict_stats_debug = false;
+        }
     }
 };
 
