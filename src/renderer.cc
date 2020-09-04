@@ -1421,6 +1421,10 @@ class Renderer
                 // still some occasional slowness when looking around
                 // in a big world, so this may have been a mis-step.
                 //
+                // NOTE: Seems much worse on Windows! Not sure if it's
+                // a driver issue, or possibly actually my CPU-side
+                // cache is slow (and maybe mingw optimizes poorly?)
+                //
                 // The issue is that now thanks to the sync, stuff may
                 // end up in here not because it's not in the cache,
                 // but because it needed to be modified yet it was not
