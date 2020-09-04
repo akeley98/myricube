@@ -1415,6 +1415,17 @@ class Renderer
             // wasn't yet in the RaycastStore (i.e. wasn't uploaded to
             // device memory).
             if (entry == nullptr) {
+                // Note: I stopped limiting the size of deferred_pcg
+                // because the SSBO upload speed was so fast compared
+                // to the old 3D sub-textures I used. However there's
+                // still some occasional slowness when looking around
+                // in a big world, so this may have been a mis-step.
+                //
+                // The issue is that now thanks to the sync, stuff may
+                // end up in here not because it's not in the cache,
+                // but because it needed to be modified yet it was not
+                // safe to do so. So if I throttle the size of
+                // deferred_pcg, modified chunk groups may flicker.
                 deferred_pcg.push_back(&pcg);
                 return;
             }
