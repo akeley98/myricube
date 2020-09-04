@@ -51,7 +51,7 @@ vec4 fog_border_color(
     const float slope = (1-BORDER_FADE) / (BORDER_DIST_HIGH - BORDER_DIST_LOW);
     float base_border_fade = clamp(
         BORDER_FADE + (dist - BORDER_DIST_LOW) * slope,
-        BORDER_FADE, 1);
+        BORDER_FADE, 1.0);
 
     // Calculate how close this fragment is to the edge of the voxel.
     // Actual border fade is based on this.
@@ -73,9 +73,9 @@ vec4 fog_border_color(
         fog_enabled ?
         FOG_SCALAR * (1 - sqrt(dist_squared/far_plane_squared)) :
         1.0;
-    float fog_fade = clamp(raw_fog_fade, 0, 1);
+    float fog_fade = clamp(raw_fog_fade, 0.0, 1.0);
 
     // Apply fog and border effects.
     return
-    vec4(fog_fade * border_fade * base_color + (1-fog_fade) * fog_color, 1);
+    vec4(fog_fade * border_fade * base_color + (1-fog_fade) * fog_color, 1.0);
 }
