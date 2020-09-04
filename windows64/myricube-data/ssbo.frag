@@ -42,7 +42,7 @@
 // carries this info, and a helper function for unpacking it.
 
 layout(std430, binding=CHUNK_GROUP_VOXELS_PROGRAM_INDEX)
-buffer ChunkGroupVoxels {
+readonly buffer ChunkGroupVoxels {
     int voxel_colors[GROUP_SIZE][GROUP_SIZE][GROUP_SIZE];
 } chunk_group_voxels;
 
