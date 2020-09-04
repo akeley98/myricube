@@ -14,9 +14,11 @@
 // the chunk, and the AABB itself is drawn using a raycasting fragment
 // shader that checks for collisions with the voxels contained in the
 // AABB. The voxel data itself (when raycasting is used) is stored
-// using a 3D texture -- this is considerably more memory efficient
+// using a 3D texture^ -- this is considerably more memory efficient
 // than a triangle mesh. (Actually, now that I switched to instanced
 // rendering, this memory point may no longer be true...)
+//
+//     ^ Really, a 3D array in an SSBO; much faster to write than textures.
 //
 // Cubes of chunks are organized into larger chunk groups. For OpenGL
 // efficiency, chunks within the same chunk group share GPU resources

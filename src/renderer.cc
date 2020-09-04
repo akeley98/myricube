@@ -347,9 +347,22 @@ class BaseStore
             }
         }
         Entry* evict_entry = &cache_set.slots[evict_idx];
+        auto old_access_counter = cache_set.last_access[evict_idx];
         cache_set.last_access[evict_idx] = ++access_counter;
         if (evict_stats_debug) {
             fprintf(stderr, "Evict [%u][%u][%u] %u\n\n", x, y, z, evict_idx);
+            if (old_access_counter > frame_begin_access_counter) {
+                fprintf(stderr, "\x1b[35m\x1b[1mCACHE THRASHING WARNING\n"
+                    "ChunkGroup (%i, %i, %i) and (%i, %i, %i) tried to use\n"
+                    "the same cache slot in one frame. If the victim cache\n"
+                    "is not big enough, this may lead to flickering\n"
+                    "(both will try to use the same memory in one frame, and\n"
+                    "this bypasses the per-frame synchronization.)\x1b[0m\n",
+                    evict_entry->group_coord.x,
+                    evict_entry->group_coord.y,
+                    evict_entry->group_coord.z,
+                    group_coord.x, group_coord.y, group_coord.z);
+            }
         }
 
         // Now we need to check the victim cache (if it exists),
@@ -377,6 +390,7 @@ class BaseStore
             swap(victim_slot->entry, *evict_entry);
             victim_slot->last_access = ++access_counter;
         }
+
         *p_valid = found_in_victim_cache;
         return evict_entry;
     }
