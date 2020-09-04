@@ -20,7 +20,9 @@
 
 namespace myricube {
 
+// Hacky debug variables.
 bool chunk_debug = false;
+bool evict_stats_debug = false;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -132,18 +134,20 @@ struct MeshEntry
         world_id = 0;
     }
 
-    // Disable moves, but, see swap below. (Harkens back to C++98 hacks :P )
-    MeshEntry(MeshEntry&&) = delete;
-};
+    MeshEntry(MeshEntry&& other)
+    {
+        swap(*this, other);
+    }
 
-void swap(MeshEntry& left, MeshEntry& right)
-{
-    using std::swap;
-    swap(left.world_id, right.world_id);
-    swap(left.group_coord, right.group_coord);
-    swap(left.mesh_array, right.mesh_array);
-    swap(left.vbo_name, right.vbo_name);
-}
+    friend void swap(MeshEntry& left, MeshEntry& right)
+    {
+        using std::swap;
+        swap(left.world_id, right.world_id);
+        swap(left.group_coord, right.group_coord);
+        swap(left.mesh_array, right.mesh_array);
+        swap(left.vbo_name, right.vbo_name);
+    }
+};
 
 // For memory efficiency, the AABB of a chunk is stored in packed
 // format on the GPU.
@@ -246,19 +250,22 @@ struct RaycastEntry
         world_id = 0;
     }
 
-    RaycastEntry(RaycastEntry&&) = delete;
-};
+    RaycastEntry(RaycastEntry&& other)
+    {
+        swap(*this, other);
+    }
 
-void swap(RaycastEntry& left, RaycastEntry& right)
-{
-    using std::swap;
-    swap(left.world_id, right.world_id);
-    swap(left.group_coord, right.group_coord);
-    swap(left.aabb_array, right.aabb_array);
-    swap(left.vbo_name, right.vbo_name);
-    swap(left.ssbo_name, right.ssbo_name);
-    swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
-}
+    friend void swap(RaycastEntry& left, RaycastEntry& right)
+    {
+        using std::swap;
+        swap(left.world_id, right.world_id);
+        swap(left.group_coord, right.group_coord);
+        swap(left.aabb_array, right.aabb_array);
+        swap(left.vbo_name, right.vbo_name);
+        swap(left.ssbo_name, right.ssbo_name);
+        swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
+    }
+};
 
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
 // structs for chunk groups near the camera. They are stored in a
@@ -277,6 +284,9 @@ class BaseStore
     // eviction algorithm.
     uint64_t access_counter = 0;
 
+    // Used for tracking how many cache entries were read for this frame.
+    uint64_t frame_begin_access_counter = 0;
+
     // Cache is (modulus x modulus x modulus x Assoc) in size.
     uint32_t modulus = DefaultModulus;
 
@@ -286,6 +296,15 @@ class BaseStore
     // Declared after modulus defensively.
     std::unique_ptr<CacheSet[]> cache_sets {
         new CacheSet[DefaultModulus * DefaultModulus * DefaultModulus] };
+
+    // Fully-associative victim cache. Evicted Entry objects are
+    // swapped into here.
+    struct VictimCacheSlot
+    {
+        uint64_t last_access = 0;
+        Entry entry;
+    };
+    std::vector<VictimCacheSlot> victim_cache;
 
     // Return a pointer to the location that the Entry for the chunk
     // group with the given group coordinate and world id should be.
@@ -312,18 +331,68 @@ class BaseStore
             }
         }
 
+
         // Not found at this point; need to choose the least-recently
         // used entry to evict. This is much colder code than above.
         uint64_t min_access = cache_set.last_access[0];
         unsigned evict_idx = 0;
         for (unsigned i = 1; i < Assoc; ++i) {
-            if (cache_set.last_access[i] < min_access) evict_idx = i;
+            auto this_last_access = cache_set.last_access[i];
+            if (this_last_access < min_access) {
+                evict_idx = i;
+                min_access = this_last_access;
+            }
+            if (evict_stats_debug) {
+                fprintf(stderr, "%u %lu\n", i, this_last_access);
+            }
         }
-        Entry* entry = &cache_set.slots[evict_idx];
-
-        *p_valid = false;
+        Entry* evict_entry = &cache_set.slots[evict_idx];
+        auto old_access_counter = cache_set.last_access[evict_idx];
         cache_set.last_access[evict_idx] = ++access_counter;
-        return entry;
+        if (evict_stats_debug) {
+            fprintf(stderr, "Evict [%u][%u][%u] %u\n\n", x, y, z, evict_idx);
+            if (old_access_counter > frame_begin_access_counter) {
+                fprintf(stderr, "\x1b[35m\x1b[1mCACHE THRASHING WARNING\n"
+                    "ChunkGroup (%i, %i, %i) and (%i, %i, %i) tried to use\n"
+                    "the same cache slot in one frame. If the victim cache\n"
+                    "is not big enough, this may lead to flickering\n"
+                    "(both will try to use the same memory in one frame, and\n"
+                    "this bypasses the per-frame synchronization.)\x1b[0m\n",
+                    evict_entry->group_coord.x,
+                    evict_entry->group_coord.y,
+                    evict_entry->group_coord.z,
+                    group_coord.x, group_coord.y, group_coord.z);
+            }
+        }
+
+        // Now we need to check the victim cache (if it exists),
+        // either for the Entry being searched for (which will be
+        // swapped back out of the victim cache), or for the oldest
+        // victim cache entry to overwrite.
+        bool found_in_victim_cache = false;
+        if (!victim_cache.empty()) {
+            VictimCacheSlot* victim_slot = &victim_cache[0];
+            min_access = victim_slot->last_access;
+
+            for (VictimCacheSlot& slot : victim_cache) {
+                if (slot.entry.world_id == world_id
+                and slot.entry.group_coord == group_coord) {
+                    victim_slot = &slot;
+                    found_in_victim_cache = true;
+                    break;
+                }
+                else if (slot.last_access < min_access) {
+                    victim_slot = &slot;
+                    min_access = slot.last_access;
+                }
+            }
+            using std::swap;
+            swap(victim_slot->entry, *evict_entry);
+            victim_slot->last_access = ++access_counter;
+        }
+
+        *p_valid = found_in_victim_cache;
+        return evict_entry;
     }
 
   public:
@@ -340,10 +409,14 @@ class BaseStore
     //     Fill the Entry with data for this new chunk group,
     //     initializing OpenGL resources if needed.
     //
-    // update(PositionedChunkGroup, VoxelWorld, Entry*)
+    // template <bool allow_failure>
+    // bool update(PositionedChunkGroup, VoxelWorld, Entry*)
     //
     //     Assuming replace was already called with identical
-    //     arguments, above, just re-upload any changed data.
+    //     arguments, above, just re-upload any changed data, unless
+    //     allow_failure was true. Return true iff the Entry is
+    //     up-to-date (i.e. return false only when allow_failure was
+    //     true, but some changed data needed to be re-uploaded).
     template <typename EntryFiller>
     Entry* update(PositionedChunkGroup& pcg,
                   VoxelWorld& world,
@@ -357,7 +430,7 @@ class BaseStore
         // chunk group; just update it (deal with dirty chunks) and
         // return.
         if (valid) {
-            EntryFiller::update(pcg, world, entry);
+            EntryFiller::template update<false>(pcg, world, entry);
             return entry;
         }
 
@@ -368,6 +441,30 @@ class BaseStore
         EntryFiller::replace(pcg, world, entry);
         ++eviction_count;
         return entry;
+    }
+
+    // Return a valid, updated Entry for the given chunk group
+    // extracted from the given world, IF
+    //
+    // 1. said Entry is available in the cache.
+    //
+    // 2. said Entry is up-to-date (i.e. not dirty).
+    //
+    // Otherwise, return nullptr.
+    //
+    // This requires an EntryFiller template parameter as in update.
+    template <typename EntryFiller>
+    Entry* get_if_not_dirty(PositionedChunkGroup& pcg,
+                            VoxelWorld& world)
+    {
+        glm::ivec3 gc = group_coord(pcg);
+        bool valid;
+        Entry* entry = cached_location(&valid, gc, world.id());
+
+        if (!valid) return nullptr;
+
+        bool success = EntryFiller::template update<true>(pcg, world, entry);
+        return success ? entry : nullptr;
     }
 
     // Shrink/grow the cache, moving every cache entry (belonging to
@@ -388,6 +485,7 @@ class BaseStore
         // Swap the new and old caches.
         std::unique_ptr<CacheSet[]> old_cache_sets(
             new CacheSet[new_modulus * new_modulus * new_modulus]);
+        using std::swap;
         swap(old_cache_sets, cache_sets);
 
         fprintf(stderr, "Set modulus to %i\n", int(modulus));
@@ -413,11 +511,58 @@ class BaseStore
             }
         }
     }
+
+    // Set the size of the victim cache. Same disclaimer about
+    // noexcept applies.
+    void resize_victim_cache(uint32_t cache_size) noexcept
+    {
+        victim_cache.resize(cache_size);
+    }
+
+    // Performance debug code. Used to measure how many cache entries
+    // were read in this frame.
+    void stats_begin_frame()
+    {
+        frame_begin_access_counter = ++access_counter;
+    }
+
+    void print_stats_end_frame()
+    {
+        for (unsigned z = 0; z < modulus; ++z) {
+            for (unsigned y = 0; y < modulus; ++y) {
+                for (unsigned x = 0; x < modulus; ++x) {
+                    auto& sets =
+                        cache_sets[z * modulus * modulus + y * modulus + x];
+                    unsigned count = 0;
+                    for (size_t i = 0; i < Assoc; ++i) {
+                        auto access = sets.last_access[i];
+                        count += (access > frame_begin_access_counter);
+                    }
+                    if (count == Assoc) {
+                        fprintf(stderr, "\x1b[1m\x1b[31m");
+                    }
+                    fprintf(stderr, "[%u][%u][%u] %u/%u  ",
+                        z, y, x, count, Assoc);
+                    for (unsigned i = 0; i < count; ++i) fprintf(stderr, "*");
+                    fprintf(stderr, "\x1b[0m\n");
+                }
+            }
+        }
+        unsigned count = 0;
+        for (const VictimCacheSlot& slot : victim_cache) {
+            count += (slot.last_access > frame_begin_access_counter);
+        }
+        if (count == victim_cache.size()) {
+            fprintf(stderr, "\x1b[1m\x1b[31m");
+        }
+        fprintf(stderr, "Victim Cache %u/%u\x1b[0m\n",
+            count, unsigned(victim_cache.size()));
+    }
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
-class RaycastStore : public BaseStore<RaycastEntry, 3, 12>
+class RaycastStore : public BaseStore<RaycastEntry, 4, 10>
 {
   public:
     // Fragile thingie to fix AZDO synchronization problems. If this
@@ -740,20 +885,21 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
 
-        // Parasitically depend on the update, using the AlwaysDirty
+        // Parasitically depend on the update, using the always_dirty
         // parameter to get every chunk's mesh copied onto the new (or
         // reused) VBO even if not marked dirty.
-        update<true>(pcg, world, entry);
+        update(pcg, world, entry, true);
     }
 
     // Update the given mesh entry with new data from dirty chunks.
     //
     // Requires that the MeshEntry corresponds to the given chunk
     // group of the given world.
-    template <bool AlwaysDirty=false>
-    static void update(PositionedChunkGroup& pcg,
+    template <bool AllowFailure=false>
+    static bool update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
-                       MeshEntry* entry)
+                       MeshEntry* entry,
+                       bool always_dirty=false)
     {
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
@@ -767,8 +913,10 @@ class Renderer
             for (int y = 0; y < edge_chunks; ++y) {
                 for (int x = 0; x < edge_chunks; ++x) {
                     Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    if (!AlwaysDirty and !chunk.mesh_dirty) continue;
+                    if (!always_dirty and !chunk.mesh_dirty) continue;
                     if (chunk.total_visible == 0) continue;
+
+                    if (AllowFailure) return false;
 
                     ChunkMesh& mesh = entry->mesh_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
@@ -782,6 +930,7 @@ class Renderer
             }
         }
         PANIC_IF_GL_ERROR;
+        return true;
     }
 
     // Render, to the current framebuffer, chunks near the camera
@@ -973,11 +1122,6 @@ class Renderer
             draw_group(pcg);
         }
 
-        if (store.eviction_count >= 5) {
-            fprintf(stderr, "%i MeshStore evictions.\n",
-                int(store.eviction_count));
-        }
-
         glBindVertexArray(0);
     }
 
@@ -1027,7 +1171,8 @@ class Renderer
     //
     // Requires that the RaycastEntry corresponds to the given chunk
     // group of the given world.
-    static void update(PositionedChunkGroup& pcg,
+    template <bool AllowFailure=false>
+    static bool update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
                        RaycastEntry* entry,
                        bool always_dirty = false)
@@ -1053,6 +1198,8 @@ class Renderer
                     vbo_dirty |= aabb_dirty;
 
                     if (aabb_dirty) {
+                        if (AllowFailure) return false;
+
                         glm::ivec3 aabb_low, aabb_high;
                         chunk.get_aabb(&aabb_low, &aabb_high);
                         chunk.aabb_gpu_dirty = false;
@@ -1067,6 +1214,8 @@ class Renderer
                     // afford that, so things glitch for a frame
                     // here-and-there :/
                     if (tex_dirty) {
+                        if (AllowFailure) return false;
+
                         entry->ssbo_dirty = true;
                         chunk.texture_dirty = false;
                         for (int zl = 0; zl < chunk_size; ++zl) {
@@ -1095,6 +1244,7 @@ class Renderer
         }
         static_assert(sizeof entry->aabb_array >= 64,
             "Suspiciously small aabb_array, did it get replaced by a ptr?");
+        return true;
     }
 
     // Render, to the current framebuffer, chunks around the camera
@@ -1104,12 +1254,14 @@ class Renderer
     void render_world_raycast_step() noexcept
     {
         RaycastStore& store = camera.get_raycast_store();
+        store.stats_begin_frame();
         store.eviction_count = 0;
 
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = camera.get_far_plane();
-        uint32_t modulus = uint32_t(std::max(3.0, ceil(far_plane / 128.0)));
+        uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
+        store.resize_victim_cache(4);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1215,41 +1367,70 @@ class Renderer
         // true AABB.
         //
         // This is a bit of an experimental after-the-fact hack but
-        // the allow_defer and deferred_pcg variables are used to
-        //
-        // A. Throttle the number of RaycastStore updates done subject
-        //    to the limits of camera.max_raycast_evict.
-        //
-        // B. Put some time between updating a missing RaycastEntry and
-        //    drawing its corresponding chunk group. This /in principle/
-        //    prevents texture updates from stalling the GPU so much.
+        // the allow_defer and deferred_pcg variables are used to put
+        // some time between updating a missing RaycastEntry and
+        // drawing its corresponding chunk group. This /in principle/
+        // prevents texture updates from stalling the GPU so much.
         auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
         {
+            RaycastEntry* entry = nullptr;
+
             // Part 1/2 of synchronization: need to wait for previous
             // frame's raycast step to finish before attempting to
-            // update any RaycastEntry.
-            //
-            // TODO: Allow groups that don't actually need an `update`
-            // to proceed?
+            // update any RaycastEntry. We can still try to draw the chunk
+            // group if it doesn't need any update.
             if (store.write_ptr_sync != nullptr) {
-                glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
-                glDeleteSync(store.write_ptr_sync);
-                store.write_ptr_sync = nullptr;
+                if (allow_defer) {
+                    auto status = glClientWaitSync(store.write_ptr_sync, 0, 0);
+
+                    // Not yet safe to modify: in this case we draw
+                    // only if no modification is needed.
+                    if (status != GL_CONDITION_SATISFIED) {
+                        entry = store.get_if_not_dirty<Renderer>(pcg, world);
+                    }
+                    // Otherwise delete the sync and update as normal.
+                    else {
+                        glDeleteSync(store.write_ptr_sync);
+                        store.write_ptr_sync = nullptr;
+                        entry = store.update<Renderer>(pcg, world);
+                    }
+                }
+                // Unconditionally wait (until we really lose patience) if
+                // we're not allowed to defer drawing.
+                else {
+                    glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
+                    glDeleteSync(store.write_ptr_sync);
+                    store.write_ptr_sync = nullptr;
+                    entry = store.update<Renderer>(pcg, world);
+                }
                 PANIC_IF_GL_ERROR;
             }
+            else {
+                entry = store.update<Renderer>(pcg, world);
+            }
 
-            // if (group(pcg).total_visible == 0) return;
-            RaycastEntry* entry = store.update<Renderer>(
-                pcg, world, allow_defer);
-
-            // Reason A for non-readiness: this chunk group wasn't yet
-            // in the RaycastStore (i.e. wasn't uploaded to device
-            // memory).
+            // Reason A for non-readiness: nullptr -- either the sync
+            // is still busy and we couldn't upload the dirty data we
+            // need, or we allowed deferring, and this chunk group
+            // wasn't yet in the RaycastStore (i.e. wasn't uploaded to
+            // device memory).
             if (entry == nullptr) {
-                if (deferred_pcg.size() < camera.max_raycast_evict) {
-                    store.update<Renderer>(pcg, world, false);
-                    deferred_pcg.push_back(&pcg);
-                }
+                // Note: I stopped limiting the size of deferred_pcg
+                // because the SSBO upload speed was so fast compared
+                // to the old 3D sub-textures I used. However there's
+                // still some occasional slowness when looking around
+                // in a big world, so this may have been a mis-step.
+                //
+                // NOTE: Seems much worse on Windows! Not sure if it's
+                // a driver issue, or possibly actually my CPU-side
+                // cache is slow (and maybe mingw optimizes poorly?)
+                //
+                // The issue is that now thanks to the sync, stuff may
+                // end up in here not because it's not in the cache,
+                // but because it needed to be modified yet it was not
+                // safe to do so. So if I throttle the size of
+                // deferred_pcg, modified chunk groups may flicker.
+                deferred_pcg.push_back(&pcg);
                 return;
             }
             // Reason B: voxels were modified and we're giving the
@@ -1354,6 +1535,11 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         glBindVertexArray(0);
+
+        if (evict_stats_debug) {
+            store.print_stats_end_frame();
+            evict_stats_debug = false;
+        }
     }
 };
 

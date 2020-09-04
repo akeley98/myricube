@@ -37,7 +37,7 @@ class App
 
 // Then use this macro to add your app class by name to the global
 // list of app factory functions.
-#define MYRICUBE_ADD_APP(AppType) static AppNamer APP_NAMER( \
+#define MYRICUBE_ADD_APP(AppType) static AppNamer APP_NAMER##AppType( \
     #AppType, \
     __FILE__, \
     [] () -> App* { return new AppType(); } );

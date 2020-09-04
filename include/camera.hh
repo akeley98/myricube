@@ -28,7 +28,7 @@ class Camera
     // Near and far plane for z-depth.
     // Far plane influences the chunk render distance.
     float near_plane = 0.1f;
-    int far_plane = 384;
+    int far_plane = 512;
 
     // (roughly) minimum distance from the camera that a chunk needs
     // to be to switch from mesh to raycast graphics.
@@ -77,10 +77,6 @@ class Camera
     glm::mat4 residue_vp_matrix;
 
   public:
-    // Maximum number of 3D voxel textures that may be sent to the GPU
-    // per frame. Mystery parameter.
-    size_t max_raycast_evict = 3;
-
     // Respond if needed to dirty flag and recompute derived data.
     void fix_dirty()
     {

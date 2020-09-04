@@ -16,7 +16,7 @@ class RandomWalk : public App
         uint8_t red = rng() >> 24;
         uint8_t green_base = 40 + (rng() >> 26);
         int x = 0, y = 0, z = 0;
-        for (int i = 0; i < 200000; ++i) {
+        for (int i = 0; i < 888000; ++i) {
             switch (rng() % 6) {
                 case 0: x++; break;
                 case 1: y++; break;
