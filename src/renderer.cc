@@ -1602,6 +1602,7 @@ void viewport(int x, int y)
 void gl_first_time_setup()
 {
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
 }
