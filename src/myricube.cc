@@ -275,6 +275,14 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_fog", toggle_fog);
 
+    KeyTarget toggle_black_fog;
+    toggle_black_fog.down = [&camera] (KeyArg) -> bool
+    {
+        camera.use_black_fog(!camera.use_black_fog());
+        return true;
+    };
+    window.add_key_target("toggle_black_fog", toggle_black_fog);
+
     // Maybe I should dehackify this variable one day.
     extern bool chunk_debug;
     KeyTarget toggle_chunk_debug;

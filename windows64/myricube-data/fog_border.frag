@@ -35,18 +35,32 @@
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
 uniform bool fog_enabled;
+uniform bool black_fog;
 uniform int far_plane_squared;
+
+float logistic(float t, float k)
+{
+    return 1.0 / (1 + exp(-k * t));
+}
 
 // Convert world-space direction vector into a fog color. (i.e. this
 // is the sky color)
 vec3 fog_color_from_world_direction(vec3 world_direction)
 {
-    float x = world_direction.x;
-    float y = max(0, world_direction.y);
-    float z = world_direction.z;
-    float t = (y*y) / (x*x + z*z);
+    if (black_fog) return vec3(0, 0, 0);
 
-    return vec3(t, t, t);
+    world_direction = normalize(world_direction);
+    float t_horizon = logistic(world_direction.y + .25, -5.0);
+    float t_sunrise = logistic(world_direction.y - 1.5*world_direction.x, 0.8);
+
+    const vec3 earth_color = vec3(50/255., 42/255., 77/255.);
+    const vec3 sky_color = vec3(135/255., 211/255., 248/255.);
+    // const vec3 sunrise_color = vec3(254/255., 216/255., 177/255.);
+    const vec3 sunrise_color = vec3(255/255., 173/255., 138/255.);
+
+    return mix(
+        mix(sunrise_color, sky_color, t_sunrise),
+        earth_color, t_horizon);
 }
 
 // Utility function for adding fog and border effects (and setting alpha=1).

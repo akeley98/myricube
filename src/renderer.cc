@@ -961,6 +961,7 @@ class Renderer
 
         static GLint far_plane_squared_id;
         static GLint fog_enabled_id;
+        static GLint black_fog_id;
 
         if (vao == 0) {
             program_id = make_program({
@@ -976,6 +977,9 @@ class Renderer
             fog_enabled_id = glGetUniformLocation(program_id,
                 "fog_enabled");
             assert(fog_enabled_id >= 0);
+            black_fog_id = glGetUniformLocation(program_id, "black_fog");
+            assert(black_fog_id >= 0);
+
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
@@ -1033,6 +1037,7 @@ class Renderer
         auto far_plane = camera.get_far_plane();
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
         glUniform1i(fog_enabled_id, camera.get_fog());
+        glUniform1i(black_fog_id, camera.use_black_fog());
         PANIC_IF_GL_ERROR;
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
@@ -1279,6 +1284,7 @@ class Renderer
         static GLint far_plane_squared_id;
         static GLint raycast_thresh_squared_id;
         static GLint fog_enabled_id;
+        static GLint black_fog_id;
         static GLint chunk_debug_id;
 
         if (vao == 0) {
@@ -1301,6 +1307,8 @@ class Renderer
             fog_enabled_id = glGetUniformLocation(program_id,
                 "fog_enabled");
             assert(fog_enabled_id >= 0);
+            black_fog_id = glGetUniformLocation(program_id, "black_fog");
+            assert(black_fog_id >= 0);
 
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
@@ -1345,6 +1353,7 @@ class Renderer
         // Set uniforms unchanged per-chunk-group.
         glUniform1i(chunk_debug_id, chunk_debug);
         glUniform1i(fog_enabled_id, camera.get_fog());
+        glUniform1i(black_fog_id, camera.use_black_fog());
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
         auto raycast_thr = camera.get_raycast_threshold();
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
@@ -1561,6 +1570,7 @@ void render_background(Camera& camera)
     static GLuint program_id;
     static GLint inverse_vp_id;
     static GLint eye_world_position_id;
+    static GLint black_fog_id;
 
     if (vao == 0) {
         glGenVertexArrays(1, &vao);
@@ -1573,6 +1583,9 @@ void render_background(Camera& camera)
         eye_world_position_id = glGetUniformLocation(program_id,
             "eye_world_position");
         assert(eye_world_position_id >= 0);
+        black_fog_id = glGetUniformLocation(program_id,
+            "black_fog");
+        assert(black_fog_id >= 0);
         PANIC_IF_GL_ERROR;
     }
 
@@ -1584,6 +1597,7 @@ void render_background(Camera& camera)
     glUseProgram(program_id);
     glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
     glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
+    glUniform1i(black_fog_id, camera.use_black_fog());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     PANIC_IF_GL_ERROR;

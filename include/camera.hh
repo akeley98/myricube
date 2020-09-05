@@ -50,6 +50,7 @@ class Camera
 
     // Fog setting.
     bool fog_enabled = true;
+    bool black_fog = false;
 
     // *** True when members below need to be recomputed due to ***
     // *** changes in members above.                            ***
@@ -254,6 +255,16 @@ class Camera
     void set_fog(bool in)
     {
         fog_enabled = in;
+    }
+
+    bool use_black_fog() const
+    {
+        return black_fog;
+    }
+
+    bool use_black_fog(bool in)
+    {
+        return black_fog = in;
     }
 
     // Move by the specified multiples of the normal right, up, and

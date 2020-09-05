@@ -33,6 +33,7 @@ mouse-9         pop_future_camera       # right-key / thumb button 2
                                         # to undo said action.
 
 f               toggle_fog
+b               toggle_black_fog
 f12             toggle_chunk_debug
 f6              toggle_evict_stats_debug
 f5              unload_gpu_storage
