@@ -17,8 +17,8 @@ of what error you see.
 
 ## GNU / Linux
 
-You need OpenGL 4.5, `git`, and `cmake` (for my modified version of
-GLFW).
+You need OpenGL 4.5 and `git`. For my modified version of
+GLFW, you also need `cmake` and `xorg-dev` (not sure about Wayland).
 
 Git clone the repo and run `make -j`. If you don't have the GLM
 library you have to clone recursively.
@@ -35,7 +35,8 @@ right-click-drag or trackpad two-finger scroll to look around.
 
 left/right arrows or thumb buttons to go through camera history.
 
-`f9`/`f10` to change the render distance (be careful not to run out of memory).
+`f9`/`f10` to change the render distance (be careful not to run out of memory),
+and `f`,`b` to toggle fog/fog color.
 
 `k` in the default app generates another random walk.
 
