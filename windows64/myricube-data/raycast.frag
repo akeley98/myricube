@@ -38,6 +38,8 @@ out vec4 color;
 
 vec4 read_group_voxel(ivec3 residue);
 
+vec3 fog_color_from_world_direction(vec3 world_direction);
+
 vec4 fog_border_color(
     vec3 base_color,
     float dist_squared,
@@ -147,6 +149,8 @@ void main()
 
     vec3 disp = best_coord - eye_relative_group_origin;
     float dist_squared = dot(disp, disp);
+    vec3 fog_color = fog_color_from_world_direction(
+        best_coord - eye_relative_group_origin);
     color = fog_border_color(
-        best_color.rgb, dist_squared, uv, vec3(0, 0, 0));
+        best_color.rgb, dist_squared, uv, fog_color);
 }

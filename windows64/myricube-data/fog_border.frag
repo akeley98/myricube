@@ -37,6 +37,18 @@
 uniform bool fog_enabled;
 uniform int far_plane_squared;
 
+// Convert world-space direction vector into a fog color. (i.e. this
+// is the sky color)
+vec3 fog_color_from_world_direction(vec3 world_direction)
+{
+    float x = world_direction.x;
+    float y = max(0, world_direction.y);
+    float z = world_direction.z;
+    float t = (y*y) / (x*x + z*z);
+
+    return vec3(t, t, t);
+}
+
 // Utility function for adding fog and border effects (and setting alpha=1).
 vec4 fog_border_color(
     vec3 base_color, // The stored color of the voxel.

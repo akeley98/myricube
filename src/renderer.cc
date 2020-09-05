@@ -1559,15 +1559,31 @@ void render_background(Camera& camera)
 {
     static GLuint vao = 0;
     static GLuint program_id;
+    static GLint inverse_vp_id;
+    static GLint eye_world_position_id;
 
     if (vao == 0) {
         glGenVertexArrays(1, &vao);
-        program_id =
-            make_program({"background.vert", "background.frag", "fog_border.frag" });
+        program_id = make_program(
+            { "background.vert", "background.frag", "fog_border.frag" } );
+
+        inverse_vp_id = glGetUniformLocation(program_id,
+            "inverse_vp");
+        assert(inverse_vp_id >= 0);
+        eye_world_position_id = glGetUniformLocation(program_id,
+            "eye_world_position");
+        assert(eye_world_position_id >= 0);
         PANIC_IF_GL_ERROR;
     }
+
+    glm::vec3 eye_residue;
+    camera.get_eye(nullptr, &eye_residue);
+    glm::mat4 inverse_vp = glm::inverse(camera.get_residue_vp());
+
     glBindVertexArray(vao);
     glUseProgram(program_id);
+    glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
+    glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     PANIC_IF_GL_ERROR;
