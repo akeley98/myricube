@@ -573,6 +573,7 @@ int Main(std::vector<std::string> args)
         gl_clear();
         render_world_mesh_step(*world, camera);
         render_world_raycast_step(*world, camera);
+        render_background(camera);
         finish_global_f32_depth_framebuffer();
 
         set_window_title(window);

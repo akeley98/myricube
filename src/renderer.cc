@@ -1553,6 +1553,26 @@ void render_world_raycast_step(VoxelWorld& world, Camera& camera)
     Renderer(world, camera).render_world_raycast_step();
 }
 
+// Render the background. This uses a shader hard-wired to draw a
+// full-screen rectangle.
+void render_background(Camera& camera)
+{
+    static GLuint vao = 0;
+    static GLuint program_id;
+
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        program_id =
+            make_program({"background.vert", "background.frag", "fog_border.frag" });
+        PANIC_IF_GL_ERROR;
+    }
+    glBindVertexArray(vao);
+    glUseProgram(program_id);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    PANIC_IF_GL_ERROR;
+};
+
 MeshStore* new_mesh_store()
 {
     return new MeshStore;

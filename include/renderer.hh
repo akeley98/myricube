@@ -27,13 +27,16 @@ void render_world_mesh_step(VoxelWorld&, Camera&);
 // not be re-drawn.
 void render_world_raycast_step(VoxelWorld&, Camera&);
 
+// Render the background. ("skybox")
+void render_background(Camera&);
+
+void gl_clear();
+
 // Wrapper for glViewport
 void viewport(int x, int y);
 
 // glEnables and stuff.
 void gl_first_time_setup();
-
-void gl_clear();
 
 // Experimental: Trying out 32-bit float depth buffer. This requires
 // (in practice) rendering to an offscreen framebuffer.
