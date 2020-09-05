@@ -78,8 +78,8 @@ void main()
         float t = (x - x0) / xm;
         float y = y0 + ym * t;
         float z = z0 + zm * t;
-        if (y < aabb_low.y || y > aabb_high.y) break;
-        if (z < aabb_low.z || z > aabb_high.z) break;
+        if (y < aabb_low.y || y >= aabb_high.y) break;
+        if (z < aabb_low.z || z >= aabb_high.z) break;
         ivec3 texcoord = ivec3(floor(vec3(x + x_bias, y, z)));
         vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
@@ -103,8 +103,8 @@ void main()
         float t = (y - y0) / ym;
         float x = x0 + xm * t;
         float z = z0 + zm * t;
-        if (x < aabb_low.x || x > aabb_high.x) break;
-        if (z < aabb_low.z || z > aabb_high.z) break;
+        if (x < aabb_low.x || x >= aabb_high.x) break;
+        if (z < aabb_low.z || z >= aabb_high.z) break;
         ivec3 texcoord = ivec3(floor(vec3(x, y + y_bias, z)));
         vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
@@ -128,8 +128,8 @@ void main()
         float t = (z - z0) / zm;
         float x = x0 + xm * t;
         float y = y0 + ym * t;
-        if (x < aabb_low.x || x > aabb_high.x) break;
-        if (y < aabb_low.y || y > aabb_high.y) break;
+        if (x < aabb_low.x || x >= aabb_high.x) break;
+        if (y < aabb_low.y || y >= aabb_high.y) break;
         ivec3 texcoord = ivec3(floor(vec3(x, y, z + z_bias)));
         vec4 lookup_color = read_group_voxel(texcoord);
         if (lookup_color.a > 0 && t > 0) {
