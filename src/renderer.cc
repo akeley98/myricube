@@ -1718,7 +1718,7 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
     PANIC_IF_GL_ERROR;
 }
 
-void finish_global_f32_depth_framebuffer()
+void finish_global_f32_depth_framebuffer(int screen_x, int screen_y)
 {
     assert(f32_depth_framebuffer != 0);
     glBlitNamedFramebuffer(
@@ -1727,7 +1727,7 @@ void finish_global_f32_depth_framebuffer()
         0, 0,
         f32_depth_framebuffer_x, f32_depth_framebuffer_y,
         0, 0,
-        f32_depth_framebuffer_x, f32_depth_framebuffer_y,
+        screen_x, screen_y,
         GL_COLOR_BUFFER_BIT,
         GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

@@ -582,7 +582,7 @@ int Main(std::vector<std::string> args)
         render_world_mesh_step(*world, camera);
         render_world_raycast_step(*world, camera);
         render_background(camera);
-        finish_global_f32_depth_framebuffer();
+        finish_global_f32_depth_framebuffer(screen_x, screen_y);
 
         set_window_title(window);
     }

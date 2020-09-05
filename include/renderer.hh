@@ -47,7 +47,7 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y);
 
 // Blit the contents of the said framebuffer to the window
 // framebuffer, and bind the window framebuffer again.
-void finish_global_f32_depth_framebuffer();
+void finish_global_f32_depth_framebuffer(int screen_x, int screen_y);
 
 } // end namespace
 #endif /* !MYRICUBE_RENDERER_HH_ */
