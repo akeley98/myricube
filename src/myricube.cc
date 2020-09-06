@@ -306,6 +306,7 @@ void add_key_targets(Window& window, Camera& camera)
     unload.down = [&] (KeyArg) -> bool
     {
         camera.unload_gpu_storage();
+        evict_stats_debug = true;
         return true;
     };
     window.add_key_target("unload_gpu_storage", unload);

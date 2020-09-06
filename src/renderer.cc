@@ -328,7 +328,10 @@ class BaseStore
     // The p_valid bool tells us whether the returned Entry matches
     // the one being searched for.
     Entry* cached_location(
-        bool* p_valid, glm::ivec3 group_coord, uint64_t world_id)
+        bool* p_valid,
+        glm::ivec3 group_coord,
+        uint64_t world_id,
+        bool may_fail=false)
     {
         uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % modulus;
         uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % modulus;
@@ -337,7 +340,7 @@ class BaseStore
             z * modulus * modulus + y * modulus + x];
 
         // Try to search for a valid Entry for the requested world &
-        // group coordinate. Mark it as accessed if so
+        // group coordinate. Mark it as accessed if so.
         for (unsigned i = 0; i < Assoc; ++i) {
             Entry* entry = &cache_set.slots[i];
             if (entry->world_id == world_id
@@ -348,9 +351,14 @@ class BaseStore
             }
         }
 
-
         // Not found at this point; need to choose the least-recently
         // used entry to evict. This is much colder code than above.
+        // However, skip all this if we don't actually need it
+        // (may_fail is true).
+        if (may_fail) {
+            *p_valid = false;
+            return nullptr;
+        }
         uint64_t min_access = cache_set.last_access[0];
         unsigned evict_idx = 0;
         for (unsigned i = 1; i < Assoc; ++i) {
@@ -441,7 +449,8 @@ class BaseStore
 
         glm::ivec3 gc = group_coord(pcg);
         bool valid;
-        Entry* entry = cached_location(&valid, gc, world.id());
+        Entry* entry =
+            cached_location(&valid, gc, world.id(), request->may_fail);
         request->was_in_store = valid;
 
         // If the Entry in the array already corresponds to the given
