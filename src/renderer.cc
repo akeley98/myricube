@@ -267,6 +267,23 @@ struct RaycastEntry
     }
 };
 
+// Struct for requesting a chunk group's GPU data from a MeshStore /
+// RaycastStore entry. Some stats are also returned.
+struct StoreRequest
+{
+    // Input: allow the store to return a nullptr if servicing this
+    // request would be slow somehow.
+    bool may_fail = false;
+
+    // Input: allow the store to overwrite data in order to service
+    // this request. If set, may_fail must also be set.
+    bool read_only = false;
+
+    // Output: whether the requested chunk group was already in the
+    // store (not necessarily up-to-date).
+    bool was_in_store;
+};
+
 // Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
 // structs for chunk groups near the camera. They are stored in a
 // wraparound fashion (i.e.  using modular arithmetic on group
@@ -397,10 +414,9 @@ class BaseStore
 
   public:
     uint64_t eviction_count = 0;
-    // Return a valid, updated Entry for the given chunk group
-    // extracted from the given world. If allow_failure is true,
-    // return null instead of evicting a cache entry if the needed
-    // entry is not found.
+    // If possible, return a valid, updated Entry for the given chunk
+    // group extracted from the given world. See StoreRequest for
+    // control parameters.
     //
     // This requires a template parameter providing static functions:
     //
@@ -409,62 +425,42 @@ class BaseStore
     //     Fill the Entry with data for this new chunk group,
     //     initializing OpenGL resources if needed.
     //
-    // template <bool allow_failure>
-    // bool update(PositionedChunkGroup, VoxelWorld, Entry*)
+    // bool update(PositionedChunkGroup, VoxelWorld, Entry*, bool read_only)
     //
     //     Assuming replace was already called with identical
     //     arguments, above, just re-upload any changed data, unless
-    //     allow_failure was true. Return true iff the Entry is
-    //     up-to-date (i.e. return false only when allow_failure was
+    //     read_only is true. Return true iff the Entry is
+    //     up-to-date (i.e. return false only when read_only was
     //     true, but some changed data needed to be re-uploaded).
     template <typename EntryFiller>
-    Entry* update(PositionedChunkGroup& pcg,
-                  VoxelWorld& world,
-                  bool allow_failure=false)
+    Entry* request(PositionedChunkGroup& pcg,
+                   VoxelWorld& world,
+                   StoreRequest* request)
     {
+        assert(!request->read_only or request->may_fail);
+
         glm::ivec3 gc = group_coord(pcg);
         bool valid;
         Entry* entry = cached_location(&valid, gc, world.id());
+        request->was_in_store = valid;
 
         // If the Entry in the array already corresponds to the given
-        // chunk group; just update it (deal with dirty chunks) and
-        // return.
+        // chunk group; just update it if we're allowed to (deal with
+        // dirty chunks) and return.
         if (valid) {
-            EntryFiller::template update<false>(pcg, world, entry);
-            return entry;
+            bool success =
+                EntryFiller::update(pcg, world, entry, request->read_only);
+            assert(success or request->read_only);
+            return success ? entry : nullptr;
         }
 
         // Otherwise, either fail if allowed, or evict and replace a
         // cache entry with data for the new chunk group.
-        if (allow_failure) return nullptr;
+        if (request->may_fail) return nullptr;
 
         EntryFiller::replace(pcg, world, entry);
         ++eviction_count;
         return entry;
-    }
-
-    // Return a valid, updated Entry for the given chunk group
-    // extracted from the given world, IF
-    //
-    // 1. said Entry is available in the cache.
-    //
-    // 2. said Entry is up-to-date (i.e. not dirty).
-    //
-    // Otherwise, return nullptr.
-    //
-    // This requires an EntryFiller template parameter as in update.
-    template <typename EntryFiller>
-    Entry* get_if_not_dirty(PositionedChunkGroup& pcg,
-                            VoxelWorld& world)
-    {
-        glm::ivec3 gc = group_coord(pcg);
-        bool valid;
-        Entry* entry = cached_location(&valid, gc, world.id());
-
-        if (!valid) return nullptr;
-
-        bool success = EntryFiller::template update<true>(pcg, world, entry);
-        return success ? entry : nullptr;
     }
 
     // Shrink/grow the cache, moving every cache entry (belonging to
@@ -885,21 +881,23 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
 
-        // Parasitically depend on the update, using the always_dirty
+        // Parasitically depend on the update, using the AlwaysDirty
         // parameter to get every chunk's mesh copied onto the new (or
         // reused) VBO even if not marked dirty.
-        update(pcg, world, entry, true);
+        update<true>(pcg, world, entry, false);
     }
 
-    // Update the given mesh entry with new data from dirty chunks.
+    // Update the given mesh entry with new data from dirty chunks,
+    // except report failure (return false) if read_only is true
+    // but dirty data needed to be re-uploaded anyway.
     //
     // Requires that the MeshEntry corresponds to the given chunk
     // group of the given world.
-    template <bool AllowFailure=false>
+    template <bool AlwaysDirty=false>
     static bool update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
                        MeshEntry* entry,
-                       bool always_dirty=false)
+                       bool read_only)
     {
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
@@ -913,10 +911,10 @@ class Renderer
             for (int y = 0; y < edge_chunks; ++y) {
                 for (int x = 0; x < edge_chunks; ++x) {
                     Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    if (!always_dirty and !chunk.mesh_dirty) continue;
+                    if (!AlwaysDirty and !chunk.mesh_dirty) continue;
                     if (chunk.total_visible == 0) continue;
 
-                    if (AllowFailure) return false;
+                    if (read_only) return false;
 
                     ChunkMesh& mesh = entry->mesh_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
@@ -1039,11 +1037,12 @@ class Renderer
         glUniform1i(fog_enabled_id, camera.get_fog());
         glUniform1i(black_fog_id, camera.use_black_fog());
         PANIC_IF_GL_ERROR;
+        StoreRequest request;
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
             if (group(pcg).total_visible == 0) return;
-            MeshEntry* entry = store.update<Renderer>(pcg, world);
+            MeshEntry* entry = store.request<Renderer>(pcg, world, &request);
 
             assert(entry->vbo_name != 0);
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
@@ -1167,20 +1166,22 @@ class Renderer
 
         // Then, parasitically depend on the update RaycastEntry
         // function to actually fill the buffers with data, again
-        // using an overriding always_dirty flag.
-        update(pcg, world, entry, true);
+        // using an overriding AlwaysDirty parameter.
+        update<true>(pcg, world, entry, false);
     }
 
     // Update the given raycast entry with new data from dirty chunks
-    // (or all chunks, if always_dirty is true).
+    // (or all chunks, if AlwaysDirty is true), except report failure
+    // (return false) only when read_only is true but dirty data
+    // needed to be written to the RaycastEntry.
     //
     // Requires that the RaycastEntry corresponds to the given chunk
     // group of the given world.
-    template <bool AllowFailure=false>
+    template <bool AlwaysDirty=false>
     static bool update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
                        RaycastEntry* entry,
-                       bool always_dirty = false)
+                       bool read_only)
     {
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
@@ -1198,12 +1199,12 @@ class Renderer
             for (int yh = 0; yh < edge_chunks; ++yh) {
                 for (int xh = 0; xh < edge_chunks; ++xh) {
                     Chunk& chunk = group(pcg).chunk_array[zh][yh][xh];
-                    bool tex_dirty = always_dirty | chunk.texture_dirty;
-                    bool aabb_dirty = always_dirty | chunk.aabb_gpu_dirty;
+                    bool tex_dirty = AlwaysDirty | chunk.texture_dirty;
+                    bool aabb_dirty = AlwaysDirty | chunk.aabb_gpu_dirty;
                     vbo_dirty |= aabb_dirty;
 
                     if (aabb_dirty) {
-                        if (AllowFailure) return false;
+                        if (read_only) return false;
 
                         glm::ivec3 aabb_low, aabb_high;
                         chunk.get_aabb(&aabb_low, &aabb_high);
@@ -1219,7 +1220,7 @@ class Renderer
                     // afford that, so things glitch for a frame
                     // here-and-there :/
                     if (tex_dirty) {
-                        if (AllowFailure) return false;
+                        if (read_only) return false;
 
                         entry->ssbo_dirty = true;
                         chunk.texture_dirty = false;
@@ -1365,43 +1366,48 @@ class Renderer
             chunk_group_voxels_binding_index);
         PANIC_IF_GL_ERROR;
 
-        // Chunk groups whose RaycastEntry (voxel data storage) weren't
-        // quite ready are pushed onto this naughty list and rendered
-        // in the second pass.
-        std::vector<PositionedChunkGroup*> deferred_pcg;
+        // Count and limit the number of new chunk groups added to the
+        // RaycastStore this frame.
+        int remaining_new_chunk_groups_allowed =
+            camera.get_max_frame_new_chunk_groups();
 
         // My plan is to use instanced rendering to draw the chunk AABBs
         // of this chunk group. The base box is a 1x1x1 unit box, which
         // is stretched and repositioned in the vertex shader to the
         // true AABB.
         //
-        // This is a bit of an experimental after-the-fact hack but
-        // the allow_defer and deferred_pcg variables are used to put
-        // some time between updating a missing RaycastEntry and
-        // drawing its corresponding chunk group. This /in principle/
-        // prevents texture updates from stalling the GPU so much.
-        auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
+        // If p_defer_list is not nullptr, chunk groups whose
+        // RaycastEntry (voxel data storage) weren't quite ready are
+        // pushed onto this list and rendered in the second
+        // pass. Otherwise, we force all chunk groups to be ready
+        // (possible stall).
+        auto draw_group = [&] (
+            PositionedChunkGroup& pcg,
+            std::vector<PositionedChunkGroup*>* p_defer_list)
         {
             RaycastEntry* entry = nullptr;
+            StoreRequest request;
+            request.may_fail = (p_defer_list != nullptr);
 
             // Part 1/2 of synchronization: need to wait for previous
             // frame's raycast step to finish before attempting to
             // update any RaycastEntry. We can still try to draw the chunk
             // group if it doesn't need any update.
             if (store.write_ptr_sync != nullptr) {
-                if (allow_defer) {
+                if (p_defer_list != nullptr) {
                     auto status = glClientWaitSync(store.write_ptr_sync, 0, 0);
 
                     // Not yet safe to modify: in this case we draw
                     // only if no modification is needed.
                     if (status != GL_CONDITION_SATISFIED) {
-                        entry = store.get_if_not_dirty<Renderer>(pcg, world);
+                        request.read_only = true;
+                        entry = store.request<Renderer>(pcg, world, &request);
                     }
                     // Otherwise delete the sync and update as normal.
                     else {
                         glDeleteSync(store.write_ptr_sync);
                         store.write_ptr_sync = nullptr;
-                        entry = store.update<Renderer>(pcg, world);
+                        entry = store.request<Renderer>(pcg, world, &request);
                     }
                 }
                 // Unconditionally wait (until we really lose patience) if
@@ -1410,12 +1416,12 @@ class Renderer
                     glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
                     glDeleteSync(store.write_ptr_sync);
                     store.write_ptr_sync = nullptr;
-                    entry = store.update<Renderer>(pcg, world);
+                    entry = store.request<Renderer>(pcg, world, &request);
                 }
                 PANIC_IF_GL_ERROR;
             }
             else {
-                entry = store.update<Renderer>(pcg, world);
+                entry = store.request<Renderer>(pcg, world, &request);
             }
 
             // Reason A for non-readiness: nullptr -- either the sync
@@ -1423,30 +1429,26 @@ class Renderer
             // need, or we allowed deferring, and this chunk group
             // wasn't yet in the RaycastStore (i.e. wasn't uploaded to
             // device memory).
+            //
+            // Throttle uploads for the latter reason, but never the former
+            // (this would cause modified chunks to flicker).
             if (entry == nullptr) {
-                // Note: I stopped limiting the size of deferred_pcg
-                // because the SSBO upload speed was so fast compared
-                // to the old 3D sub-textures I used. However there's
-                // still some occasional slowness when looking around
-                // in a big world, so this may have been a mis-step.
-                //
-                // NOTE: Seems much worse on Windows! Not sure if it's
-                // a driver issue, or possibly actually my CPU-side
-                // cache is slow (and maybe mingw optimizes poorly?)
-                //
-                // The issue is that now thanks to the sync, stuff may
-                // end up in here not because it's not in the cache,
-                // but because it needed to be modified yet it was not
-                // safe to do so. So if I throttle the size of
-                // deferred_pcg, modified chunk groups may flicker.
-                deferred_pcg.push_back(&pcg);
+                if (!request.was_in_store) {
+                    if (remaining_new_chunk_groups_allowed > 0) {
+                        --remaining_new_chunk_groups_allowed;
+                    } else {
+                        return;
+                    }
+                }
+                assert(p_defer_list != nullptr);
+                p_defer_list->push_back(&pcg);
                 return;
             }
             // Reason B: voxels were modified and we're giving the
             // driver some time to stage and upload the modified voxel
             // SSBO.
-            if (entry->ssbo_dirty and allow_defer) {
-                deferred_pcg.push_back(&pcg);
+            if (entry->ssbo_dirty and p_defer_list != nullptr) {
+                p_defer_list->push_back(&pcg);
             }
 
             assert(entry->ssbo_name != 0);
@@ -1532,11 +1534,13 @@ class Renderer
         }
 
         std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        std::vector<PositionedChunkGroup*> deferred_pcg;
+
         for (auto& pair : pcg_by_depth) {
-            draw_group(*pair.second, true);
+            draw_group(*pair.second, &deferred_pcg);
         }
         for (PositionedChunkGroup* p_pcg : deferred_pcg) {
-            draw_group(*p_pcg, false);
+            draw_group(*p_pcg, nullptr);
         }
 
         // Part 2/2 for avoiding AZDO write-while-buffer-used problem.

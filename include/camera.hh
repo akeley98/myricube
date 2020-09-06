@@ -35,10 +35,6 @@ class Camera
     // Keep as int to avoid rounding errors in distance culling.
     int raycast_threshold = 120;
 
-    // TODO: I've added setters for the near/raycast/far planes, but
-    // to do this safely I need to make MeshStore::N and
-    // RaycastStore::N configurable.
-
     // Horizontal and vertical angle camera is pointed in.
     float theta = 1.5707f, phi = 1.5707f;
 
@@ -47,6 +43,9 @@ class Camera
 
     // Window size in pixels.
     int window_x = 1, window_y = 1;
+
+    // Maximum number of new chunk groups added to GPU memory per frame.
+    int max_frame_new_chunk_groups = 7;
 
     // Fog setting.
     bool fog_enabled = true;
@@ -265,6 +264,16 @@ class Camera
     bool use_black_fog(bool in)
     {
         return black_fog = in;
+    }
+
+    int get_max_frame_new_chunk_groups() const
+    {
+        return max_frame_new_chunk_groups;
+    }
+
+    void set_max_frame_new_chunk_groups(int in)
+    {
+        max_frame_new_chunk_groups = in;
     }
 
     // Move by the specified multiples of the normal right, up, and
