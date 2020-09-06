@@ -14,10 +14,11 @@ glfw-cmake:
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
-windows64/myricube.exe:
+
+myricube-windows:
 	cd windows64 && $(MAKE)
 
-all: myricube-bin windows64/myricube.exe
+all: myricube-bin myricube-windows
 
 myricube-bin: $(OBJS)
 	$(CXX) $(OBJS) -ldl -lGL -lpthread -o myricube-bin
