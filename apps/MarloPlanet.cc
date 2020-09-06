@@ -88,10 +88,10 @@ void marlo(int radius, VoxelWorld& world)
             if (line[i] != ' ') {
                 auto col = (line[i] == '+') ? Voxel(255, 0, 255)
                                             : Voxel(0, 255, 255);
-                world.set(glm::ivec3(i - 229, -j, radius + 301), col);
-                world.set(glm::ivec3(-i + 50, -j, radius + 299), col);
+                world.set(glm::ivec3(i - 139, -j, radius + 301), col);
+                world.set(glm::ivec3(-i + 140, -j, radius + 299), col);
             }
-            world.set(glm::ivec3(-i + 50, -j, radius + 300), Voxel(255, 255, 255));
+            world.set(glm::ivec3(-i + 140, -j, radius + 300), Voxel(255, 255, 255));
         }
         j++;
     }
