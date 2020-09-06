@@ -519,6 +519,7 @@ class BaseStore
     // were read in this frame.
     void stats_begin_frame()
     {
+        eviction_count = 0;
         frame_begin_access_counter = ++access_counter;
     }
 
@@ -553,12 +554,13 @@ class BaseStore
         }
         fprintf(stderr, "Victim Cache %u/%u\x1b[0m\n",
             count, unsigned(victim_cache.size()));
+        fprintf(stderr, "%i evictions\n", int(eviction_count));
     }
 };
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
-class RaycastStore : public BaseStore<RaycastEntry, 4, 10>
+class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
 {
   public:
     // Fragile thingie to fix AZDO synchronization problems. If this
@@ -942,7 +944,7 @@ class Renderer
     void render_world_mesh_step() noexcept
     {
         MeshStore& store = camera.get_mesh_store();
-        store.eviction_count = 0;
+        store.stats_begin_frame();
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1127,6 +1129,11 @@ class Renderer
         }
 
         glBindVertexArray(0);
+
+        if (evict_stats_debug) {
+            fprintf(stderr, "\x1b[36mMeshStore stats:\x1b[0m\n");
+            store.print_stats_end_frame();
+        }
     }
 
     // Now time to write the AABB-raycasting renderer. Here goes...
@@ -1261,7 +1268,6 @@ class Renderer
     {
         RaycastStore& store = camera.get_raycast_store();
         store.stats_begin_frame();
-        store.eviction_count = 0;
 
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = camera.get_far_plane();
@@ -1550,8 +1556,8 @@ class Renderer
         glBindVertexArray(0);
 
         if (evict_stats_debug) {
+            fprintf(stderr, "\x1b[36mRaycastStore stats:\x1b[0m\n");
             store.print_stats_end_frame();
-            evict_stats_debug = false;
         }
     }
 };

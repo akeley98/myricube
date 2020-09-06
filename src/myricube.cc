@@ -584,6 +584,9 @@ int Main(std::vector<std::string> args)
         render_background(camera);
         finish_global_f32_depth_framebuffer(screen_x, screen_y);
 
+        extern bool evict_stats_debug;
+        evict_stats_debug = false;
+
         set_window_title(window);
     }
 
