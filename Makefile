@@ -21,4 +21,4 @@ myricube-windows:
 all: myricube-bin myricube-windows
 
 myricube-bin: $(OBJS)
-	$(CXX) $(OBJS) -ldl -lGL -lpthread -o myricube-bin
+	$(CXX) $(OBJS) -ldl -lpthread -o myricube-bin
