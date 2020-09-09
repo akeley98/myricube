@@ -302,6 +302,15 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_evict_stats_debug", toggle_evict_stats_debug);
 
+    extern bool disable_zcull_sort;
+    KeyTarget toggle_zcull_sort;
+    toggle_zcull_sort.down = [&] (KeyArg) -> bool
+    {
+        disable_zcull_sort = !disable_zcull_sort;
+        return true;
+    };
+    window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
+
     KeyTarget unload;
     unload.down = [&] (KeyArg) -> bool
     {

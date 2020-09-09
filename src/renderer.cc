@@ -23,6 +23,7 @@ namespace myricube {
 // Hacky debug variables.
 bool chunk_debug = false;
 bool evict_stats_debug = false;
+bool disable_zcull_sort = false;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -1548,7 +1549,9 @@ class Renderer
             pcg_by_depth.emplace_back(min_squared_dist, &pcg);
         }
 
-        std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        if (!disable_zcull_sort) {
+            std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        }
         std::vector<PositionedChunkGroup*> deferred_pcg;
 
         for (auto& pair : pcg_by_depth) {
