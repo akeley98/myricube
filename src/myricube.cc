@@ -590,15 +590,6 @@ int Main(std::vector<std::string> args)
 
         set_window_title(window);
     }
-
-    // Test out the silly hexload class.
-    window.set_title("Autosaving...");
-    auto autosave_filename = expand_filename("autosave.myricube.hex");
-    bool okay = write_hex(*world, autosave_filename);
-    if (!okay) {
-        fprintf(stderr, "Too bad, autosave failed.\n");
-    }
-
     return 0;
 }
 
