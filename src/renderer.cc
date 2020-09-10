@@ -24,6 +24,7 @@ namespace myricube {
 bool chunk_debug = false;
 bool evict_stats_debug = false;
 bool disable_zcull_sort = false;
+bool disable_chunk_group_visible_bits = false;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -231,8 +232,17 @@ struct RaycastEntry
     // voxels on the GPU. 0 when not yet allocated.
     GLuint ssbo_name = 0;
 
+    // OpenGL name for the UBO carrying the visible bits array.
+    GLuint ubo_name = 0;
+
     // Persistent write-only mapping of the SSBO.
     ChunkGroupVoxels* ssbo_write_ptr = nullptr;
+
+    // Host copy of the contents of the UBO.
+    ChunkGroupVisibleBits chunk_group_visible;
+
+    // Persistent write-only mapping of the UBO.
+    // ChunkGroupVisibleBits* ubo_write_ptr = nullptr;
 
     // Set to true when we write through ssbo_write_ptr (and thus need
     // to flush the SSBO). This is pretty fragile; I'm not really sure
@@ -244,10 +254,12 @@ struct RaycastEntry
     ~RaycastEntry()
     {
         if (ssbo_write_ptr != nullptr) glUnmapNamedBuffer(ssbo_name);
-        GLuint buffers[2] = { vbo_name, ssbo_name };
-        glDeleteBuffers(2, buffers);
+        // if (ubo_write_ptr != nullptr) glUnmapNamedBuffer(ubo_name);
+        GLuint buffers[3] = { vbo_name, ssbo_name, ubo_name };
+        glDeleteBuffers(3, buffers);
         vbo_name = 0;
         ssbo_name = 0;
+        ubo_name = 0;
         world_id = 0;
     }
 
@@ -264,7 +276,10 @@ struct RaycastEntry
         swap(left.aabb_array, right.aabb_array);
         swap(left.vbo_name, right.vbo_name);
         swap(left.ssbo_name, right.ssbo_name);
+        swap(left.ubo_name, right.ubo_name);
         swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
+        // swap(left.ubo_write_ptr, right.ubo_write_ptr);
+        swap(left.ssbo_dirty, right.ssbo_dirty);
     }
 };
 
@@ -522,6 +537,9 @@ class BaseStore
     // noexcept applies.
     void resize_victim_cache(uint32_t cache_size) noexcept
     {
+        // Remove this assert if you want the victim cache (but beware
+        // I abandoned it so it may not work quite right).
+        assert(cache_size == 0);
         victim_cache.resize(cache_size);
     }
 
@@ -1169,7 +1187,6 @@ class Renderer
             auto flags = GL_DYNAMIC_STORAGE_BIT;
             auto sz = sizeof(RaycastEntry::aabb_array);
             glNamedBufferStorage(entry->vbo_name, sz, nullptr, flags);
-            PANIC_IF_GL_ERROR;
         }
 
         if (entry->ssbo_name == 0) {
@@ -1184,6 +1201,22 @@ class Renderer
             void* mapping = glMapNamedBufferRange(
                 entry->ssbo_name, 0, sizeof(ChunkGroupVoxels), flags);
             entry->ssbo_write_ptr = static_cast<ChunkGroupVoxels*>(mapping);
+            PANIC_IF_GL_ERROR;
+        }
+
+        if (entry->ubo_name == 0) {
+            glCreateBuffers(1, &entry->ubo_name);
+            // auto flags = GL_MAP_PERSISTENT_BIT
+            //            | GL_MAP_WRITE_BIT;
+            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            auto sz = sizeof(ChunkGroupVisibleBits);
+            glNamedBufferStorage(entry->ubo_name, sz, nullptr, flags);
+            // flags = GL_MAP_WRITE_BIT
+            //       | GL_MAP_PERSISTENT_BIT
+            //       | GL_MAP_FLUSH_EXPLICIT_BIT;
+            // void* mapping = glMapNamedBufferRange(
+            //     entry->ubo_name, 0, sizeof(ChunkGroupVoxels), flags);
+            // entry->ubo_write_ptr = static_cast<ChunkGroupVisibleBits*>(mapping);
             PANIC_IF_GL_ERROR;
         }
 
@@ -1210,6 +1243,7 @@ class Renderer
         assert(entry->group_coord == group_coord(pcg));
         assert(entry->vbo_name != 0);
         assert(entry->ssbo_name != 0);
+        assert(entry->ubo_name != 0);
 
         ChunkGroupVoxels* cg_voxels = entry->ssbo_write_ptr;
         assert(cg_voxels != nullptr);
@@ -1218,6 +1252,7 @@ class Renderer
         // dirty chunks and AABBs (but defer upload of AABB to
         // later to reduce calls; the vbo_dirty flag is useful here).
         bool vbo_dirty = false;
+        bool visible_bits_dirty = false;
         for (int zh = 0; zh < edge_chunks; ++zh) {
             for (int yh = 0; yh < edge_chunks; ++yh) {
                 for (int xh = 0; xh < edge_chunks; ++xh) {
@@ -1237,14 +1272,16 @@ class Renderer
                     }
 
                     // Write any changed chunks' voxels to the mapped
-                    // 3D voxel array. I'm supposed to use
-                    // double-buffering and stuff to avoid modifying a
-                    // buffer while it's still in use, but I can't
-                    // afford that, so things glitch for a frame
-                    // here-and-there :/
+                    // 3D voxel array (and to visible bits UBO). I'm
+                    // supposed to use double-buffering and stuff to
+                    // avoid modifying a buffer while it's still in
+                    // use, but I can't afford that, so I have to set
+                    // up some syncs elsewhere to keep things working.
                     if (tex_dirty) {
                         if (read_only) return false;
+                        uint32_t* bits = entry->chunk_group_visible.bits;
 
+                        visible_bits_dirty = true;
                         entry->ssbo_dirty = true;
                         chunk.texture_dirty = false;
                         for (int zl = 0; zl < chunk_size; ++zl) {
@@ -1253,9 +1290,29 @@ class Renderer
                                 int y = yh * chunk_size + yl;
                                 for (int xl = 0; xl < chunk_size; ++xl) {
                                     int x = xh * chunk_size + xl;
+
+                                    // Update 3D voxel array.
                                     Voxel v = chunk.voxel_array[zl][yl][xl];
                                     cg_voxels->voxel_colors[z][y][x] =
                                         to_packed_color(v);
+
+                                    // Calculate bit index in visible bits.
+                                    int bit_index = z;
+                                    bit_index = y + group_size * bit_index;
+                                    bit_index = x + group_size * bit_index;
+                                    int array_index = bit_index >> 5;
+                                    bit_index &= 31;
+
+                                    // Update visibility bitfield.
+                                    uint32_t word = bits[array_index];
+                                    word &= ~(uint32_t(1) << bit_index);
+                                    word |= uint32_t(v.visible) << bit_index;
+                                    bits[array_index] = word;
+
+                                    // There's probably more efficient
+                                    // ways to do this. I just wanna
+                                    // test it for now. Also, hello
+                                    // arrow code...
                                 }
                             }
                         }
@@ -1270,9 +1327,19 @@ class Renderer
             glNamedBufferSubData(entry->vbo_name, 0,
                                  sizeof entry->aabb_array, entry->aabb_array);
             PANIC_IF_GL_ERROR;
+            static_assert(sizeof entry->aabb_array >= 64,
+                "Suspiciously small aabb_array, did it get replaced by a ptr?");
         }
-        static_assert(sizeof entry->aabb_array >= 64,
-            "Suspiciously small aabb_array, did it get replaced by a ptr?");
+        // Same for visibility bitfield.
+        if (visible_bits_dirty) {
+            constexpr auto sz = sizeof entry->chunk_group_visible;
+            glNamedBufferSubData(entry->ubo_name, 0, sz,
+                                 entry->chunk_group_visible.bits);
+            PANIC_IF_GL_ERROR;
+            static_assert(sz == sizeof(ChunkGroupVisibleBits),
+                "Double-check this UBO upload code if type changed.");
+        }
+
         return true;
     }
 
@@ -1289,7 +1356,7 @@ class Renderer
         auto far_plane = camera.get_far_plane();
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
-        store.resize_victim_cache(4);
+        // store.resize_victim_cache(4);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1309,6 +1376,7 @@ class Renderer
         static GLint fog_enabled_id;
         static GLint black_fog_id;
         static GLint chunk_debug_id;
+        static GLint disable_chunk_group_visible_bits_id;
 
         if (vao == 0) {
             program_id = make_program({
@@ -1321,6 +1389,9 @@ class Renderer
             assert(eye_relative_group_origin_id >= 0);
             chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
             assert(chunk_debug_id >= 0);
+            disable_chunk_group_visible_bits_id =
+                glGetUniformLocation(program_id, "disable_chunk_group_visible_bits");
+            assert(disable_chunk_group_visible_bits_id >= 0);
             far_plane_squared_id = glGetUniformLocation(program_id,
                 "far_plane_squared");
             assert(far_plane_squared_id >= 0);
@@ -1375,6 +1446,8 @@ class Renderer
 
         // Set uniforms unchanged per-chunk-group.
         glUniform1i(chunk_debug_id, chunk_debug);
+        glUniform1i(disable_chunk_group_visible_bits_id,
+            disable_chunk_group_visible_bits);
         glUniform1i(fog_enabled_id, camera.get_fog());
         glUniform1i(black_fog_id, camera.use_black_fog());
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
@@ -1386,6 +1459,12 @@ class Renderer
         glShaderStorageBlockBinding(program_id,
             chunk_group_voxels_program_index,
             chunk_group_voxels_binding_index);
+
+        // Same for the UBO.
+        glUniformBlockBinding(program_id,
+            chunk_group_visible_bits_program_index,
+            chunk_group_visible_bits_binding_index);
+
         PANIC_IF_GL_ERROR;
 
         // Count and limit the number of new chunk groups added to the
@@ -1518,13 +1597,18 @@ class Renderer
             glVertexAttribDivisor(packed_aabb_high_idx, 1);
             PANIC_IF_GL_ERROR;
 
-            // Wire up this chunk group's SSBO (voxel array) into the
-            // SSBO index reserved for this purpose. We check here to
-            // see if the SSBO needs to be flushed.
+            // Wire up this chunk group's SSBO (voxel array) and UBO
+            // (voxel visibility bitfield) into the SSBO and UBO
+            // indices reserved for this purpose. We check here to see
+            // if the SSBO needs to be flushed.
             glBindBufferBase(
                 GL_SHADER_STORAGE_BUFFER,
                 chunk_group_voxels_binding_index,
                 entry->ssbo_name);
+            glBindBufferBase(
+                GL_UNIFORM_BUFFER,
+                chunk_group_visible_bits_binding_index,
+                entry->ubo_name);
             PANIC_IF_GL_ERROR;
             if (entry->ssbo_dirty) {
                 glFlushMappedNamedBufferRange(

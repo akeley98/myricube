@@ -311,6 +311,18 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
 
+    extern bool disable_chunk_group_visible_bits;
+    KeyTarget toggle_chunk_group_visible_bits;
+    toggle_chunk_group_visible_bits.down = [&] (KeyArg) -> bool
+    {
+        disable_chunk_group_visible_bits = !disable_chunk_group_visible_bits;
+        fprintf(stderr, "%s visibility bitfield.\n",
+            disable_chunk_group_visible_bits ? "Not using" : "Using");
+        return true;
+    };
+    window.add_key_target("toggle_chunk_group_visible_bits",
+        toggle_chunk_group_visible_bits);
+
     KeyTarget unload;
     unload.down = [&] (KeyArg) -> bool
     {

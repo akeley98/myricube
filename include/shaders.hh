@@ -56,18 +56,31 @@ constexpr uint32_t all_face_bits = pos_x_face_bit
                             | neg_z_face_bit;
 
 // Book-keeping for my plan to deliver arrays of voxel data to raycast
-// shaders using shader storage buffer objects.
+// shaders using shader storage buffer objects (plus a visibility bit
+// array UBO).
 
-// glShaderStorageBlock argument 2 (storageBlockIndex).
+// glShaderStorageBlockBinding argument 2 (storageBlockIndex).
 constexpr int chunk_group_voxels_program_index = 0;
 
-// glShaderStorageBlock argument 3 (storageBlockBinding).
+// glShaderStorageBlockBinding argument 3 (storageBlockBinding).
 constexpr int chunk_group_voxels_binding_index = 0;
 
 // Data layout of said SSBO.
 struct ChunkGroupVoxels
 {
     uint32_t voxel_colors[group_size][group_size][group_size];
+};
+
+// glUniformBlockBinding argument 2 (uniformBlockIndex).
+constexpr int chunk_group_visible_bits_program_index = 0;
+
+// glUniformBlockBinding argument 3 (uniformBlockBinding).
+constexpr int chunk_group_visible_bits_binding_index = 0;
+
+// Data layout of visible bits UBO. See read_group_voxel.frag
+struct ChunkGroupVisibleBits
+{
+    uint32_t bits[group_size * group_size * group_size / 32];
 };
 
 // Return a vector of #define lines and stuff (not newline terminated).
@@ -103,6 +116,8 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define NEG_Z_FACE_BIT " + std::to_string(neg_z_face_bit),
         "#define CHUNK_GROUP_VOXELS_PROGRAM_INDEX "
             + std::to_string(chunk_group_voxels_program_index),
+        "#define CHUNK_GROUP_VISIBLE_BITS_PROGRAM_INDEX "
+            + std::to_string(chunk_group_visible_bits_program_index),
     };
 }
 
