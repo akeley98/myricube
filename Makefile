@@ -14,7 +14,6 @@ glfw-cmake:
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
-
 myricube-windows:
 	cd windows64 && $(MAKE)
 

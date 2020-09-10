@@ -1,5 +1,5 @@
 #include "app.hh"
-#include "FastNoise.cpp"
+#include "FastNoise.h"
 #include <string>
 #include <fstream>
 
