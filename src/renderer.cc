@@ -1050,6 +1050,8 @@ class Renderer
         glUniform1i(black_fog_id, camera.use_black_fog());
         PANIC_IF_GL_ERROR;
         StoreRequest request;
+        unsigned drawn_group_count = 0;
+        unsigned drawn_chunk_count = 0;
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
@@ -1118,9 +1120,11 @@ class Renderer
                             entry->vert_offset(x, y, z)
                             // ^^^ Instance offset, depends on chunk.
                         );
+                        ++drawn_chunk_count;
                     }
                 }
             }
+            ++drawn_group_count;
             PANIC_IF_GL_ERROR;
         };
 
@@ -1143,6 +1147,8 @@ class Renderer
         if (evict_stats_debug) {
             fprintf(stderr, "\x1b[36mMeshStore stats:\x1b[0m\n");
             store.print_stats_end_frame();
+            fprintf(stderr, "Mesh-drawn chunks: %u    groups: %u\n",
+                drawn_chunk_count, drawn_group_count);
         }
     }
 
@@ -1542,11 +1548,13 @@ class Renderer
         std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
 
         // TODO: Avoid visiting far away chunk groups.
+        unsigned drawn_group_count = 0;
         for (PositionedChunkGroup& pcg : world.group_map) {
             float min_squared_dist;
             bool cull = cull_group(pcg, &min_squared_dist);
             if (cull or min_squared_dist >= squared_thresh) continue;
             pcg_by_depth.emplace_back(min_squared_dist, &pcg);
+            ++drawn_group_count;
         }
 
         if (!disable_zcull_sort) {
@@ -1570,6 +1578,7 @@ class Renderer
         if (evict_stats_debug) {
             fprintf(stderr, "\x1b[36mRaycastStore stats:\x1b[0m\n");
             store.print_stats_end_frame();
+            fprintf(stderr, "Raycast groups: %u\n", drawn_group_count);
         }
     }
 };
