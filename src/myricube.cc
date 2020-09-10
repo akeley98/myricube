@@ -310,6 +310,16 @@ void add_key_targets(Window& window, Camera& camera)
         return true;
     };
     window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
+    
+    extern bool use_TRenderer;
+    KeyTarget toggle_use_TRenderer;
+    toggle_use_TRenderer.down = [&] (KeyArg) -> bool
+    {
+        use_TRenderer = !use_TRenderer;
+        return true;
+    };
+    window.add_key_target("toggle_use_TRenderer", toggle_use_TRenderer);
+
 
     KeyTarget unload;
     unload.down = [&] (KeyArg) -> bool

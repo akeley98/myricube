@@ -6,7 +6,11 @@
 
 namespace myricube {
 
-class RaycastStore;
+class RaycastStore
+{
+  public:
+    virtual ~RaycastStore() = default;
+};
 class MeshStore;
 
 RaycastStore* new_raycast_store();

@@ -39,7 +39,9 @@ struct Voxel
 // Small cubic collection of voxels.
 class Chunk
 {
-    friend class Renderer;
+    friend class SRenderer;
+    friend class TRenderer;
+    friend class MRenderer;
     friend class ChunkGroup;
 
     // True when the AABB needs to be recalculated.
@@ -164,7 +166,9 @@ class Chunk
 // on the CPU side; this is mostly for rendering purposes.
 class ChunkGroup
 {
-    friend class Renderer;
+    friend class SRenderer;
+    friend class TRenderer;
+    friend class MRenderer;
 
     // Chunks within this chunk group, in [z][y][x] order.
     Chunk chunk_array[edge_chunks][edge_chunks][edge_chunks];
@@ -260,7 +264,9 @@ inline void write(PositionedChunkGroup& g, glm::ivec3 c, Voxel v)
 // Entire world of voxels, built out of chunk groups.
 class VoxelWorld
 {
-    friend class Renderer;
+    friend class SRenderer;
+    friend class TRenderer;
+    friend class MRenderer;
 
     // Stupid hasher for ivec3.
     struct Hash

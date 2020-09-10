@@ -24,6 +24,24 @@ namespace myricube {
 bool chunk_debug = false;
 bool evict_stats_debug = false;
 bool disable_zcull_sort = false;
+bool use_TRenderer = false;
+
+// A texel of the 3D texture used to represent the voxel grid on the GPU.
+//
+// This will probably become 8-bit palettized color if I really start
+// to optimize aggressively.
+struct VoxelTexel
+{
+    uint8_t red = 0, green = 0, blue = 0, alpha = 0;
+
+    VoxelTexel(Voxel v=Voxel())
+    {
+        red = v.red;
+        green = v.green;
+        blue = v.blue;
+        alpha = v.visible ? 255 : 0;
+    }
+};
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -208,7 +226,7 @@ struct PackedAABB
 // the GPU (stored as a SSBO), as well as one VBO used to store the
 // array of AABB for the chunks within the group. This is the handle
 // for the GPU data needed to raycast one chunk group.
-struct RaycastEntry
+struct SRaycastEntry
 {
     // World ID and group coordinate of the chunk group this texture
     // and AABB array is for. This can be used to tell if this entry
@@ -239,9 +257,9 @@ struct RaycastEntry
     // if there's any non-gimmick way to use C++ to enforce this better.
     bool ssbo_dirty = false;
 
-    RaycastEntry() = default;
+    SRaycastEntry() = default;
 
-    ~RaycastEntry()
+    ~SRaycastEntry()
     {
         if (ssbo_write_ptr != nullptr) glUnmapNamedBuffer(ssbo_name);
         GLuint buffers[2] = { vbo_name, ssbo_name };
@@ -251,12 +269,12 @@ struct RaycastEntry
         world_id = 0;
     }
 
-    RaycastEntry(RaycastEntry&& other)
+    SRaycastEntry(SRaycastEntry&& other)
     {
         swap(*this, other);
     }
 
-    friend void swap(RaycastEntry& left, RaycastEntry& right)
+    friend void swap(SRaycastEntry& left, SRaycastEntry& right)
     {
         using std::swap;
         swap(left.world_id, right.world_id);
@@ -267,6 +285,57 @@ struct RaycastEntry
         swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
     }
 };
+
+// All voxels within a chunk group share a single 3D texture on the
+// GPU, as well as one VBO used to store the array of AABB for the
+// chunks within the group. This is the handle for the GPU data needed
+// to raycast one chunk group.
+struct TRaycastEntry
+{
+    // World ID and group coordinate of the chunk group this texture
+    // and AABB array is for. This can be used to tell if this entry
+    // is correct or needs to be replaced in RaycastStore.
+    uint64_t world_id = 0;
+    glm::ivec3 group_coord;
+
+    // aabb_array[z][y][x] is the minimal AABB containing the visible
+    // voxels of ChunkGroup::chunk_array[z][y][x].
+    //
+    // If you change this, be aware that sizeof is used on this to
+    // know the amount of bytes to allocate for the GPU's VBO.
+    PackedAABB aabb_array[edge_chunks][edge_chunks][edge_chunks];
+
+    // OpenGL name of the VBO storing the aabb_array. 0 when not yet
+    // allocated.
+    GLuint vbo_name = 0;
+
+    // OpenGL name for the 3D texture representing this group of
+    // voxels on the GPU. 0 when not yet allocated.
+    GLuint texture_name = 0;
+
+    TRaycastEntry() = default;
+
+    ~TRaycastEntry()
+    {
+        glDeleteBuffers(1, &vbo_name);
+        glDeleteTextures(1, &texture_name);
+        vbo_name = 0;
+        texture_name = 0;
+        world_id = 0;
+    }
+
+    TRaycastEntry(TRaycastEntry&&) = delete;
+};
+
+void swap(TRaycastEntry& left, TRaycastEntry& right)
+{
+    using std::swap;
+    swap(left.world_id, right.world_id);
+    swap(left.group_coord, right.group_coord);
+    swap(left.aabb_array, right.aabb_array);
+    swap(left.vbo_name, right.vbo_name);
+    swap(left.texture_name, right.texture_name);
+}
 
 // Struct for requesting a chunk group's GPU data from a MeshStore /
 // RaycastStore entry. Some stats are also returned.
@@ -367,9 +436,6 @@ class BaseStore
             if (this_last_access < min_access) {
                 evict_idx = i;
                 min_access = this_last_access;
-            }
-            if (evict_stats_debug) {
-                fprintf(stderr, "%u %lu\n", i, this_last_access);
             }
         }
         Entry* evict_entry = &cache_set.slots[evict_idx];
@@ -570,7 +636,8 @@ class BaseStore
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
-class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
+class SRaycastStore :
+    public RaycastStore, public BaseStore<SRaycastEntry, 4, 12>
 {
   public:
     // Fragile thingie to fix AZDO synchronization problems. If this
@@ -578,6 +645,9 @@ class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
     // RaycastStore.
     GLsync write_ptr_sync = nullptr;
 };
+
+class TRaycastStore :
+    public RaycastStore, public BaseStore<TRaycastEntry, 4, 12> { };
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
 // stretched and positioned to the right shape and position in space.
@@ -665,14 +735,16 @@ static const GLushort voxel_unit_box_elements[36] =
     20, 21, 22, 21, 20, 23,
 };
 
-// Renderer class. Instantiate it with the camera and world to render
-// and use it once.
-class Renderer
+// Common code (particularly mesh rendering) for both texture and ssbo
+// renderers.
+class MRenderer
 {
+  protected:
     Camera& camera;
     VoxelWorld& world;
+
   public:
-    Renderer(VoxelWorld& world_, Camera& camera_) :
+    MRenderer(VoxelWorld& world_, Camera& camera_) :
         camera(camera_), world(world_) { }
 
     // Culling strategy: There are two phases to culling chunks: group
@@ -1056,7 +1128,7 @@ class Renderer
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
             if (group(pcg).total_visible == 0) return;
-            MeshEntry* entry = store.request<Renderer>(pcg, world, &request);
+            MeshEntry* entry = store.request<MRenderer>(pcg, world, &request);
 
             assert(entry->vbo_name != 0);
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
@@ -1151,14 +1223,21 @@ class Renderer
                 drawn_chunk_count, drawn_group_count);
         }
     }
+};
 
-    // Now time to write the AABB-raycasting renderer. Here goes...
+// SSBO Renderer class. Instantiate it with the camera and world to
+// render and use it once.
+class SRenderer : public MRenderer
+{
+  public:
+    SRenderer(VoxelWorld& world_, Camera& camera_) :
+        MRenderer(world_, camera_) { }
 
     // Fill the given RaycastEntry with the 3D array + AABBs for
     // the given chunk group from the given world.
     static void replace(PositionedChunkGroup& pcg,
                         VoxelWorld& world,
-                        RaycastEntry* entry)
+                        SRaycastEntry* entry)
     {
         entry->world_id = world.id();
         entry->group_coord = group_coord(pcg);
@@ -1167,7 +1246,7 @@ class Renderer
         if (entry->vbo_name == 0) {
             glCreateBuffers(1, &entry->vbo_name);
             auto flags = GL_DYNAMIC_STORAGE_BIT;
-            auto sz = sizeof(RaycastEntry::aabb_array);
+            auto sz = sizeof(SRaycastEntry::aabb_array);
             glNamedBufferStorage(entry->vbo_name, sz, nullptr, flags);
             PANIC_IF_GL_ERROR;
         }
@@ -1203,7 +1282,7 @@ class Renderer
     template <bool AlwaysDirty=false>
     static bool update(PositionedChunkGroup& pcg,
                        VoxelWorld& world,
-                       RaycastEntry* entry,
+                       SRaycastEntry* entry,
                        bool read_only)
     {
         assert(entry->world_id == world.id());
@@ -1282,14 +1361,20 @@ class Renderer
     // not be re-drawn.
     void render_world_raycast_step() noexcept
     {
-        RaycastStore& store = camera.get_raycast_store();
+        SRaycastStore* p_store = nullptr;
+        while (p_store == nullptr) {
+            RaycastStore* virtual_store = &camera.get_raycast_store();
+            p_store = dynamic_cast<SRaycastStore*>(virtual_store);
+            if (p_store == nullptr) camera.unload_gpu_storage();
+        }
+        SRaycastStore& store = *p_store;
         store.stats_begin_frame();
 
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = camera.get_far_plane();
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
-        store.resize_victim_cache(4);
+        // store.resize_victim_cache(4);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1407,7 +1492,7 @@ class Renderer
             PositionedChunkGroup& pcg,
             std::vector<PositionedChunkGroup*>* p_defer_list)
         {
-            RaycastEntry* entry = nullptr;
+            SRaycastEntry* entry = nullptr;
             StoreRequest request;
             request.may_fail = (p_defer_list != nullptr);
 
@@ -1423,13 +1508,13 @@ class Renderer
                     // only if no modification is needed.
                     if (status != GL_CONDITION_SATISFIED) {
                         request.read_only = true;
-                        entry = store.request<Renderer>(pcg, world, &request);
+                        entry = store.request<SRenderer>(pcg, world, &request);
                     }
                     // Otherwise delete the sync and update as normal.
                     else {
                         glDeleteSync(store.write_ptr_sync);
                         store.write_ptr_sync = nullptr;
-                        entry = store.request<Renderer>(pcg, world, &request);
+                        entry = store.request<SRenderer>(pcg, world, &request);
                     }
                 }
                 // Unconditionally wait (until we really lose patience) if
@@ -1438,12 +1523,12 @@ class Renderer
                     glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
                     glDeleteSync(store.write_ptr_sync);
                     store.write_ptr_sync = nullptr;
-                    entry = store.request<Renderer>(pcg, world, &request);
+                    entry = store.request<SRenderer>(pcg, world, &request);
                 }
                 PANIC_IF_GL_ERROR;
             }
             else {
-                entry = store.request<Renderer>(pcg, world, &request);
+                entry = store.request<SRenderer>(pcg, world, &request);
             }
 
             // Reason A for non-readiness: nullptr -- either the sync
@@ -1583,14 +1668,369 @@ class Renderer
     }
 };
 
+// 3D-texture-based Renderer class. Instantiate it with the camera and
+// world to render and use it once.
+class TRenderer : public MRenderer
+{
+  public:
+    TRenderer(VoxelWorld& world_, Camera& camera_) :
+        MRenderer(world_, camera_) { }
+
+    // Fill the given RaycastEntry with the 3D texture + AABB
+    // for the given chunk group from the given world.
+    static void replace(PositionedChunkGroup& pcg,
+                        VoxelWorld& world,
+                        TRaycastEntry* entry)
+    {
+        entry->world_id = world.id();
+        entry->group_coord = group_coord(pcg);
+
+        if (entry->vbo_name == 0) {
+            glCreateBuffers(1, &entry->vbo_name);
+            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            auto sz = sizeof(TRaycastEntry::aabb_array);
+            glNamedBufferStorage(entry->vbo_name, sz, nullptr, flags);
+            PANIC_IF_GL_ERROR;
+        }
+
+        if (entry->texture_name == 0) {
+            glGenTextures(1, &entry->texture_name);
+            GLint texture_name = entry->texture_name;
+
+            glBindTexture(GL_TEXTURE_3D, texture_name);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            PANIC_IF_GL_ERROR;
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA,
+                         group_size, group_size, group_size, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            PANIC_IF_GL_ERROR;
+            static_assert(sizeof(VoxelTexel) == 4,
+                          "Need to change texture format to match VoxelTexel");
+        }
+
+        // Again, I parasitically depend on the update RaycastEntry
+        // function using an overriding always_dirty parameter.
+        update<true>(pcg, world, entry);
+    }
+
+    // Update the given raycast entry with new data from dirty chunks
+    // (or all chunks, if AlwaysDirty is true).
+    //
+    // Requires that the RaycastEntry corresponds to the given chunk
+    // group of the given world.
+    template <bool AlwaysDirty=false>
+    static bool update(PositionedChunkGroup& pcg,
+                       VoxelWorld& world,
+                       TRaycastEntry* entry,
+                       bool read_only=false)
+    {
+        assert(entry->world_id == world.id());
+        assert(entry->group_coord == group_coord(pcg));
+        assert(entry->texture_name != 0);
+        assert(entry->vbo_name != 0);
+
+        // This is actually a hell of a lot easier than the MeshEntry.
+        // I just need to visit the chunks in one pass and upload
+        // dirty sub-textures and AABBs (but defer upload of AABB to
+        // later to reduce calls; the vbo_dirty flag is useful here).
+        bool vbo_dirty = false;
+        auto texture_name = entry->texture_name;
+        for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+                for (int x = 0; x < edge_chunks; ++x) {
+                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
+                    bool tex_dirty = AlwaysDirty | chunk.texture_dirty;
+                    bool aabb_dirty = AlwaysDirty | chunk.aabb_gpu_dirty;
+                    vbo_dirty |= aabb_dirty;
+
+                    if (aabb_dirty) {
+                        if (read_only) return false;
+
+                        glm::ivec3 aabb_low, aabb_high;
+                        chunk.get_aabb(&aabb_low, &aabb_high);
+                        chunk.aabb_gpu_dirty = false;
+                        entry->aabb_array[z][y][x] =
+                            PackedAABB(aabb_low, aabb_high);
+                    }
+
+                    if (tex_dirty) {
+                        if (read_only) return false;
+
+                        chunk.texture_dirty = false;
+                        VoxelTexel
+                            chunk_tex[chunk_size][chunk_size][chunk_size];
+                        for (int z = 0; z < chunk_size; ++z)
+                            for (int y = 0; y < chunk_size; ++y)
+                                for (int x = 0; x < chunk_size; ++x)
+                                    chunk_tex[z][y][x] =
+                                        chunk.voxel_array[z][y][x];
+                        glTextureSubImage3D(
+                            texture_name, 0,
+                            residue.x, residue.y, residue.z,
+                            chunk_size, chunk_size, chunk_size,
+                            GL_RGBA, GL_UNSIGNED_BYTE,
+                            chunk_tex);
+                    }
+                    static_assert(sizeof(VoxelTexel) == 4,
+                          "Need to change texture format to match VoxelTexel");
+                }
+            }
+        }
+        PANIC_IF_GL_ERROR;
+
+        // Now re-upload AABBs if any changed.
+        if (vbo_dirty) {
+            glNamedBufferSubData(entry->vbo_name, 0,
+                                 sizeof entry->aabb_array, entry->aabb_array);
+            PANIC_IF_GL_ERROR;
+        }
+        static_assert(sizeof entry->aabb_array >= 64,
+            "Suspiciously small aabb_array, did it get replaced by a ptr?");
+        return true;
+    }
+
+    // Render, to the current framebuffer, chunks around the camera
+    // using the AABB-raycast algorithm. Chunks that are near
+    // enough to have been drawn using the mesh algorithm will
+    // not be re-drawn.
+    void render_world_raycast_step() noexcept
+    {
+        TRaycastStore* p_store = nullptr;
+        while (p_store == nullptr) {
+            RaycastStore* virtual_store = &camera.get_raycast_store();
+            p_store = dynamic_cast<TRaycastStore*>(virtual_store);
+            if (p_store == nullptr) camera.unload_gpu_storage();
+        }
+        TRaycastStore& store = *p_store;
+
+        // Resize the cache to a size suitable for the given render distance.
+        auto far_plane = camera.get_far_plane();
+        uint32_t modulus = uint32_t(std::max(3.0, ceil(far_plane / 128.0)));
+        store.set_modulus(modulus, world.id());
+
+        glm::mat4 residue_vp_matrix = camera.get_residue_vp();
+        glm::vec3 eye_residue;
+        glm::ivec3 eye_group;
+        camera.get_eye(&eye_group, &eye_residue);
+
+        static GLuint vao = 0;
+        static GLuint program_id;
+        static GLuint vertex_buffer_id;
+        static GLuint element_buffer_id;
+        static GLint mvp_matrix_id;
+        // Position of camera eye relative to the origin of the group
+        // (origin == group_size times the group coordinate).
+        static GLint eye_relative_group_origin_id;
+        static GLint far_plane_squared_id;
+        static GLint raycast_thresh_squared_id;
+        static GLint fog_enabled_id;
+        static GLint black_fog_id;
+
+        static GLint chunk_blocks_id;
+        static GLint chunk_debug_id;
+
+        if (vao == 0) {
+            program_id = make_program({
+                "raycast.vert", "raycast_texture.frag", "fog_border.frag" });
+            mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
+            assert(mvp_matrix_id >= 0);
+            eye_relative_group_origin_id = glGetUniformLocation(program_id,
+                "eye_relative_group_origin");
+            assert(eye_relative_group_origin_id >= 0);
+            chunk_blocks_id = glGetUniformLocation(program_id, "chunk_blocks");
+            assert(chunk_blocks_id >= 0);
+            chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
+            assert(chunk_debug_id >= 0);
+            far_plane_squared_id = glGetUniformLocation(program_id,
+                "far_plane_squared");
+            assert(far_plane_squared_id >= 0);
+            raycast_thresh_squared_id = glGetUniformLocation(program_id,
+                "raycast_thresh_squared");
+            assert(raycast_thresh_squared_id >= 0);
+            fog_enabled_id = glGetUniformLocation(program_id,
+                "fog_enabled");
+            assert(fog_enabled_id >= 0);
+            black_fog_id = glGetUniformLocation(program_id, "black_fog");
+            assert(black_fog_id >= 0);
+
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+
+            // The binding points for the non-instanced unit cube
+            // vertices, and the element buffer binding, will be
+            // stored forever in the VAO.
+            glGenBuffers(1, &vertex_buffer_id);
+            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
+            glBufferStorage(
+                GL_ARRAY_BUFFER, sizeof unit_box_vertices,
+                unit_box_vertices, 0);
+
+            glGenBuffers(1, &element_buffer_id);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
+            glBufferStorage(
+                GL_ELEMENT_ARRAY_BUFFER, sizeof unit_box_elements,
+                unit_box_elements, 0);
+
+            glVertexAttribPointer(
+                unit_box_vertex_idx,
+                3,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 6,
+                (void*)0);
+            glEnableVertexAttribArray(unit_box_vertex_idx);
+
+            glVertexAttribPointer(
+                unit_box_normal_idx,
+                3,
+                GL_FLOAT,
+                false,
+                sizeof(float) * 6,
+                (void*)12);
+            glEnableVertexAttribArray(unit_box_normal_idx);
+        }
+
+        glBindVertexArray(vao);
+        glUseProgram(program_id);
+        glUniform1i(chunk_debug_id, chunk_debug);
+        glUniform1i(fog_enabled_id, camera.get_fog());
+        glUniform1i(black_fog_id, camera.use_black_fog());
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(chunk_blocks_id, 0);
+        glUniform1i(far_plane_squared_id, far_plane * far_plane);
+        auto raycast_thr = camera.get_raycast_threshold();
+        glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
+        PANIC_IF_GL_ERROR;
+
+        std::vector<PositionedChunkGroup*> deferred_pcg;
+
+        // My plan is to use instanced rendering to draw the chunk AABBs
+        // of this chunk group. The base box is a 1x1x1 unit box, which
+        // is stretched and repositioned in the vertex shader to the
+        // true AABB.
+        //
+        // This is a bit of an experimental after-the-fact hack but
+        // the allow_defer and deferred_pcg variables are used to
+        //
+        // A. Throttle the number of RaycastStore updates done subject
+        //    to the limits of camera.max_raycast_evict.
+        //
+        // B. Put some time between updating a missing RaycastEntry and
+        //    drawing its corresponding chunk group. This /in principle/
+        //    prevents texture updates from stalling the GPU so much.
+        auto draw_group = [&] (PositionedChunkGroup& pcg, bool allow_defer)
+        {
+            StoreRequest request;
+            request.may_fail = allow_defer;
+            TRaycastEntry* entry = store.request<TRenderer>(
+                pcg, world, &request);
+
+            if (entry == nullptr) {
+                size_t allowed = camera.get_max_frame_new_chunk_groups();
+                if (deferred_pcg.size() < allowed) {
+                    request.may_fail = false;
+                    store.request<TRenderer>(pcg, world, &request);
+                    deferred_pcg.push_back(&pcg);
+                }
+                return;
+            }
+            assert(entry->texture_name != 0);
+            assert(entry->vbo_name != 0);
+
+            glBindTexture(GL_TEXTURE_3D, entry->texture_name);
+
+            // The view matrix only takes into account the eye's
+            // residue coordinate, so the model position of the group
+            // actually needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            glm::mat4 mvp = residue_vp_matrix * m;
+            glUniformMatrix4fv(mvp_matrix_id, 1, 0, &mvp[0][0]);
+            PANIC_IF_GL_ERROR;
+
+            // Similarly, the eye residue needs to be shifted by the
+            // group's position.
+            glm::vec3 eye_relative_group_origin = eye_residue - model_offset;
+            glUniform3fv(eye_relative_group_origin_id, 1,
+                &eye_relative_group_origin[0]);
+
+            // The unit box vertex attribs should already be bound by VAO.
+            //
+            // Get the instanced vertex attribs going (i.e. bind the
+            // AABB residue coords, packed as integers). I should
+            // probably make a VAO per chunk group in the
+            // RaycastEntry.
+            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            glVertexAttribIPointer(
+                packed_aabb_low_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(PackedAABB),
+                (void*) offsetof(PackedAABB, packed_low));
+            glEnableVertexAttribArray(packed_aabb_low_idx);
+            glVertexAttribDivisor(packed_aabb_low_idx, 1);
+
+            glVertexAttribIPointer(
+                packed_aabb_high_idx,
+                1,
+                GL_UNSIGNED_INT,
+                sizeof(PackedAABB),
+                (void*) offsetof(PackedAABB, packed_high));
+            glEnableVertexAttribArray(packed_aabb_high_idx);
+            glVertexAttribDivisor(packed_aabb_high_idx, 1);
+            PANIC_IF_GL_ERROR;
+
+            // Draw all edge_chunks^3 chunks in the chunk group.
+            auto instances = edge_chunks * edge_chunks * edge_chunks;
+            glDrawElementsInstanced(
+                GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr, instances);
+            PANIC_IF_GL_ERROR;
+        };
+
+        // Collect all chunk groups needing to be raycast, and sort from
+        // nearest to furthest (reverse painters). This fascilitates
+        // the early depth test optimization.
+        float squared_thresh = camera.get_far_plane();
+        squared_thresh *= squared_thresh;
+        std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
+
+        // TODO: Avoid visiting far away chunk groups.
+        for (PositionedChunkGroup& pcg : world.group_map) {
+            float min_squared_dist;
+            bool cull = cull_group(pcg, &min_squared_dist);
+            if (cull or min_squared_dist >= squared_thresh) continue;
+            pcg_by_depth.emplace_back(min_squared_dist, &pcg);
+        }
+
+        if (!disable_zcull_sort) {
+            std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        }
+        for (auto& pair : pcg_by_depth) {
+            draw_group(*pair.second, true);
+        }
+        for (PositionedChunkGroup* p_pcg : deferred_pcg) {
+            draw_group(*p_pcg, false);
+        }
+
+        glBindVertexArray(0);
+    }
+};
+
 void render_world_mesh_step(VoxelWorld& world, Camera& camera)
 {
-    Renderer(world, camera).render_world_mesh_step();
+    MRenderer(world, camera).render_world_mesh_step();
 }
 
 void render_world_raycast_step(VoxelWorld& world, Camera& camera)
 {
-    Renderer(world, camera).render_world_raycast_step();
+    if (use_TRenderer) TRenderer(world, camera).render_world_raycast_step();
+    else SRenderer(world, camera).render_world_raycast_step();
 }
 
 // Render the background. This uses a shader hard-wired to draw a
@@ -1646,7 +2086,11 @@ void delete_mesh_store(MeshStore* mesh_store)
 
 RaycastStore* new_raycast_store()
 {
-    return new RaycastStore;
+    const char* store_name = use_TRenderer ? "TRaycastStore" : "SRaycastStore";
+    fprintf(stderr, "Created %s\n", store_name);
+    return use_TRenderer ?
+        static_cast<RaycastStore*>(new TRaycastStore) :
+        static_cast<RaycastStore*>(new SRaycastStore);
 }
 
 void delete_raycast_store(RaycastStore* raycast_store)
