@@ -348,7 +348,7 @@ void add_key_targets(Window& window, Camera& camera)
     window.add_key_target("decrease_far_plane", decrease_far_plane);
 
     KeyTarget increase_target_fragments, decrease_target_fragments;
-    constexpr int min_nonzero_fragments = 65536;
+    constexpr int min_nonzero_fragments = 250000;
 
     increase_target_fragments.down = [&] (KeyArg) -> bool
     {
