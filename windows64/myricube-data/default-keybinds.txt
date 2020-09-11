@@ -39,6 +39,8 @@ f6              toggle_evict_stats_debug
 f5              unload_gpu_storage
 f9              decrease_far_plane
 f10             increase_far_plane      # Careful, can crash GPU if too high.
+f3              decrease_target_fragments
+f4              increase_target_fragments
 
 # Put my own keybinds in the git repo to make *my* life easier.
 # u               forward

@@ -1678,11 +1678,49 @@ static GLuint f32_depth_texture = 0;
 static GLuint f32_depth_renderbuffer = 0;
 static int f32_depth_framebuffer_x, f32_depth_framebuffer_y = 0;
 
-void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
+// Used to detect requested screen size changes.
+static int prev_screen_x = 0, prev_screen_y = 0, prev_target_fragments = 0;
+
+// Ratio of screen size (length / width) to framebuffer size.
+static int framebuffer_divisor = 1;
+
+
+void bind_global_f32_depth_framebuffer(
+    int screen_x, int screen_y, int target_fragments)
 {
+    int want_framebuffer_x = f32_depth_framebuffer_x;
+    int want_framebuffer_y = f32_depth_framebuffer_y;
+
+    if (target_fragments <= 0) {
+        want_framebuffer_x = screen_x;
+        want_framebuffer_y = screen_y;
+        framebuffer_divisor = 1;
+    }
+
+    // Recalculate the actual framebuffer size if needed.
+    else if (screen_x != prev_screen_x
+         or screen_y != prev_screen_y
+         or prev_target_fragments != target_fragments) {
+
+        for (framebuffer_divisor = 1;
+             framebuffer_divisor <= 16;
+             ++framebuffer_divisor) {
+
+            want_framebuffer_x = screen_x / framebuffer_divisor;
+            want_framebuffer_y = screen_y / framebuffer_divisor;
+            if (want_framebuffer_x * want_framebuffer_y <= target_fragments) {
+                break;
+            }
+        }
+    }
+
+    prev_screen_x = screen_x;
+    prev_screen_y = screen_y;
+    prev_target_fragments = target_fragments;
+
     // Destroy the framebuffer and its attachments if the screen size changed.
-    if (screen_x != f32_depth_framebuffer_x
-    or screen_y != f32_depth_framebuffer_y) {
+    if (want_framebuffer_x != f32_depth_framebuffer_x
+    or want_framebuffer_y != f32_depth_framebuffer_y) {
         if (f32_depth_framebuffer != 0) {
             fprintf(stderr, "Destroying old %i x %i framebuffer.\n",
                 f32_depth_framebuffer_x, f32_depth_framebuffer_y);
@@ -1692,8 +1730,8 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
         }
 
         f32_depth_framebuffer = 0;
-        f32_depth_framebuffer_x = screen_x;
-        f32_depth_framebuffer_y = screen_y;
+        f32_depth_framebuffer_x = want_framebuffer_x;
+        f32_depth_framebuffer_y = want_framebuffer_y;
         PANIC_IF_GL_ERROR;
     }
 
@@ -1702,6 +1740,9 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
         // Create framebuffer.
         fprintf(stderr, "Creating %i x %i framebuffer.\n",
                 f32_depth_framebuffer_x, f32_depth_framebuffer_y);
+        fprintf(stderr, "Downsampling by %i x %i.\n",
+                framebuffer_divisor, framebuffer_divisor);
+
         glCreateFramebuffers(1, &f32_depth_framebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
         PANIC_IF_GL_ERROR;
@@ -1746,6 +1787,7 @@ void bind_global_f32_depth_framebuffer(int screen_x, int screen_y)
     else {
         glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
     }
+    glViewport(0, 0, f32_depth_framebuffer_x, f32_depth_framebuffer_y);
     PANIC_IF_GL_ERROR;
 }
 
@@ -1762,7 +1804,6 @@ void finish_global_f32_depth_framebuffer(int screen_x, int screen_y)
         GL_COLOR_BUFFER_BIT,
         GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, f32_depth_framebuffer_x, f32_depth_framebuffer_y);
     PANIC_IF_GL_ERROR;
 }
 

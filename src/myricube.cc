@@ -106,6 +106,7 @@ bool ends_with_bin_or_exe(const std::string& in)
 }
 
 bool paused = false;
+int target_fragments = 0;
 
 void add_key_targets(Window& window, Camera& camera)
 {
@@ -345,6 +346,34 @@ void add_key_targets(Window& window, Camera& camera)
         return !arg.repeat;
     };
     window.add_key_target("decrease_far_plane", decrease_far_plane);
+
+    KeyTarget increase_target_fragments, decrease_target_fragments;
+    constexpr int min_nonzero_fragments = 65536;
+
+    increase_target_fragments.down = [&] (KeyArg) -> bool
+    {
+        if (target_fragments <= 0) target_fragments = min_nonzero_fragments;
+        else target_fragments *= 2;
+
+        fprintf(stderr, "%i target fragments.\n", target_fragments);
+        return true;
+    };
+    window.add_key_target(
+        "increase_target_fragments", increase_target_fragments);
+    decrease_target_fragments.down = [&] (KeyArg) -> bool
+    {
+        if (target_fragments <= min_nonzero_fragments) {
+            target_fragments = 0;
+            fprintf(stderr, "Unlimited fragments.\n");
+        }
+        else {
+            target_fragments /= 2;
+            fprintf(stderr, "%i target fragments.\n", target_fragments);
+        }
+        return true;
+    };
+    window.add_key_target(
+        "decrease_target_fragments", decrease_target_fragments);
 }
 
 // Given the full path of a key binds file, parse it for key bindings
@@ -587,7 +616,7 @@ int Main(std::vector<std::string> args)
         camera.fix_dirty();
 
         gl_clear();
-        bind_global_f32_depth_framebuffer(screen_x, screen_y);
+        bind_global_f32_depth_framebuffer(screen_x, screen_y, target_fragments);
         gl_clear();
         render_world_mesh_step(*world, camera);
         render_world_raycast_step(*world, camera);
