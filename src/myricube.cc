@@ -583,7 +583,6 @@ int Main(std::vector<std::string> args)
     int screen_x = 0, screen_y = 0;
     auto on_window_resize = [&camera, &screen_x, &screen_y] (int x, int y)
     {
-        viewport(x, y);
         camera.set_window_size(x, y);
         screen_x = x;
         screen_y = y;
@@ -615,13 +614,18 @@ int Main(std::vector<std::string> args)
         if (!paused) world = &app->update(dt);
         camera.fix_dirty();
 
+        viewport(screen_x, screen_y);
         gl_clear();
-        bind_global_f32_depth_framebuffer(screen_x, screen_y, target_fragments);
+        if (target_fragments > 0) {
+            bind_global_f32_depth_framebuffer(screen_x, screen_y, target_fragments);
+        }
         gl_clear();
         render_world_mesh_step(*world, camera);
         render_world_raycast_step(*world, camera);
         render_background(camera);
-        finish_global_f32_depth_framebuffer(screen_x, screen_y);
+        if (target_fragments > 0) {
+            finish_global_f32_depth_framebuffer(screen_x, screen_y);
+        }
 
         extern bool evict_stats_debug;
         evict_stats_debug = false;

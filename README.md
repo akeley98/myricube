@@ -35,10 +35,14 @@ right-click-drag or trackpad two-finger scroll to look around.
 
 left/right arrows or thumb buttons to go through camera history.
 
+`k` in the default app generates another random walk.
+
 `f9`/`f10` to change the render distance (be careful not to run out of memory),
 and `f`,`b` to toggle fog/fog color.
 
-`k` in the default app generates another random walk.
+`f3`/`f4` to change the maximum resolution. NOTE: Pressing `f4` a few
+times can work-around weird z-fighting artifacts (sometimes happens on
+Windows).
 
 ## Playing with Myricube
 
