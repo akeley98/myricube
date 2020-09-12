@@ -34,6 +34,25 @@ inline uint32_t to_packed_color(Voxel v)
          | (v.visible ? visible_bit : 0);
 }
 
+// Write out the voxel as a texel in the given GL format and type (if
+// supported).
+template <GLenum format, GLenum type>
+inline void write_voxel_texel(Voxel, void*)
+{
+    static_assert(format != format, "Add support for format.");
+}
+
+template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
+    (Voxel v, void* texel)
+{
+    *static_cast<uint32_t*>(texel) =
+        uint32_t(v.red) << 24 |
+        uint32_t(v.green) << 16 |
+        uint32_t(v.blue) << 8 |
+        v.visible ? 255u : 0u;
+}
+
+
 // My new plan for the GPU voxel mesh: each visible voxel will be
 // represented by ONE vertex in a VBO; instanced rendering will
 // transform this vertex into an actual cube. This vertex encodes, in

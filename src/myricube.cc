@@ -14,11 +14,7 @@
 // the chunk, and the AABB itself is drawn using a raycasting fragment
 // shader that checks for collisions with the voxels contained in the
 // AABB. The voxel data itself (when raycasting is used) is stored
-// using a 3D texture^ -- this is considerably more memory efficient
-// than a triangle mesh. (Actually, now that I switched to instanced
-// rendering, this memory point may no longer be true...)
-//
-//     ^ Really, a 3D array in an SSBO; much faster to write than textures.
+// using a 3D texture.
 //
 // Cubes of chunks are organized into larger chunk groups. For OpenGL
 // efficiency, chunks within the same chunk group share GPU resources
@@ -34,11 +30,11 @@
 // To be precise, note also that a voxel at coordinate (x,y,z) occupies
 // the cube from (x,y,z) to (x+1,y+1,z+1) in space.
 //
-// The primary benefits of raycasting are the aforementioned memory
-// efficiency and the reduced number of triangle vertices processed
-// (12 triangles are shared for all voxels per chunk, instead of up to
-// 12 triangles per solid voxel). There are several drawbacks that make
-// raycasting suitable only for distant chunks:
+// The primary benefit of raycasting is the reduced number of triangle
+// vertices processed (12 triangles are shared for all voxels per
+// chunk, instead of up to 12 triangles per solid voxel). There are
+// several drawbacks that make raycasting suitable only for distant
+// chunks:
 //
 // * Raycasting cost is roughly linear in the size of the rendered
 //   triangles (because the raycast fragment shader is the most
