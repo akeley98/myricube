@@ -158,6 +158,12 @@ struct MeshEntry
         swap(*this, other);
     }
 
+    MeshEntry& operator= (MeshEntry&& other)
+    {
+        swap(*this, other);
+        return *this;
+    }
+
     friend void swap(MeshEntry& left, MeshEntry& right)
     {
         using std::swap;
@@ -228,12 +234,6 @@ struct PackedAABB
 // handle for the GPU data needed to raycast one chunk group.
 struct RaycastEntry
 {
-    // World ID and group coordinate of the chunk group this texture
-    // and AABB array is for. This can be used to tell if this entry
-    // is correct or needs to be replaced in RaycastStore.
-    uint64_t world_id = 0;
-    glm::ivec3 group_coord;
-
     // aabb_array[z][y][x] is the minimal AABB containing the visible
     // voxels of ChunkGroup::chunk_array[z][y][x].
     //
@@ -264,11 +264,15 @@ struct RaycastEntry
         swap(*this, other);
     }
 
+    RaycastEntry& operator=(RaycastEntry&& other)
+    {
+        swap(*this, other);
+        return *this;
+    }
+
     friend void swap(RaycastEntry& left, RaycastEntry& right)
     {
         using std::swap;
-        swap(left.world_id, right.world_id);
-        swap(left.group_coord, right.group_coord);
         swap(left.aabb_array, right.aabb_array);
         swap(left.vbo_name, right.vbo_name);
         swap(left.texture_name, right.texture_name);
@@ -280,7 +284,12 @@ struct RaycastEntry
 struct StoreRequest
 {
     // Input: allow the store to return a nullptr if servicing this
-    // request would be slow somehow.
+    // request would be slow somehow.  NOTE: This variable has been
+    // hijacked from its original purpose (prevent cache eviction) to
+    // something entirely different (allow RaycastStore to upload
+    // textures asynchronously over multiple frames.)
+    //
+    // I really need to re-think this design...
     bool may_fail = false;
 
     // Input: allow the store to overwrite data in order to service
@@ -292,11 +301,11 @@ struct StoreRequest
     bool was_in_store;
 };
 
-// Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
-// structs for chunk groups near the camera. They are stored in a
-// wraparound fashion (i.e.  using modular arithmetic on group
-// coordinates) so that as the camera moves, the new groups being
-// rendered overwrites the old groups no longer being rendered.
+// Set-associative cache of MeshEntry/RaycastEntry objects. The idea
+// is to store entry structs for chunk groups near the camera. They
+// are stored in a wraparound fashion (i.e.  using modular arithmetic
+// on group coordinates) so that as the camera moves, the new groups
+// being rendered overwrites the old groups no longer being rendered.
 template <class Entry, uint32_t DefaultModulus, uint32_t Assoc>
 class BaseStore
 {
@@ -338,8 +347,7 @@ class BaseStore
     Entry* cached_location(
         bool* p_valid,
         glm::ivec3 group_coord,
-        uint64_t world_id,
-        bool may_fail=false)
+        uint64_t world_id)
     {
         uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % modulus;
         uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % modulus;
@@ -361,12 +369,6 @@ class BaseStore
 
         // Not found at this point; need to choose the least-recently
         // used entry to evict. This is much colder code than above.
-        // However, skip all this if we don't actually need it
-        // (may_fail is true).
-        if (may_fail) {
-            *p_valid = false;
-            return nullptr;
-        }
         uint64_t min_access = cache_set.last_access[0];
         unsigned evict_idx = 0;
         for (unsigned i = 1; i < Assoc; ++i) {
@@ -434,7 +436,7 @@ class BaseStore
     // group extracted from the given world. See StoreRequest for
     // control parameters.
     //
-    // This requires a template parameter providing static functions:
+    // This requires an EntryFiller instance providing member functions:
     //
     // replace(PositionedChunkGroup, VoxelWorld, Entry*)
     //
@@ -449,7 +451,8 @@ class BaseStore
     //     up-to-date (i.e. return false only when read_only was
     //     true, but some changed data needed to be re-uploaded).
     template <typename EntryFiller>
-    Entry* request(PositionedChunkGroup& pcg,
+    Entry* request(EntryFiller& filler,
+                   PositionedChunkGroup& pcg,
                    VoxelWorld& world,
                    StoreRequest* request)
     {
@@ -458,7 +461,7 @@ class BaseStore
         glm::ivec3 gc = group_coord(pcg);
         bool valid;
         Entry* entry =
-            cached_location(&valid, gc, world.id(), request->may_fail);
+            cached_location(&valid, gc, world.id());
         request->was_in_store = valid;
 
         // If the Entry in the array already corresponds to the given
@@ -466,16 +469,14 @@ class BaseStore
         // dirty chunks) and return.
         if (valid) {
             bool success =
-                EntryFiller::update(pcg, world, entry, request->read_only);
+                filler.update(pcg, world, entry, request->read_only);
             assert(success or request->read_only);
             return success ? entry : nullptr;
         }
 
-        // Otherwise, either fail if allowed, or evict and replace a
-        // cache entry with data for the new chunk group.
-        if (request->may_fail) return nullptr;
-
-        EntryFiller::replace(pcg, world, entry);
+        // Otherwise, evict and replace a cache entry with data for
+        // the new chunk group.
+        filler.replace(pcg, world, entry);
         ++eviction_count;
         return entry;
     }
@@ -515,6 +516,7 @@ class BaseStore
                     bool valid;
                     Entry* new_location = cached_location(
                         &valid, old_entry.group_coord, world_id);
+                    using std::swap;
                     swap(*new_location, old_entry);
                     // Note: May want to preserve the old last_accessed time.
                     // For now, each cached_location updates the access time,
@@ -582,9 +584,450 @@ class BaseStore
 
 class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
-class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
+// New plan for storing 3D textures for raycasting:
+//
+// TODO fill in (if it works...)
+//
+// This is disasterous design at this point but I just want to see if
+// it works first.
+class RaycastStore
 {
+  public:
+    struct Entry
+    {
+        uint64_t world_id = 0;
+        glm::ivec3 group_coord;
 
+        bool should_display = false;
+        RaycastEntry raycast_entry;
+
+        Entry() = default;
+        Entry(Entry&&) = default;
+        Entry& operator=(Entry&&) = default;
+
+        // Won't compile without this for unknown reason.
+        friend void swap(Entry& left, Entry& right) {
+            Entry tmp = std::move(left);
+            left = std::move(right);
+            right = std::move(tmp);
+        }
+    };
+
+  private:
+    BaseStore<Entry, 4, 12> base_store;
+
+    static constexpr GLenum Format = GL_RGBA;
+    static constexpr GLenum Type = GL_UNSIGNED_INT_8_8_8_8;
+    using HostType = uint32_t;
+    static constexpr size_t pbo_bytes =
+        sizeof(HostType) * group_size * group_size * group_size;
+
+    struct StagingTexture
+    {
+        uint64_t world_id = 0;
+        glm::ivec3 group_coord;
+
+        GLuint texture_name = 0;
+        GLuint pbo_name = 0;
+
+        // Null iff pbo is not mapped.
+        void* mapped_pbo = nullptr;
+
+        bool busy() const
+        {
+            return world_id != 0;
+        }
+
+        friend void swap(StagingTexture& us, StagingTexture& other)
+        {
+            using std::swap;
+            swap(us.world_id, other.world_id);
+            swap(us.group_coord, other.group_coord);
+            swap(us.texture_name, other.texture_name);
+            swap(us.pbo_name, other.pbo_name);
+            swap(us.mapped_pbo, other.mapped_pbo);
+        }
+
+        StagingTexture() = default;
+
+        StagingTexture(StagingTexture&& other)
+        {
+            swap(*this, other);
+        }
+
+        ~StagingTexture()
+        {
+            // Note: the unneeded zero check keeps the move efficient.
+            if (texture_name != 0) glDeleteTextures(1, &texture_name);
+            if (pbo_name != 0) glDeleteBuffers(1, &pbo_name);
+            mapped_pbo = nullptr;
+        }
+
+        void init_if_needed() noexcept
+        {
+            if (texture_name == 0) {
+                glGenTextures(1, &texture_name);
+                auto tex3d = GL_TEXTURE_3D;
+                glBindTexture(tex3d, texture_name);
+                glTexParameteri(tex3d, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexParameteri(tex3d, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(tex3d, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(tex3d, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(tex3d, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+                glTexStorage3D(
+                    tex3d, 1, GL_RGBA8, group_size, group_size, group_size);
+                PANIC_IF_GL_ERROR;
+            }
+
+            if (pbo_name == 0) {
+                glGenBuffers(1, &pbo_name);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_name);
+                auto sz = pbo_bytes;
+                auto flags = GL_MAP_WRITE_BIT;
+                glBufferStorage(GL_PIXEL_UNPACK_BUFFER, sz, nullptr, flags);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                PANIC_IF_GL_ERROR;
+            }
+        }
+
+        void map()
+        {
+            init_if_needed();
+            if (mapped_pbo == nullptr) {
+                mapped_pbo = glMapNamedBuffer(pbo_name, GL_WRITE_ONLY);
+                PANIC_IF_GL_ERROR;
+            }
+        }
+
+        // Unmap mapped buffer, forwards success enum from GL.
+        [[nodiscard]] bool unmap()
+        {
+            if (mapped_pbo != nullptr) {
+                mapped_pbo = nullptr;
+                return glUnmapNamedBuffer(pbo_name);
+            }
+            return false; // No buffer mapping in the first place???
+        }
+    };
+
+    std::vector<StagingTexture> read_staging_textures =
+        std::vector<StagingTexture>(40);
+    std::vector<StagingTexture> write_staging_textures =
+        std::vector<StagingTexture>(40);
+
+    struct QueueEntry
+    {
+        uint64_t world_id;
+        glm::ivec3 group_coord;
+
+        friend bool operator== (QueueEntry left, QueueEntry right) {
+            return left.world_id == right.world_id
+               and left.group_coord == right.group_coord;
+        }
+
+        friend bool operator!= (QueueEntry left, QueueEntry right) {
+            return left.world_id != right.world_id
+                or left.group_coord != right.group_coord;
+        }
+    };
+
+    // queue[0] is the head of the queue; push at the end.
+    std::vector<QueueEntry> queue;
+
+    // Needed to propagate info from the caller's request to the
+    // update function.
+    bool may_fail = false;
+
+  public:
+    // Function for replacing an entry in the texture cache with data
+    // for a new chunk group.  In this case, we need to set
+    // should_display to false, to prevent the previously-resident
+    // chunk group's contents from flashing momentarily.
+    void replace(PositionedChunkGroup& pcg,
+                 VoxelWorld& world,
+                 Entry* entry)
+    {
+        entry->world_id = world.id();
+        entry->group_coord = group_coord(pcg);
+        entry->should_display = false;
+
+        // Use AlwaysDirty=true to get the update function to
+        // (eventually) upload the needed contents.
+        update<true>(pcg, world, entry, false);
+    }
+
+    // Update any dirty chunks from the given chunk group to its
+    // corresponding Entry. If may_fail is true, this update may be
+    // enqueued for later (using the PBOs in
+    // staging_textures). Otherwise we may have to upload from host
+    // memory directly.
+    template <bool AlwaysDirty=false>
+    bool update(PositionedChunkGroup& pcg,
+                VoxelWorld& world,
+                Entry* entry,
+                bool read_only) noexcept
+    {
+        auto world_id = world.id();
+        auto gc = group_coord(pcg);
+        auto& raycast_entry = entry->raycast_entry;
+        assert(world_id == entry->world_id);
+        assert(group_coord(pcg) == entry->group_coord);
+
+        // First, check the staging textures to see if any are for us.
+        // If so, complete the texture transfer (copy texels from PBO
+        // to texture) and take it for ourselves. This is the LAST
+        // step in the upload cycle, but it's first in this function.
+        for (StagingTexture& st : read_staging_textures) {
+            if (st.world_id == world_id and st.group_coord == gc) {
+                if (read_only) return false;
+
+                // Deal with rare (never on modern OS's?) unmap failure.
+                // TODO: fake failure to see if this works.
+                bool okay = st.unmap();
+                if (!okay) {
+                    st.world_id = 0;
+                    fprintf(stderr,
+                    "Unmap failed; defaulting to non-async texture upload.\n");
+                    return update<true>(pcg, world, entry, read_only);
+                }
+
+                PANIC_IF_GL_ERROR;
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, st.pbo_name);
+                glTextureSubImage3D(
+                    st.texture_name,
+                    0, 0, 0, 0, group_size, group_size, group_size,
+                    Format, Type, nullptr);
+                using std::swap;
+                swap(st.texture_name, raycast_entry.texture_name);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                PANIC_IF_GL_ERROR;
+
+                update_aabb_vbo<true>(group(pcg), raycast_entry);
+                entry->should_display = true;
+                return true;
+            }
+        }
+
+        // If there was no texture staged for us, we can just exit if
+        // no chunks are dirty (or if forced by read_only). This is
+        // rather inefficient...
+        bool tex_dirty = AlwaysDirty;
+        bool aabb_dirty = AlwaysDirty;
+        if (!AlwaysDirty) {
+            for (int z = 0; z < edge_chunks; ++z) {
+                for (int y = 0; y < edge_chunks; ++y) {
+                    for (int x = 0; x < edge_chunks; ++x) {
+                        const Chunk& chunk = group(pcg).chunk_array[z][y][x];
+                        tex_dirty |= chunk.texture_dirty;
+                        aabb_dirty |= chunk.aabb_gpu_dirty;
+                    }
+                }
+            }
+        }
+        if (!tex_dirty) {
+            if (aabb_dirty) {
+                if (read_only) return false;
+                else update_aabb_vbo<true>(group(pcg), raycast_entry);
+            }
+            return true;
+        }
+        if (read_only) return false;
+
+        // Otherwise, if we're not allowed to fail, we have to get
+        // the texture uploaded immediately, directly from device memory.
+        if (!may_fail) {
+            if (read_only) return false;
+
+            if (raycast_entry.texture_name == 0) {
+                StagingTexture st;
+                st.init_if_needed();
+                std::swap(st.texture_name, raycast_entry.texture_name);
+            }
+            assert(raycast_entry.texture_name != 0);
+
+            char host_buffer[pbo_bytes];
+            undirty_group_write_texels(group(pcg), host_buffer);
+            glTextureSubImage3D(
+                raycast_entry.texture_name,
+                0, 0, 0, 0, group_size, group_size, group_size,
+                Format, Type, host_buffer);
+            PANIC_IF_GL_ERROR;
+
+            update_aabb_vbo<true>(group(pcg), raycast_entry);
+            entry->should_display = true;
+            return true;
+        }
+
+        // Contrary-wise, if we are allowed to fail, we need to
+        // (eventually) get this chunk group's data into a staging
+        // texture.
+
+        // Check first to see if we're close enough to the head of the
+        // queue to be ready to go to a staging texture. We can also
+        // do this if the queue is empty enough.
+
+        // In theory I can do book-keeping to track the number of
+        // staging textures free, but this is potentially fragile if I
+        // resize the number of staging textures.
+        ptrdiff_t free_staging_textures = 0;
+        StagingTexture* p_staging_texture = nullptr;
+        for (StagingTexture& st : write_staging_textures) {
+            bool free = !st.busy();
+            free_staging_textures += free;
+            p_staging_texture = free ? &st : p_staging_texture;
+        }
+
+        QueueEntry queue_entry { world_id, gc };
+        auto it = std::find(queue.begin(), queue.end(), queue_entry);
+
+        if (it - queue.begin() < free_staging_textures) {
+            // if (it != queue.end()) queue.erase(it);
+
+            // Actually, deal with this in end_frame (what if
+            // something in queue never has update called on it?)
+
+            assert(p_staging_texture != nullptr);
+
+            StagingTexture& st = *p_staging_texture;
+            st.world_id = world_id;
+            st.group_coord = gc;
+
+            st.map();
+            assert(st.mapped_pbo != nullptr);
+            undirty_group_write_texels(group(pcg), st.mapped_pbo);
+            // Don't unmap yet to give time for DMA.
+            return true;
+        }
+
+        // If we're here, this is the worst case scenario: there's so
+        // many groups waiting in the queue that we can't get a
+        // staging texture yet :(
+        // Just get in line ourselves, unless we're already in line.
+        if (it == queue.end()) {
+            queue.push_back(queue_entry);
+        }
+        return true;
+    }
+
+  private:
+    // Upload any changed chunk AABBs (or all of them if AlwaysDirty)
+    // to the AABB vbo in the RaycastEntry. (Create it if we must).
+    template <bool AlwaysDirty>
+    static void update_aabb_vbo(ChunkGroup& group, RaycastEntry& entry)
+    {
+        if (entry.vbo_name == 0) {
+            constexpr auto sz = sizeof entry.aabb_array;
+            static_assert(sz > 64, "Did aabb_array become a smart ptr?");
+
+            glCreateBuffers(1, &entry.vbo_name);
+            auto flags = GL_DYNAMIC_STORAGE_BIT;
+            glNamedBufferStorage(entry.vbo_name, sz, nullptr, flags);
+            PANIC_IF_GL_ERROR;
+        }
+
+        bool vbo_dirty = false;
+        for (int zh = 0; zh < edge_chunks; ++zh) {
+            for (int yh = 0; yh < edge_chunks; ++yh) {
+                for (int xh = 0; xh < edge_chunks; ++xh) {
+                    Chunk& chunk = group.chunk_array[zh][yh][xh];
+                    bool aabb_dirty = AlwaysDirty | chunk.aabb_gpu_dirty;
+                    vbo_dirty |= aabb_dirty;
+
+                    if (aabb_dirty) {
+                        glm::ivec3 aabb_low, aabb_high;
+                        chunk.get_aabb(&aabb_low, &aabb_high);
+                        chunk.aabb_gpu_dirty = false;
+                        entry.aabb_array[zh][yh][xh] =
+                            PackedAABB(aabb_low, aabb_high);
+                    }
+                }
+            }
+        }
+        if (vbo_dirty) {
+            glNamedBufferSubData(entry.vbo_name, 0,
+                                 sizeof entry.aabb_array, entry.aabb_array);
+            PANIC_IF_GL_ERROR;
+        }
+    }
+
+    // Take the voxels of the given chunk group and write them out as
+    // texels in the format expected by glTexSubImage3D (z/y/x order).
+    // Mark the group's chunks as non-dirty as we go along.
+    static void undirty_group_write_texels(ChunkGroup& group, void* texels)
+    {
+        HostType* current_texel = static_cast<HostType*>(texels);
+
+        for (int z = 0; z < group_size; ++z) {
+            auto& chunk_plane = group.chunk_array[z >> chunk_shift];
+            auto zl = z & (chunk_size - 1);
+
+            for (int y = 0; y < group_size; ++y) {
+                auto& chunk_row = chunk_plane[y >> chunk_shift];
+                auto yl = y & (chunk_size - 1);
+
+                for (int x = 0; x < group_size; ++x) {
+                    Chunk& chunk = chunk_row[x >> chunk_shift];
+                    auto xl = x & (chunk_size - 1);
+                    chunk.texture_dirty = false;
+                    Voxel voxel = chunk.voxel_array[zl][yl][xl];
+                    write_voxel_texel<Format, Type>(voxel, current_texel++);
+                }
+            }
+        }
+        auto sz = reinterpret_cast<char*>(current_texel)
+                - reinterpret_cast<char*>(texels);
+        assert(sz == pbo_bytes);
+    }
+
+    // Pretty much just forward BaseStore's interface as the public interface.
+  public:
+    RaycastEntry* request(PositionedChunkGroup& pcg,
+                          VoxelWorld& world,
+                          StoreRequest* request)
+    {
+        may_fail = request->may_fail; // Eughh, my own cache design isn't
+                                      // coping well with my design changes.
+        Entry* entry = base_store.request(*this, pcg, world, request);
+        if (entry == nullptr or !entry->should_display) {
+            assert(may_fail);
+            return nullptr;
+        }
+        assert(entry->raycast_entry.texture_name != 0);
+        return &entry->raycast_entry;
+    }
+
+    void set_modulus(uint32_t new_modulus, uint64_t world_id)
+    {
+        base_store.set_modulus(new_modulus, world_id);
+    }
+
+    void stats_begin_frame()
+    {
+        base_store.stats_begin_frame();
+    }
+
+    void print_stats_end_frame()
+    {
+        base_store.print_stats_end_frame();
+    }
+
+    // Swap the just-written (data written to PBO) staging textures
+    // into the list of staging textures ready to be read from (PBO
+    // data copied to texture object, and then into the base store).
+    // Also mark all write staging textures as un-busy and ready to be
+    // written to.
+    //
+    // This is also where I pop off the stuff that should have been
+    // serviced from the queue (this is so bad...)
+    void end_frame()
+    {
+        auto to_remove = std::min(queue.size(), write_staging_textures.size());
+        queue.erase(queue.begin(), queue.begin() + to_remove);
+        swap(read_staging_textures, write_staging_textures);
+        for (StagingTexture& st : write_staging_textures) {
+            st.world_id = 0;
+        }
+    }
 };
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
@@ -1064,7 +1507,7 @@ class Renderer
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
             if (group(pcg).total_visible == 0) return;
-            MeshEntry* entry = store.request<Renderer>(pcg, world, &request);
+            MeshEntry* entry = store.request(*this, pcg, world, &request);
 
             assert(entry->vbo_name != 0);
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
@@ -1162,148 +1605,6 @@ class Renderer
 
     // Now time to write the AABB-raycasting renderer. Here goes...
 
-    // Fill the given RaycastEntry with the 3D array + AABBs for
-    // the given chunk group from the given world.
-    static void replace(PositionedChunkGroup& pcg,
-                        VoxelWorld& world,
-                        RaycastEntry* entry)
-    {
-        entry->world_id = world.id();
-        entry->group_coord = group_coord(pcg);
-
-        // I only allocate the buffers for now.
-        if (entry->vbo_name == 0) {
-            glCreateBuffers(1, &entry->vbo_name);
-            auto flags = GL_DYNAMIC_STORAGE_BIT;
-            auto sz = sizeof(RaycastEntry::aabb_array);
-            glNamedBufferStorage(entry->vbo_name, sz, nullptr, flags);
-            PANIC_IF_GL_ERROR;
-        }
-
-        // Same with the texture, just create storage for it for now.
-        if (entry->texture_name == 0) {
-            glGenTextures(1, &entry->texture_name);
-            GLint texture_name = entry->texture_name;
-
-            glBindTexture(GL_TEXTURE_3D, texture_name);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-            PANIC_IF_GL_ERROR;
-            glTexStorage3D(
-                GL_TEXTURE_3D, 1, GL_RGBA8, group_size, group_size, group_size);
-            PANIC_IF_GL_ERROR;
-        }
-
-        // Then, parasitically depend on the update RaycastEntry
-        // function to actually fill the buffers with data, again
-        // using an overriding AlwaysDirty parameter.
-        update<true>(pcg, world, entry, false);
-    }
-
-    // Update the given raycast entry with new data from dirty chunks
-    // (or all chunks, if AlwaysDirty is true), except report failure
-    // (return false) only when read_only is true but dirty data
-    // needed to be written to the RaycastEntry.
-    //
-    // Requires that the RaycastEntry corresponds to the given chunk
-    // group of the given world.
-    template <bool AlwaysDirty=false>
-    static bool update(PositionedChunkGroup& pcg,
-                       VoxelWorld& world,
-                       RaycastEntry* entry,
-                       bool read_only)
-    {
-        assert(entry->world_id == world.id());
-        assert(entry->group_coord == group_coord(pcg));
-        assert(entry->vbo_name != 0);
-        assert(entry->texture_name != 0);
-
-        constexpr GLenum Format = GL_RGBA, Type = GL_UNSIGNED_INT_8_8_8_8;
-
-        // Will be resized and filled with texture data for the whole
-        // group if any chunk is dirty.
-        std::vector<uint32_t> scratch;
-
-        // I just need to visit the chunks in one pass and upload
-        // dirty chunks and AABBs (but defer upload of AABB to
-        // later to reduce calls; the vbo_dirty flag is useful here).
-        bool vbo_dirty = false;
-
-        // This goto label is gross but I'm planning to replace this
-        // soon with asynchronous texture uploads.
-        int xh, yh, zh;
-      restart:
-        for (zh = 0; zh < edge_chunks; ++zh) {
-            for (yh = 0; yh < edge_chunks; ++yh) {
-                for (xh = 0; xh < edge_chunks; ++xh) {
-                    Chunk& chunk = group(pcg).chunk_array[zh][yh][xh];
-                    bool tex_dirty = AlwaysDirty | chunk.texture_dirty;
-                    bool aabb_dirty = AlwaysDirty | chunk.aabb_gpu_dirty;
-                    vbo_dirty |= aabb_dirty;
-
-                    if (tex_dirty or !scratch.empty()) {
-                        if (read_only) return false;
-
-                        if (scratch.empty()) {
-                            scratch.resize(
-                                group_size * group_size * group_size);
-                            goto restart;
-                        }
-
-                        for (int zl = 0; zl < chunk_size; ++zl) {
-                            int z = zh * chunk_size + zl;
-                            for (int yl = 0; yl < chunk_size; ++yl) {
-                                int y = yh * chunk_size + yl;
-                                for (int xl = 0; xl < chunk_size; ++xl) {
-                                    int x = xh * chunk_size + xl;
-
-                                    void* texel = &scratch[
-                                        group_size * group_size * z
-                                        + group_size * y + x];
-                                    Voxel v = chunk.voxel_array[zl][yl][xl];
-                                    write_voxel_texel<Format, Type>(v, texel);
-                                }
-                            }
-                        }
-                        chunk.texture_dirty = false;
-                    }
-
-                    if (aabb_dirty) {
-                        if (read_only) return false;
-
-                        glm::ivec3 aabb_low, aabb_high;
-                        chunk.get_aabb(&aabb_low, &aabb_high);
-                        chunk.aabb_gpu_dirty = false;
-                        entry->aabb_array[zh][yh][xh] =
-                            PackedAABB(aabb_low, aabb_high);
-                    }
-                }
-            }
-        }
-        PANIC_IF_GL_ERROR;
-
-        // Now re-upload AABBs if any changed.
-        if (vbo_dirty) {
-            glNamedBufferSubData(entry->vbo_name, 0,
-                                 sizeof entry->aabb_array, entry->aabb_array);
-            PANIC_IF_GL_ERROR;
-        }
-        static_assert(sizeof entry->aabb_array >= 64,
-            "Suspiciously small aabb_array, did it get replaced by a ptr?");
-
-        // Re-upload texture if needed too.
-        if (!scratch.empty()) {
-            glTextureSubImage3D(
-                entry->texture_name, 0, 0, 0, 0,
-                group_size, group_size, group_size,
-                Format, Type, scratch.data());
-        }
-        return true;
-    }
-
     // Render, to the current framebuffer, chunks around the camera
     // using the AABB-raycast algorithm. Chunks that are near
     // enough to have been drawn using the mesh algorithm will
@@ -1317,7 +1618,6 @@ class Renderer
         auto far_plane = camera.get_far_plane();
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
-        store.resize_victim_cache(0);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1418,35 +1718,19 @@ class Renderer
         glUniform1i(chunk_group_texture_id, 0);
 
         PANIC_IF_GL_ERROR;
-
-        // Count and limit the number of new chunk groups added to the
-        // RaycastStore this frame.
-        int remaining_new_chunk_groups_allowed =
-            camera.get_max_frame_new_chunk_groups();
+        unsigned drawn_group_count = 0;
 
         // My plan is to use instanced rendering to draw the chunk AABBs
         // of this chunk group. The base box is a 1x1x1 unit box, which
         // is stretched and repositioned in the vertex shader to the
         // true AABB.
-        //
-        // If p_defer_list is not nullptr, chunk groups whose
-        // RaycastEntry (voxel data storage) weren't quite ready are
-        // pushed onto this list and rendered in the second
-        // pass. Otherwise, we force all chunk groups to be ready
-        // (possible stall).
-        auto draw_group = [&] (
-            PositionedChunkGroup& pcg,
-            std::vector<PositionedChunkGroup*>* p_defer_list)
+        auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
             // Get the data for this chunk group. Defer if needed.
             StoreRequest request;
-            request.may_fail = (p_defer_list != nullptr);
-            RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
+            request.may_fail = true;
+            RaycastEntry* entry = store.request(pcg, world, &request);
             if (entry == nullptr) {
-                assert(p_defer_list);
-                if (remaining_new_chunk_groups_allowed <= 0) return;
-                --remaining_new_chunk_groups_allowed;
-                p_defer_list->push_back(&pcg);
                 return;
             }
 
@@ -1513,7 +1797,6 @@ class Renderer
         std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
 
         // TODO: Avoid visiting far away chunk groups.
-        unsigned drawn_group_count = 0;
         for (PositionedChunkGroup& pcg : world.group_map) {
             float min_squared_dist;
             bool cull = cull_group(pcg, &min_squared_dist);
@@ -1525,18 +1808,14 @@ class Renderer
         if (!disable_zcull_sort) {
             std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
         }
-        std::vector<PositionedChunkGroup*> deferred_pcg;
 
         for (auto& pair : pcg_by_depth) {
-            draw_group(*pair.second, &deferred_pcg);
+            draw_group(*pair.second);
         }
-        for (PositionedChunkGroup* p_pcg : deferred_pcg) {
-            draw_group(*p_pcg, nullptr);
-        }
-
         PANIC_IF_GL_ERROR;
 
         glBindVertexArray(0);
+        store.end_frame();
 
         if (evict_stats_debug) {
             fprintf(stderr, "\x1b[36mRaycastStore stats:\x1b[0m\n");

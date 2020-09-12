@@ -45,6 +45,7 @@ class Camera
     int window_x = 1, window_y = 1;
 
     // Maximum number of new chunk groups added to GPU memory per frame.
+    // TODO: This is ignored by the new PBO texture upload for now.
     int max_frame_new_chunk_groups = 7;
 
     // Fog setting.

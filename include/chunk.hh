@@ -40,6 +40,7 @@ struct Voxel
 class Chunk
 {
     friend class Renderer;
+    friend class RaycastStore;
     friend class ChunkGroup;
 
     // True when the AABB needs to be recalculated.
@@ -165,6 +166,7 @@ class Chunk
 class ChunkGroup
 {
     friend class Renderer;
+    friend class RaycastStore;
 
     // Chunks within this chunk group, in [z][y][x] order.
     Chunk chunk_array[edge_chunks][edge_chunks][edge_chunks];
