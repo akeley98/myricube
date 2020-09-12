@@ -1319,10 +1319,69 @@ class Renderer
         store.set_modulus(modulus, world.id());
         store.resize_victim_cache(0);
 
+        // Count and limit the number of new chunk groups added to the
+        // RaycastStore this frame.
+        int remaining_new_chunk_groups_allowed =
+            camera.get_max_frame_new_chunk_groups();
+
+        // Collect all chunk groups needing to be raycast, and sort from
+        // nearest to furthest (reverse painters). This fascilitates
+        // the early depth test optimization.
+        float squared_thresh = camera.get_far_plane();
+        squared_thresh *= squared_thresh;
+        std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
+
+        // TODO: Avoid visiting far away chunk groups.
+        unsigned drawn_group_count = 0;
+        for (PositionedChunkGroup& pcg : world.group_map) {
+            float min_squared_dist;
+            bool cull = cull_group(pcg, &min_squared_dist);
+            if (cull or min_squared_dist >= squared_thresh) continue;
+            pcg_by_depth.emplace_back(min_squared_dist, &pcg);
+            ++drawn_group_count;
+        }
+
+        if (!disable_zcull_sort) {
+            std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+        }
+        std::vector<RaycastEntry*> draw_in_first_pass;
+        std::vector<RaycastEntry*> draw_in_second_pass;
+
+        for (auto& pair : pcg_by_depth) {
+            StoreRequest request;
+            request.may_fail = remaining_new_chunk_groups_allowed <= 0;
+            RaycastEntry* entry = store.request<Renderer>(
+                *pair.second, world, &request);
+
+            if (entry != nullptr) {
+                if (request.was_in_store) {
+                    draw_in_first_pass.push_back(entry);
+                }
+                else {
+                    remaining_new_chunk_groups_allowed--;
+                    draw_in_second_pass.push_back(entry);
+                }
+            }
+        }
+
+        draw_raycast_entries(draw_in_first_pass);
+        draw_raycast_entries(draw_in_second_pass);
+
+        if (evict_stats_debug) {
+            fprintf(stderr, "\x1b[36mRaycastStore stats:\x1b[0m\n");
+            store.print_stats_end_frame();
+            fprintf(stderr, "Raycast groups: %u\n", drawn_group_count);
+        }
+    }
+
+  private:
+    void draw_raycast_entries(const std::vector<RaycastEntry*>& entries)
+    {
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;
         camera.get_eye(&eye_group, &eye_residue);
+        auto far_plane = camera.get_far_plane();
 
         static GLuint vao = 0;
         static GLuint program_id;
@@ -1419,44 +1478,18 @@ class Renderer
 
         PANIC_IF_GL_ERROR;
 
-        // Count and limit the number of new chunk groups added to the
-        // RaycastStore this frame.
-        int remaining_new_chunk_groups_allowed =
-            camera.get_max_frame_new_chunk_groups();
-
         // My plan is to use instanced rendering to draw the chunk AABBs
         // of this chunk group. The base box is a 1x1x1 unit box, which
         // is stretched and repositioned in the vertex shader to the
         // true AABB.
-        //
-        // If p_defer_list is not nullptr, chunk groups whose
-        // RaycastEntry (voxel data storage) weren't quite ready are
-        // pushed onto this list and rendered in the second
-        // pass. Otherwise, we force all chunk groups to be ready
-        // (possible stall).
-        auto draw_group = [&] (
-            PositionedChunkGroup& pcg,
-            std::vector<PositionedChunkGroup*>* p_defer_list)
-        {
-            // Get the data for this chunk group. Defer if needed.
-            StoreRequest request;
-            request.may_fail = (p_defer_list != nullptr);
-            RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
-            if (entry == nullptr) {
-                assert(p_defer_list);
-                if (remaining_new_chunk_groups_allowed <= 0) return;
-                --remaining_new_chunk_groups_allowed;
-                p_defer_list->push_back(&pcg);
-                return;
-            }
-
+        for (RaycastEntry* entry : entries) {
             assert(entry->texture_name != 0);
             assert(entry->vbo_name != 0);
 
             // The view matrix only takes into account the eye's
             // residue coordinate, so the model position of the group
             // actually needs to be shifted by the eye's group coord.
-            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+            glm::vec3 model_offset = glm::vec3(entry->group_coord - eye_group)
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
@@ -1503,46 +1536,10 @@ class Renderer
             glDrawElementsInstanced(
                 GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr, instances);
             PANIC_IF_GL_ERROR;
-        };
-
-        // Collect all chunk groups needing to be raycast, and sort from
-        // nearest to furthest (reverse painters). This fascilitates
-        // the early depth test optimization.
-        float squared_thresh = camera.get_far_plane();
-        squared_thresh *= squared_thresh;
-        std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
-
-        // TODO: Avoid visiting far away chunk groups.
-        unsigned drawn_group_count = 0;
-        for (PositionedChunkGroup& pcg : world.group_map) {
-            float min_squared_dist;
-            bool cull = cull_group(pcg, &min_squared_dist);
-            if (cull or min_squared_dist >= squared_thresh) continue;
-            pcg_by_depth.emplace_back(min_squared_dist, &pcg);
-            ++drawn_group_count;
-        }
-
-        if (!disable_zcull_sort) {
-            std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
-        }
-        std::vector<PositionedChunkGroup*> deferred_pcg;
-
-        for (auto& pair : pcg_by_depth) {
-            draw_group(*pair.second, &deferred_pcg);
-        }
-        for (PositionedChunkGroup* p_pcg : deferred_pcg) {
-            draw_group(*p_pcg, nullptr);
         }
 
         PANIC_IF_GL_ERROR;
-
         glBindVertexArray(0);
-
-        if (evict_stats_debug) {
-            fprintf(stderr, "\x1b[36mRaycastStore stats:\x1b[0m\n");
-            store.print_stats_end_frame();
-            fprintf(stderr, "Raycast groups: %u\n", drawn_group_count);
-        }
     }
 };
 
