@@ -1332,7 +1332,7 @@ class Renderer
         if (vao == 0) {
             program_id = make_program({
                 "raycast.vert", "raycast.frag",
-                "fog_border.frag", "ssbo.frag" });
+                "fog_border.frag", "read_group_voxel.frag" });
             mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
             assert(mvp_matrix_id >= 0);
             eye_relative_group_origin_id = glGetUniformLocation(program_id,
