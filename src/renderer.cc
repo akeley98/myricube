@@ -52,6 +52,16 @@ template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
         uint32_t(v.visible ? 255 : 0);
 }
 
+template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV>
+    (Voxel v, void* texel)
+{
+    *static_cast<uint32_t*>(texel) =
+        uint32_t(v.red) << 0 |
+        uint32_t(v.green) << 8 |
+        uint32_t(v.blue) << 16 |
+        uint32_t(v.visible ? 255 : 0) << 24;
+}
+
 // My new plan for the GPU voxel mesh: each visible voxel will be
 // represented by ONE vertex in a VBO; instanced rendering will
 // transform this vertex into an actual cube. This vertex encodes, in
@@ -617,7 +627,7 @@ class RaycastStore
     BaseStore<Entry, 4, 12> base_store;
 
     static constexpr GLenum Format = GL_RGBA;
-    static constexpr GLenum Type = GL_UNSIGNED_INT_8_8_8_8;
+    static constexpr GLenum Type = GL_UNSIGNED_INT_8_8_8_8_REV;
     using HostType = uint32_t;
     static constexpr size_t pbo_bytes =
         sizeof(HostType) * group_size * group_size * group_size;
@@ -824,7 +834,7 @@ class RaycastStore
                 }
             }
         }
-        if (!tex_dirty) {
+        if (!tex_dirty and entry->should_display) {
             if (aabb_dirty) {
                 if (read_only) return false;
                 else update_aabb_vbo<true>(group(pcg), raycast_entry);
