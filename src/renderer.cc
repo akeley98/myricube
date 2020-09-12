@@ -36,10 +36,10 @@ inline uint32_t to_packed_color(Voxel v)
 
 // Write out the voxel as a texel in the given GL format and type (if
 // supported).
-template <GLenum format, GLenum type>
+template <GLenum Format, GLenum Type>
 inline void write_voxel_texel(Voxel, void*)
 {
-    static_assert(format != format, "Add support for format.");
+    static_assert(Format != Format, "Add support for format.");
 }
 
 template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
@@ -49,9 +49,8 @@ template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
         uint32_t(v.red) << 24 |
         uint32_t(v.green) << 16 |
         uint32_t(v.blue) << 8 |
-        v.visible ? 255u : 0u;
+        uint32_t(v.visible ? 255 : 0);
 }
-
 
 // My new plan for the GPU voxel mesh: each visible voxel will be
 // represented by ONE vertex in a VBO; instanced rendering will
@@ -224,9 +223,9 @@ struct PackedAABB
 };
 
 // All voxels within a chunk group share a single 3D voxel array on
-// the GPU (stored as a SSBO), as well as one VBO used to store the
-// array of AABB for the chunks within the group. This is the handle
-// for the GPU data needed to raycast one chunk group.
+// the GPU (stored as a 3D texture), as well as one VBO used to store
+// the array of AABB for the chunks within the group. This is the
+// handle for the GPU data needed to raycast one chunk group.
 struct RaycastEntry
 {
     // World ID and group coordinate of the chunk group this texture
@@ -246,28 +245,18 @@ struct RaycastEntry
     // allocated.
     GLuint vbo_name = 0;
 
-    // OpenGL name for the 3D array (SSBO) representing this group of
-    // voxels on the GPU. 0 when not yet allocated.
-    GLuint ssbo_name = 0;
-
-    // Persistent write-only mapping of the SSBO.
-    ChunkGroupVoxels* ssbo_write_ptr = nullptr;
-
-    // Set to true when we write through ssbo_write_ptr (and thus need
-    // to flush the SSBO). This is pretty fragile; I'm not really sure
-    // if there's any non-gimmick way to use C++ to enforce this better.
-    bool ssbo_dirty = false;
+    // OpenGL name for the 3D voxels texture. 0 when not yet allocated.
+    GLuint texture_name = 0;
 
     RaycastEntry() = default;
 
     ~RaycastEntry()
     {
-        if (ssbo_write_ptr != nullptr) glUnmapNamedBuffer(ssbo_name);
-        GLuint buffers[2] = { vbo_name, ssbo_name };
-        glDeleteBuffers(2, buffers);
+        GLuint buffers[1] = { vbo_name };
+        glDeleteBuffers(1, buffers);
         vbo_name = 0;
-        ssbo_name = 0;
-        world_id = 0;
+        glDeleteTextures(1, &texture_name);
+        texture_name = 0;
     }
 
     RaycastEntry(RaycastEntry&& other)
@@ -282,8 +271,7 @@ struct RaycastEntry
         swap(left.group_coord, right.group_coord);
         swap(left.aabb_array, right.aabb_array);
         swap(left.vbo_name, right.vbo_name);
-        swap(left.ssbo_name, right.ssbo_name);
-        swap(left.ssbo_write_ptr, right.ssbo_write_ptr);
+        swap(left.texture_name, right.texture_name);
     }
 };
 
@@ -541,6 +529,11 @@ class BaseStore
     // noexcept applies.
     void resize_victim_cache(uint32_t cache_size) noexcept
     {
+        // I've abandoned the victim cache for now (but for reasons
+        // I'll keep to myself I'm going to keep it here instead of
+        // relying on git history). Remove this assert and re-test if
+        // I want it again.
+        assert(cache_size == 0);
         victim_cache.resize(cache_size);
     }
 
@@ -591,11 +584,7 @@ class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
 
 class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
 {
-  public:
-    // Fragile thingie to fix AZDO synchronization problems. If this
-    // is non-null, we have wait on it before trying to modify this
-    // RaycastStore.
-    GLsync write_ptr_sync = nullptr;
+
 };
 
 // AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
@@ -1191,18 +1180,20 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
 
-        if (entry->ssbo_name == 0) {
-            glCreateBuffers(1, &entry->ssbo_name);
-            auto flags = GL_MAP_PERSISTENT_BIT
-                       | GL_MAP_WRITE_BIT;
-            auto sz = sizeof(ChunkGroupVoxels);
-            glNamedBufferStorage(entry->ssbo_name, sz, nullptr, flags);
-            flags = GL_MAP_WRITE_BIT
-                  | GL_MAP_PERSISTENT_BIT
-                  | GL_MAP_FLUSH_EXPLICIT_BIT;
-            void* mapping = glMapNamedBufferRange(
-                entry->ssbo_name, 0, sizeof(ChunkGroupVoxels), flags);
-            entry->ssbo_write_ptr = static_cast<ChunkGroupVoxels*>(mapping);
+        // Same with the texture, just create storage for it for now.
+        if (entry->texture_name == 0) {
+            glGenTextures(1, &entry->texture_name);
+            GLint texture_name = entry->texture_name;
+
+            glBindTexture(GL_TEXTURE_3D, texture_name);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            PANIC_IF_GL_ERROR;
+            glTexStorage3D(
+                GL_TEXTURE_3D, 1, GL_RGBA8, group_size, group_size, group_size);
             PANIC_IF_GL_ERROR;
         }
 
@@ -1228,22 +1219,57 @@ class Renderer
         assert(entry->world_id == world.id());
         assert(entry->group_coord == group_coord(pcg));
         assert(entry->vbo_name != 0);
-        assert(entry->ssbo_name != 0);
+        assert(entry->texture_name != 0);
 
-        ChunkGroupVoxels* cg_voxels = entry->ssbo_write_ptr;
-        assert(cg_voxels != nullptr);
+        constexpr GLenum Format = GL_RGBA, Type = GL_UNSIGNED_INT_8_8_8_8;
+
+        // Will be resized and filled with texture data for the whole
+        // group if any chunk is dirty.
+        std::vector<uint32_t> scratch;
 
         // I just need to visit the chunks in one pass and upload
         // dirty chunks and AABBs (but defer upload of AABB to
         // later to reduce calls; the vbo_dirty flag is useful here).
         bool vbo_dirty = false;
-        for (int zh = 0; zh < edge_chunks; ++zh) {
-            for (int yh = 0; yh < edge_chunks; ++yh) {
-                for (int xh = 0; xh < edge_chunks; ++xh) {
+
+        // This goto label is gross but I'm planning to replace this
+        // soon with asynchronous texture uploads.
+        int xh, yh, zh;
+      restart:
+        for (zh = 0; zh < edge_chunks; ++zh) {
+            for (yh = 0; yh < edge_chunks; ++yh) {
+                for (xh = 0; xh < edge_chunks; ++xh) {
                     Chunk& chunk = group(pcg).chunk_array[zh][yh][xh];
                     bool tex_dirty = AlwaysDirty | chunk.texture_dirty;
                     bool aabb_dirty = AlwaysDirty | chunk.aabb_gpu_dirty;
                     vbo_dirty |= aabb_dirty;
+
+                    if (tex_dirty or !scratch.empty()) {
+                        if (read_only) return false;
+
+                        if (scratch.empty()) {
+                            scratch.resize(
+                                group_size * group_size * group_size);
+                            goto restart;
+                        }
+
+                        for (int zl = 0; zl < chunk_size; ++zl) {
+                            int z = zh * chunk_size + zl;
+                            for (int yl = 0; yl < chunk_size; ++yl) {
+                                int y = yh * chunk_size + yl;
+                                for (int xl = 0; xl < chunk_size; ++xl) {
+                                    int x = xh * chunk_size + xl;
+
+                                    void* texel = &scratch[
+                                        group_size * group_size * z
+                                        + group_size * y + x];
+                                    Voxel v = chunk.voxel_array[zl][yl][xl];
+                                    write_voxel_texel<Format, Type>(v, texel);
+                                }
+                            }
+                        }
+                        chunk.texture_dirty = false;
+                    }
 
                     if (aabb_dirty) {
                         if (read_only) return false;
@@ -1253,31 +1279,6 @@ class Renderer
                         chunk.aabb_gpu_dirty = false;
                         entry->aabb_array[zh][yh][xh] =
                             PackedAABB(aabb_low, aabb_high);
-                    }
-
-                    // Write any changed chunks' voxels to the mapped
-                    // 3D voxel array. I'm supposed to use
-                    // double-buffering and stuff to avoid modifying a
-                    // buffer while it's still in use, but I can't
-                    // afford that, so things glitch for a frame
-                    // here-and-there :/
-                    if (tex_dirty) {
-                        if (read_only) return false;
-
-                        entry->ssbo_dirty = true;
-                        chunk.texture_dirty = false;
-                        for (int zl = 0; zl < chunk_size; ++zl) {
-                            int z = zh * chunk_size + zl;
-                            for (int yl = 0; yl < chunk_size; ++yl) {
-                                int y = yh * chunk_size + yl;
-                                for (int xl = 0; xl < chunk_size; ++xl) {
-                                    int x = xh * chunk_size + xl;
-                                    Voxel v = chunk.voxel_array[zl][yl][xl];
-                                    cg_voxels->voxel_colors[z][y][x] =
-                                        to_packed_color(v);
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1292,6 +1293,14 @@ class Renderer
         }
         static_assert(sizeof entry->aabb_array >= 64,
             "Suspiciously small aabb_array, did it get replaced by a ptr?");
+
+        // Re-upload texture if needed too.
+        if (!scratch.empty()) {
+            glTextureSubImage3D(
+                entry->texture_name, 0, 0, 0, 0,
+                group_size, group_size, group_size,
+                Format, Type, scratch.data());
+        }
         return true;
     }
 
@@ -1308,7 +1317,7 @@ class Renderer
         auto far_plane = camera.get_far_plane();
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus, world.id());
-        store.resize_victim_cache(4);
+        store.resize_victim_cache(0);
 
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
@@ -1328,6 +1337,7 @@ class Renderer
         static GLint fog_enabled_id;
         static GLint black_fog_id;
         static GLint chunk_debug_id;
+        static GLint chunk_group_texture_id;
 
         if (vao == 0) {
             program_id = make_program({
@@ -1351,6 +1361,9 @@ class Renderer
             assert(fog_enabled_id >= 0);
             black_fog_id = glGetUniformLocation(program_id, "black_fog");
             assert(black_fog_id >= 0);
+            chunk_group_texture_id =
+                glGetUniformLocation(program_id, "chunk_group_texture");
+            assert(chunk_group_texture_id >= 0);
 
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
@@ -1400,11 +1413,10 @@ class Renderer
         auto raycast_thr = camera.get_raycast_threshold();
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
 
-        // Hook up the SSBO binding to the SSBO index that will
-        // be used to deliver voxel data.
-        glShaderStorageBlockBinding(program_id,
-            chunk_group_voxels_program_index,
-            chunk_group_voxels_binding_index);
+        // I'll use texture 0 for the chunk group texture.
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(chunk_group_texture_id, 0);
+
         PANIC_IF_GL_ERROR;
 
         // Count and limit the number of new chunk groups added to the
@@ -1426,73 +1438,19 @@ class Renderer
             PositionedChunkGroup& pcg,
             std::vector<PositionedChunkGroup*>* p_defer_list)
         {
-            RaycastEntry* entry = nullptr;
+            // Get the data for this chunk group. Defer if needed.
             StoreRequest request;
             request.may_fail = (p_defer_list != nullptr);
-
-            // Part 1/2 of synchronization: need to wait for previous
-            // frame's raycast step to finish before attempting to
-            // update any RaycastEntry. We can still try to draw the chunk
-            // group if it doesn't need any update.
-            if (store.write_ptr_sync != nullptr) {
-                if (p_defer_list != nullptr) {
-                    auto status = glClientWaitSync(store.write_ptr_sync, 0, 0);
-
-                    // Not yet safe to modify: in this case we draw
-                    // only if no modification is needed.
-                    if (status != GL_CONDITION_SATISFIED) {
-                        request.read_only = true;
-                        entry = store.request<Renderer>(pcg, world, &request);
-                    }
-                    // Otherwise delete the sync and update as normal.
-                    else {
-                        glDeleteSync(store.write_ptr_sync);
-                        store.write_ptr_sync = nullptr;
-                        entry = store.request<Renderer>(pcg, world, &request);
-                    }
-                }
-                // Unconditionally wait (until we really lose patience) if
-                // we're not allowed to defer drawing.
-                else {
-                    glClientWaitSync(store.write_ptr_sync, 0, 10'000'000);
-                    glDeleteSync(store.write_ptr_sync);
-                    store.write_ptr_sync = nullptr;
-                    entry = store.request<Renderer>(pcg, world, &request);
-                }
-                PANIC_IF_GL_ERROR;
-            }
-            else {
-                entry = store.request<Renderer>(pcg, world, &request);
-            }
-
-            // Reason A for non-readiness: nullptr -- either the sync
-            // is still busy and we couldn't upload the dirty data we
-            // need, or we allowed deferring, and this chunk group
-            // wasn't yet in the RaycastStore (i.e. wasn't uploaded to
-            // device memory).
-            //
-            // Throttle uploads for the latter reason, but never the former
-            // (this would cause modified chunks to flicker).
+            RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
             if (entry == nullptr) {
-                if (!request.was_in_store) {
-                    if (remaining_new_chunk_groups_allowed > 0) {
-                        --remaining_new_chunk_groups_allowed;
-                    } else {
-                        return;
-                    }
-                }
-                assert(p_defer_list != nullptr);
+                assert(p_defer_list);
+                if (remaining_new_chunk_groups_allowed <= 0) return;
+                --remaining_new_chunk_groups_allowed;
                 p_defer_list->push_back(&pcg);
                 return;
             }
-            // Reason B: voxels were modified and we're giving the
-            // driver some time to stage and upload the modified voxel
-            // SSBO.
-            if (entry->ssbo_dirty and p_defer_list != nullptr) {
-                p_defer_list->push_back(&pcg);
-            }
 
-            assert(entry->ssbo_name != 0);
+            assert(entry->texture_name != 0);
             assert(entry->vbo_name != 0);
 
             // The view matrix only takes into account the eye's
@@ -1537,20 +1495,8 @@ class Renderer
             glVertexAttribDivisor(packed_aabb_high_idx, 1);
             PANIC_IF_GL_ERROR;
 
-            // Wire up this chunk group's SSBO (voxel array) into the
-            // SSBO index reserved for this purpose. We check here to
-            // see if the SSBO needs to be flushed.
-            glBindBufferBase(
-                GL_SHADER_STORAGE_BUFFER,
-                chunk_group_voxels_binding_index,
-                entry->ssbo_name);
-            PANIC_IF_GL_ERROR;
-            if (entry->ssbo_dirty) {
-                glFlushMappedNamedBufferRange(
-                    entry->ssbo_name, 0, sizeof(ChunkGroupVoxels));
-                entry->ssbo_dirty = false;
-                PANIC_IF_GL_ERROR;
-            }
+            // Bind the relevant chunk group texture.
+            glBindTexture(GL_TEXTURE_3D, entry->texture_name);
 
             // Draw all edge_chunks^3 chunks in the chunk group.
             auto instances = edge_chunks * edge_chunks * edge_chunks;
@@ -1588,8 +1534,6 @@ class Renderer
             draw_group(*p_pcg, nullptr);
         }
 
-        // Part 2/2 for avoiding AZDO write-while-buffer-used problem.
-        store.write_ptr_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         PANIC_IF_GL_ERROR;
 
         glBindVertexArray(0);
