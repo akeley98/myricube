@@ -46,6 +46,7 @@ class Chunk
     bool aabb_dirty = true;
 
     // True when the AABB needs to be re-sent to the GPU.
+    // TODO remove.
     bool aabb_gpu_dirty = true;
 
     // True when the texture needs to be re-uploaded to the GPU.
@@ -172,6 +173,9 @@ class ChunkGroup
     // Total number of visible voxels in this chunk group.
     int32_t total_visible = 0;
 
+    // Set to true when any voxel within is modified.
+    bool dirty = false;
+
   public:
     ChunkGroup()
     {
@@ -200,6 +204,7 @@ class ChunkGroup
     // this voxel is in the group).
     void set(glm::ivec3 c, Voxel v)
     {
+        dirty = true;
         auto mask = uint32_t(edge_chunks-1);
         auto x = (uint32_t(c.x) / chunk_size) & mask;
         auto y = (uint32_t(c.y) / chunk_size) & mask;
