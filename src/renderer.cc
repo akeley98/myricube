@@ -714,10 +714,11 @@ struct StagingBuffer
         if (ssbo_name == 0) {
             glCreateBuffers(1, &ssbo_name);
             auto sz = sizeof(uint32_t) * group_size * group_size * group_size;
-            auto flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
+            auto flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT
+                       | GL_MAP_COHERENT_BIT;
             glNamedBufferStorage(ssbo_name, sz, nullptr, flags);
-            flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
-                  | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_WRITE_BIT;
+            flags = GL_MAP_PERSISTENT_BIT
+                  | GL_MAP_WRITE_BIT | GL_MAP_COHERENT_BIT;
             mapped_ssbo = static_cast<ChunkGroupVoxels*>(glMapNamedBufferRange(
                 ssbo_name, 0, sz, flags));
             PANIC_IF_GL_ERROR;
@@ -1348,7 +1349,7 @@ class Renderer
     //    This is also when we mark the chunks as non-dirty, as at this
     //    point we're committed to updating the GPU storage.
     //
-    // 3. Flush SSBO and dispatch compute.
+    // 3. Flush SSBO (actually I switched to coherent memory) and dispatch compute.
     //
     // 4. Swap the write_staging_buffers and read_staging_buffers. Wait a frame.
     //
@@ -1566,9 +1567,7 @@ class Renderer
         RaycastStore& store = camera.get_raycast_store();
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) continue;
-            auto sz = group_size * group_size * group_size * sizeof(uint32_t);
             assert(sb.ssbo_name != 0);
-            glFlushMappedNamedBufferRange(sb.ssbo_name, 0, sz);
             PANIC_IF_GL_ERROR;
 
             // Now that the buffer is flushed, we can bind the source buffer
@@ -1702,6 +1701,9 @@ class Renderer
         const std::vector<RaycastEntry*>& entries,
         bool should_have_memory_barrier_bit)
     {
+        if (should_have_memory_barrier_bit and entries.size() > 0) {
+            fprintf(stderr, "%i after barrier.\n", int(entries.size()));
+        }
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;
