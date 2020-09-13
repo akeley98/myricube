@@ -1455,39 +1455,32 @@ class Renderer
 
         // Fill in the texels and AABBs.
         ChunkGroup& cg = group(pcg);
+        assert(sb.mapped_ssbo != nullptr);
+        auto& big_ol_array = sb.mapped_ssbo->voxel_colors;
+        StagingBuffer::AABBs a;
 
-        for (int z = 0; z < group_size; ++z) {
-            auto& chunk_plane = cg.chunk_array[z >> chunk_shift];
-            auto zl = z & (chunk_size - 1);
+        for (int zH = 0; zH < edge_chunks; ++zH) {
+        for (int yH = 0; yH < edge_chunks; ++yH) {
+        for (int xH = 0; xH < edge_chunks; ++xH) {
+            Chunk& chunk = group(pcg).chunk_array[zH][yH][xH];
+            glm::ivec3 low, high;
+            chunk.get_aabb(&low, &high);
+            chunk.texture_dirty = false;
+            a.aabb_array[zH][yH][xH] = PackedAABB(low, high);
 
-            for (int y = 0; y < group_size; ++y) {
-                auto& chunk_row = chunk_plane[y >> chunk_shift];
-                auto yl = y & (chunk_size - 1);
-
-                for (int x = 0; x < group_size; ++x) {
-                    Chunk& chunk = chunk_row[x >> chunk_shift];
-                    auto xl = x & (chunk_size - 1);
-                    chunk.texture_dirty = false;
-                    Voxel voxel = chunk.voxel_array[zl][yl][xl];
-                    sb.mapped_ssbo->voxel_colors[z][y][x] =
-                        to_packed_color(voxel);
-                }
+            for (int zL = 0; zL < chunk_size; ++zL) {
+            for (int yL = 0; yL < chunk_size; ++yL) {
+            for (int xL = 0; xL < chunk_size; ++xL) {
+                big_ol_array[zH][yH][xH][zL][yL][xL] =
+                    to_packed_color(chunk.voxel_array[zL][yL][xL]);
             }
+            }
+            }
+        }
+        }
         }
         cg.dirty = false;
 
-        // Fill in the AABBs.
-        StagingBuffer::AABBs a;
-        for (int z = 0; z < edge_chunks; ++z) {
-            for (int y = 0; y < edge_chunks; ++y) {
-                for (int x = 0; x < edge_chunks; ++x) {
-                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    glm::ivec3 low, high;
-                    chunk.get_aabb(&low, &high);
-                    a.aabb_array[z][y][x] = PackedAABB(low, high);
-                }
-            }
-        }
         assert(sb.vbo_name != 0);
         glNamedBufferSubData(
             sb.vbo_name, 0, sizeof a.aabb_array, &a.aabb_array);
@@ -1586,7 +1579,7 @@ class Renderer
                 staging_image_unit,
                 sb.texture_name,
                 0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
-            glDispatchCompute(8, 1, 1);
+            glDispatchCompute(2, 2, 2);
             PANIC_IF_GL_ERROR;
         }
         // RaycastStore& store = camera.get_raycast_store();

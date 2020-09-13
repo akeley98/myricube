@@ -46,38 +46,57 @@
 
 // Compute shader for copying pixels stuff from the SSBO staging
 // buffer to the 3D texture for a chunk group. Should be dispatched
-// with any (reasonable) number of X-invocations. Y and Z should be 0.
-layout(local_size_x = GROUP_SIZE) in;
+// with x, y, and z of global work groups <= GROUP_SIZE / CHUNK_SIZE.
+layout(local_size_x = CHUNK_SIZE, local_size_y = 4, local_size_z = 1) in;
+
+const uint edge_chunks = uint(GROUP_SIZE / CHUNK_SIZE);
 
 // Staging SSBO.
 layout(std430, binding=CHUNK_GROUP_VOXELS_PROGRAM_INDEX)
 readonly buffer ChunkGroupVoxels {
-    uint voxel_colors[GROUP_SIZE][GROUP_SIZE][GROUP_SIZE];
+    uint voxel_colors
+        // chunk z/y/x in chunk group.
+        [edge_chunks][edge_chunks][edge_chunks]
+        // voxel z/y/x in chunk.
+        [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE];
 } chunk_group_voxels;
 
 // Texture (image) to write to.
 uniform layout(binding=STAGING_IMAGE_PROGRAM_INDEX, rgba8ui)
 writeonly restrict uimage3D out_image;
 
+void write_chunk(ivec3 chunk_index)
+{
+    for (uint z = gl_LocalInvocationID.z; z < uint(CHUNK_SIZE); z += gl_WorkGroupSize.z) {
+    for (uint y = gl_LocalInvocationID.y; y < uint(CHUNK_SIZE); y += gl_WorkGroupSize.y) {
+    for (uint x = gl_LocalInvocationID.x; x < uint(CHUNK_SIZE); x += gl_WorkGroupSize.x) {
+        uint packed_color = chunk_group_voxels.voxel_colors
+            [chunk_index.z][chunk_index.y][chunk_index.x][z][y][x];
+        uvec4 color;
+        color.r = 255u & packed_color >> RED_SHIFT;
+        color.g = 255u & packed_color >> GREEN_SHIFT;
+        color.b = 255u & packed_color >> BLUE_SHIFT;
+
+        if (VISIBLE_BIT <= 256u) {
+            color.a = packed_color & uint(VISIBLE_BIT);
+        }
+        else {
+            color.a = (packed_color & uint(VISIBLE_BIT)) != 0u ? 255u : 0u;
+        }
+        ivec3 texcoord = chunk_index * CHUNK_SIZE + ivec3(x, y, z);
+        imageStore(out_image, texcoord, color);
+    }
+    }
+    }
+}
+
 void main()
 {
-    uint z = gl_LocalInvocationID.x;
-    uint x = gl_WorkGroupID.x;
-    for ( ; x < uint(GROUP_SIZE); x += gl_NumWorkGroups.x) {
-        for (uint y = 0; y < uint(GROUP_SIZE); ++y) {
-            uint packed_color = chunk_group_voxels.voxel_colors[z][y][x];
-            uvec4 color;
-            color.r = 255u & packed_color >> RED_SHIFT;
-            color.g = 255u & packed_color >> GREEN_SHIFT;
-            color.b = 255u & packed_color >> BLUE_SHIFT;
-
-            if (VISIBLE_BIT <= 256u) {
-                color.a = packed_color & uint(VISIBLE_BIT);
-            }
-            else {
-                color.a = (packed_color & uint(VISIBLE_BIT)) != 0u ? 255u : 0u;
-            }
-            imageStore(out_image, ivec3(x,y,z), color);
-        }
+    for (uint z = gl_WorkGroupID.z; z < edge_chunks; z += gl_NumWorkGroups.z) {
+    for (uint y = gl_WorkGroupID.y; y < edge_chunks; y += gl_NumWorkGroups.y) {
+    for (uint x = gl_WorkGroupID.x; x < edge_chunks; x += gl_NumWorkGroups.x) {
+        write_chunk(ivec3(x,y,z));
+    }
+    }
     }
 }
