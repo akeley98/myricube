@@ -31,12 +31,11 @@ constexpr int unit_box_face_bit_idx = 3; // Used in mesh renderer.
 constexpr int unit_box_normal_idx = 3;   // Used in raycast renderer.
 constexpr int unit_box_uv_idx = 4;
 
-// bit assignments for packed colors. At the moment, these names are
-// not used everywhere; not safe to change.
-constexpr uint32_t red_shift = 16;
-constexpr uint32_t green_shift = 8;
-constexpr uint32_t blue_shift = 0;
-constexpr uint32_t visible_bit = (1 << 24);
+// bit assignments for packed colors.
+constexpr uint32_t red_shift = 24;
+constexpr uint32_t green_shift = 16;
+constexpr uint32_t blue_shift = 8;
+constexpr uint32_t visible_bit = 128;
 
 // bit assignments for packed verts.
 constexpr uint32_t x_shift = 0;

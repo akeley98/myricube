@@ -70,9 +70,9 @@ void main() {
     gl_Position = mvp_matrix * model_space_position;
 
     // Unpack the color.
-    float red   = ((packed_color >> 16) & 255) * (1./255.);
-    float green = ((packed_color >> 8) & 255) * (1./255.);
-    float blue  = (packed_color & 255) * (1./255.);
+    float red   = ((packed_color >> RED_SHIFT) & 255) * (1./255.);
+    float green = ((packed_color >> GREEN_SHIFT) & 255) * (1./255.);
+    float blue  = ((packed_color >> BLUE_SHIFT) & 255) * (1./255.);
     v_color = vec3(red, green, blue);
 
     v_uv = in_uv;

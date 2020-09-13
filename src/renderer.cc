@@ -269,6 +269,7 @@ struct RaycastEntry
         swap(left.vbo_name, right.vbo_name);
         swap(left.texture_name, right.texture_name);
         swap(left.needs_memory_barrier, right.needs_memory_barrier);
+        swap(left.should_draw, right.should_draw);
     }
 };
 
