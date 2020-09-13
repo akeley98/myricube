@@ -1561,6 +1561,8 @@ class Renderer
         glUniform1i(staging_image_program_index, staging_image_unit);
 
         PANIC_IF_GL_ERROR;
+        glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+
         RaycastStore& store = camera.get_raycast_store();
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) continue;
