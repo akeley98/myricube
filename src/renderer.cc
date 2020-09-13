@@ -1579,26 +1579,9 @@ class Renderer
                 staging_image_unit,
                 sb.texture_name,
                 0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
-            glDispatchCompute(2, 2, 2);
+            glDispatchCompute(1, 2, 2);
             PANIC_IF_GL_ERROR;
         }
-        // RaycastStore& store = camera.get_raycast_store();
-        // for (StagingBuffer& sb : store.write_staging_buffers) {
-        //     PANIC_IF_GL_ERROR;
-        //     if (sb.world_id == 0) continue;
-        //     auto sz = group_size * group_size * group_size * sizeof(uint32_t);
-        //     assert(sb.ssbo_name != 0);
-        //     glFlushMappedNamedBufferRange(sb.ssbo_name, 0, sz);
-        //     PANIC_IF_GL_ERROR;
-        //     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, sb.ssbo_name);
-        //     PANIC_IF_GL_ERROR;
-        //     glTextureSubImage3D(
-        //         sb.texture_name, 0, 0, 0, 0,
-        //         group_size, group_size, group_size,
-        //         GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, nullptr);
-        //     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        // }
-        // PANIC_IF_GL_ERROR;
     }
 
   public:
