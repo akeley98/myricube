@@ -1582,6 +1582,7 @@ class Renderer
             glDispatchCompute(1, 2, 2);
             PANIC_IF_GL_ERROR;
         }
+        glFinish(); // XXX
     }
 
   public:
