@@ -473,6 +473,44 @@ class BaseStore
         if (request->may_fail) return nullptr;
 
         EntryFiller::replace(pcg, world, entry);
+        assert(entry->world_id == world.id() and entry->group_coord == gc);
+        ++eviction_count;
+        return entry;
+    }
+
+    // Thingie bolted-on after the fact to stretch my BaseStore class
+    // far past its original design goals. This is just returns a
+    // location for an entry with the given world/group_coord, but no
+    // update/initialization functions are run (except filling in the
+    // world_id and group_coord). StoreRequest handled as above.
+    //
+    // The raycast and mesh storage strategies are different enough
+    // now that I probably should stop trying to share the common code
+    // (or really factor out just the common LRU algorithm).
+    Entry* request_no_update(glm::ivec3 gc,
+                             uint64_t world_id,
+                             StoreRequest* request)
+    {
+        assert(!request->read_only or request->may_fail);
+
+        bool valid;
+        Entry* entry =
+            cached_location(&valid, gc, world_id, request->may_fail);
+        request->was_in_store = valid;
+
+        // If the Entry in the array already corresponds to the given
+        // chunk group; just update it if we're allowed to (deal with
+        // dirty chunks) and return.
+        if (valid) {
+            return entry;
+        }
+
+        // Otherwise, either fail if allowed, or evict and replace a
+        // cache entry with data for the new chunk group.
+        if (request->may_fail) return nullptr;
+
+        entry->world_id = world_id;
+        entry->group_coord = gc;
         ++eviction_count;
         return entry;
     }
@@ -1494,17 +1532,16 @@ class Renderer
         for (StagingBuffer& sb : store.read_staging_buffers) {
             if (sb.world_id == 0) continue;
 
-            static PositionedChunkGroup bogus;
             StoreRequest request;
             RaycastEntry* entry =
-                store.request<Renderer>(bogus, world, &request);
-
+                store.request_no_update(sb.group_coord, world.id(), &request);
             // TODO: Rewrite store.request and get rid of the bogus pcg.
+
             assert(entry != nullptr);
             using std::swap;
-            entry->world_id = sb.world_id;
+            assert(entry->world_id == sb.world_id);
             sb.world_id = 0;
-            entry->group_coord = sb.group_coord;
+            assert(entry->group_coord == sb.group_coord);
             swap(entry->vbo_name, sb.vbo_name);
             swap(entry->texture_name, sb.texture_name);
             entry->needs_memory_barrier = true;
@@ -1602,7 +1639,6 @@ class Renderer
                 }
             }
             remaining_new_chunk_groups_allowed -= !request.was_in_store;
-            if (remaining_new_chunk_groups_allowed != 7) fprintf(stderr, "%i\n", remaining_new_chunk_groups_allowed);
         }
 
         swap_read_staging_buffers_into_RaycastStore(); // (6)
@@ -1616,7 +1652,6 @@ class Renderer
             if (!entry->should_draw) continue;
 
             if (entry->needs_memory_barrier) {
-                fprintf(stderr, "%i %i %i\n", entry->group_coord.x, entry->group_coord.y, entry->group_coord.z);
                 draw_in_second_pass.push_back(entry);
             }
             else {
