@@ -1,0 +1,82 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Compute shader for copying pixels stuff from the SSBO staging
+// buffer to the 3D texture for a chunk group. Should be dispatched
+// with GROUP_SIZE-many x invocations (y,z = 1).
+layout(local_size_x = GROUP_SIZE) in;
+
+// Staging SSBO.
+layout(std430, binding=CHUNK_GROUP_VOXELS_PROGRAM_INDEX)
+readonly buffer ChunkGroupVoxels {
+    uint voxel_colors[GROUP_SIZE][GROUP_SIZE][GROUP_SIZE];
+} chunk_group_voxels;
+
+// Texture (image) to write to.
+uniform layout(binding=STAGING_IMAGE_PROGRAM_INDEX, rgba8ui)
+writeonly restrict uimage3D out_image;
+
+void main()
+{
+    uint x = gl_WorkGroupID.x;
+    uint z = gl_LocalInvocationID.x;
+    
+    for (uint y = 0; y < uint(GROUP_SIZE); ++y) {
+        uint packed_color = chunk_group_voxels.voxel_colors[z][y][x];
+        uvec4 color;
+        color.r = 255u & packed_color >> RED_SHIFT;
+        color.g = 255u & packed_color >> GREEN_SHIFT;
+        color.b = 255u & packed_color >> BLUE_SHIFT;
+        
+        if (VISIBLE_BIT <= 256u) {
+            color.a = packed_color & uint(VISIBLE_BIT);
+        }
+        else {
+            color.a = (packed_color & uint(VISIBLE_BIT)) != 0u ? 255u : 0u;
+        }
+        imageStore(out_image, ivec3(x,y,z), color);
+    }
+}

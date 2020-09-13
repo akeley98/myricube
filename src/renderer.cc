@@ -1653,8 +1653,8 @@ class Renderer
         std::vector<RaycastEntry*> draw_in_second_pass;
 
         // Implement the earlier pseudocode here.
-        store.write_staging_buffers.resize(64);
-        store.read_staging_buffers.resize(64);
+        store.write_staging_buffers.resize(96);
+        store.read_staging_buffers.resize(96);
         mark_write_staging_buffers_unused();
         queue_to_staging_buffers(); // (2)
 
@@ -1724,10 +1724,6 @@ class Renderer
         const std::vector<RaycastEntry*>& entries,
         bool should_have_memory_barrier_bit)
     {
-        if (should_have_memory_barrier_bit and entries.size()) {
-            fprintf(stderr, "%i chunk groups after memory barrier.\n",
-                int(entries.size()));
-        }
         glm::mat4 residue_vp_matrix = camera.get_residue_vp();
         glm::vec3 eye_residue;
         glm::ivec3 eye_group;

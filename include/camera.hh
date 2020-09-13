@@ -45,7 +45,7 @@ class Camera
     int window_x = 1, window_y = 1;
 
     // Maximum number of new chunk groups added to GPU memory per frame.
-    int max_frame_new_chunk_groups = 7;
+    int max_frame_new_chunk_groups = 16;
 
     // Fog setting.
     bool fog_enabled = true;
