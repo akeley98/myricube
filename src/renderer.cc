@@ -1586,7 +1586,7 @@ class Renderer
                 staging_image_unit,
                 sb.texture_name,
                 0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
-            glDispatchCompute(group_size, 1, 1);
+            glDispatchCompute(8, 1, 1);
             PANIC_IF_GL_ERROR;
         }
         // RaycastStore& store = camera.get_raycast_store();

@@ -46,7 +46,7 @@
 
 // Compute shader for copying pixels stuff from the SSBO staging
 // buffer to the 3D texture for a chunk group. Should be dispatched
-// with GROUP_SIZE-many x invocations (y,z = 1).
+// with any (reasonable) number of X-invocations. Y and Z should be 0.
 layout(local_size_x = GROUP_SIZE) in;
 
 // Staging SSBO.
@@ -61,22 +61,23 @@ writeonly restrict uimage3D out_image;
 
 void main()
 {
-    uint x = gl_WorkGroupID.x;
     uint z = gl_LocalInvocationID.x;
-    
-    for (uint y = 0; y < uint(GROUP_SIZE); ++y) {
-        uint packed_color = chunk_group_voxels.voxel_colors[z][y][x];
-        uvec4 color;
-        color.r = 255u & packed_color >> RED_SHIFT;
-        color.g = 255u & packed_color >> GREEN_SHIFT;
-        color.b = 255u & packed_color >> BLUE_SHIFT;
-        
-        if (VISIBLE_BIT <= 256u) {
-            color.a = packed_color & uint(VISIBLE_BIT);
+    uint x = gl_WorkGroupID.x;
+    for ( ; x < uint(GROUP_SIZE); x += gl_NumWorkGroups.x) {
+        for (uint y = 0; y < uint(GROUP_SIZE); ++y) {
+            uint packed_color = chunk_group_voxels.voxel_colors[z][y][x];
+            uvec4 color;
+            color.r = 255u & packed_color >> RED_SHIFT;
+            color.g = 255u & packed_color >> GREEN_SHIFT;
+            color.b = 255u & packed_color >> BLUE_SHIFT;
+
+            if (VISIBLE_BIT <= 256u) {
+                color.a = packed_color & uint(VISIBLE_BIT);
+            }
+            else {
+                color.a = (packed_color & uint(VISIBLE_BIT)) != 0u ? 255u : 0u;
+            }
+            imageStore(out_image, ivec3(x,y,z), color);
         }
-        else {
-            color.a = (packed_color & uint(VISIBLE_BIT)) != 0u ? 255u : 0u;
-        }
-        imageStore(out_image, ivec3(x,y,z), color);
     }
 }
