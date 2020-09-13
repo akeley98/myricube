@@ -1564,6 +1564,7 @@ class Renderer
         PANIC_IF_GL_ERROR;
 
         RaycastStore& store = camera.get_raycast_store();
+        glFinish(); // XXX
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) continue;
             assert(sb.ssbo_name != 0);
