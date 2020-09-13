@@ -54,6 +54,28 @@ constexpr uint32_t all_face_bits = pos_x_face_bit
                             | pos_z_face_bit
                             | neg_z_face_bit;
 
+// Book-keeping for my plan to deliver arrays of voxel data to the GPU
+// using shader storage buffer objects.
+
+// glShaderStorageBlock argument 2 (storageBlockIndex).
+constexpr int chunk_group_voxels_program_index = 0;
+
+// glShaderStorageBlock argument 3 (storageBlockBinding).
+constexpr int chunk_group_voxels_binding_index = 0;
+
+// Data layout of said SSBO.
+struct ChunkGroupVoxels
+{
+    uint32_t voxel_colors[group_size][group_size][group_size];
+};
+
+// Image unit used by the staging compute shader, for the texture
+// image being written to.
+constexpr int staging_image_unit = 0;
+
+// Binding point in the program for said image.
+constexpr int staging_image_program_index = 0;
+
 // Return a vector of #define lines and stuff (not newline terminated).
 inline std::vector<std::string> get_preamble(std::string filename)
 {
@@ -85,6 +107,10 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define NEG_Y_FACE_BIT " + std::to_string(neg_y_face_bit),
         "#define POS_Z_FACE_BIT " + std::to_string(pos_z_face_bit),
         "#define NEG_Z_FACE_BIT " + std::to_string(neg_z_face_bit),
+        "#define CHUNK_GROUP_VOXELS_PROGRAM_INDEX " +
+            std::to_string(chunk_group_voxels_program_index),
+        "#define STAGING_IMAGE_PROGRAM_INDEX " +
+            std::to_string(staging_image_program_index),
     };
 }
 
@@ -179,6 +205,11 @@ inline bool is_fragment_shader_filename(const char* filename) {
     return len >= 5 and strcmp(".frag", &filename[len-5]) == 0;
 }
 
+inline bool is_compute_shader_filename(const char* filename) {
+    auto len = strlen(filename);
+    return len >= 5 and strcmp(".comp", &filename[len-5]) == 0;
+}
+
 inline GLuint make_program(const char* const* filenames, size_t filename_count)
 {
     // Outputs for compiler messages.
@@ -187,7 +218,8 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
     GLsizei length = 0;
 
     // Create vectors of each shader type.
-    std::vector<GLuint> vertex_shaders, geometry_shaders, fragment_shaders;
+    std::vector<GLuint> vertex_shaders, geometry_shaders, fragment_shaders,
+                        compute_shaders;
 
     // Load each shader file, compile, and place into the correct vector.
     for (size_t i = 0; i < filename_count; ++i) {
@@ -209,8 +241,12 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
             id = glCreateShader(GL_FRAGMENT_SHADER);
             fragment_shaders.push_back(id);
         }
+        else if (is_compute_shader_filename(f)) {
+            id = glCreateShader(GL_COMPUTE_SHADER);
+            compute_shaders.push_back(id);
+        }
         else {
-            panic(f + std::string(" should end in .frag or .geom or .vert"));
+            panic(f + std::string(" should end in .frag or .geom or .vert or .comp"));
         }
         glShaderSource(id, 1, &source_c_str, nullptr);
 
@@ -229,12 +265,15 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         }
     }
 
-    // Vertex and fragment shaders are mandatory.
-    if (vertex_shaders.size() == 0) {
-        panic("No vertex shaders.");
-    }
-    if (fragment_shaders.size() == 0) {
-        panic("No fragment shaders.");
+    // Vertex and fragment shaders are mandatory unless there is a
+    // compute shader.
+    if (compute_shaders.size() == 0) {
+        if (vertex_shaders.size() == 0) {
+            panic("No vertex shaders.");
+        }
+        if (fragment_shaders.size() == 0) {
+            panic("No fragment shaders.");
+        }
     }
 
     // Create a program object and put each shader in it.
@@ -246,6 +285,9 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         glAttachShader(program_id, id);
     }
     for (auto id : fragment_shaders) {
+        glAttachShader(program_id, id);
+    }
+    for (auto id : compute_shaders) {
         glAttachShader(program_id, id);
     }
     PANIC_IF_GL_ERROR;

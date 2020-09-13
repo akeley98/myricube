@@ -641,13 +641,11 @@ struct StagingBuffer
     // OpenGL name for the 3D voxels texture. 0 when not yet allocated.
     GLuint texture_name = 0;
 
-    // OpenGL name of the staging SSBO. Stores a 3D array of
-    // group_size * group_size * group_size 32-bit ints, in [z][y][x]
-    // order.
+    // OpenGL name of the staging SSBO.
     GLuint ssbo_name = 0;
 
     // Persistent mapped SSBO pointer.
-    uint32_t* mapped_ssbo = nullptr;
+    ChunkGroupVoxels* mapped_ssbo = nullptr;
 
     friend void swap(StagingBuffer& left, StagingBuffer& right)
     {
@@ -720,7 +718,7 @@ struct StagingBuffer
             glNamedBufferStorage(ssbo_name, sz, nullptr, flags);
             flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
                   | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_WRITE_BIT;
-            mapped_ssbo = static_cast<uint32_t*>(glMapNamedBufferRange(
+            mapped_ssbo = static_cast<ChunkGroupVoxels*>(glMapNamedBufferRange(
                 ssbo_name, 0, sz, flags));
             PANIC_IF_GL_ERROR;
         }
@@ -1358,7 +1356,9 @@ class Renderer
     //    have textures that are globally visible.
     //
     // 6. Swap the textures from read_staging_buffers into the correct places
-    //    in the RaycastStore, and draw the modified chunk groups.
+    //    in the RaycastStore, and draw the modified chunk groups. At this
+    //    point the texture that used to be in the RaycastStore (if any)
+    //    is now used for staging (i.e. it's allowed to be modified).
 
     // Pseudocode:
     //
@@ -1455,8 +1455,6 @@ class Renderer
 
         // Fill in the texels and AABBs.
         ChunkGroup& cg = group(pcg);
-        uint32_t* texel_ptr = sb.mapped_ssbo;
-        assert(texel_ptr != nullptr);
 
         for (int z = 0; z < group_size; ++z) {
             auto& chunk_plane = cg.chunk_array[z >> chunk_shift];
@@ -1471,7 +1469,8 @@ class Renderer
                     auto xl = x & (chunk_size - 1);
                     chunk.texture_dirty = false;
                     Voxel voxel = chunk.voxel_array[zl][yl][xl];
-                    *texel_ptr++ = to_packed_color(voxel);
+                    sb.mapped_ssbo->voxel_colors[z][y][x] =
+                        to_packed_color(voxel);
                 }
             }
         }
@@ -1536,7 +1535,6 @@ class Renderer
             StoreRequest request;
             RaycastEntry* entry =
                 store.request_no_update(sb.group_coord, world.id(), &request);
-            // TODO: Rewrite store.request and get rid of the bogus pcg.
 
             assert(entry != nullptr);
             using std::swap;
@@ -1550,26 +1548,64 @@ class Renderer
         }
     }
 
-    // Dummy implementation with glTexSubImage3D, todo write compute shader.
+    // Dispatch the compute shader that transfers pixels from staging
+    // buffer SSBOs to the actual texture.
     void dispatch_write_staging_buffers_compute_shaders()
     {
+        static GLuint program_id = 0;
+
+        if (program_id == 0) {
+            program_id = make_program( { "staging.comp" } );
+        }
+        glUseProgram(program_id);
+
+        // Hook up the SSBO binding to the SSBO index that will
+        // be used to deliver voxel data.
+        glShaderStorageBlockBinding(program_id,
+            chunk_group_voxels_program_index,
+            chunk_group_voxels_binding_index);
+        // Hook up the out_image to the correct image unit.
+        glUniform1i(staging_image_program_index, staging_image_unit);
+
+        PANIC_IF_GL_ERROR;
         RaycastStore& store = camera.get_raycast_store();
         for (StagingBuffer& sb : store.write_staging_buffers) {
-            PANIC_IF_GL_ERROR;
             if (sb.world_id == 0) continue;
             auto sz = group_size * group_size * group_size * sizeof(uint32_t);
             assert(sb.ssbo_name != 0);
             glFlushMappedNamedBufferRange(sb.ssbo_name, 0, sz);
             PANIC_IF_GL_ERROR;
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, sb.ssbo_name);
+
+            // Now that the buffer is flushed, we can bind the source buffer
+            // and output image and dispatch the compute shader.
+            glBindBufferBase(
+                GL_SHADER_STORAGE_BUFFER,
+                chunk_group_voxels_binding_index,
+                sb.ssbo_name);
+            glBindImageTexture(
+                staging_image_unit,
+                sb.texture_name,
+                0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
+            glDispatchCompute(group_size, 1, 1);
             PANIC_IF_GL_ERROR;
-            glTextureSubImage3D(
-                sb.texture_name, 0, 0, 0, 0,
-                group_size, group_size, group_size,
-                GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, nullptr);
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
         }
-        PANIC_IF_GL_ERROR;
+        // RaycastStore& store = camera.get_raycast_store();
+        // for (StagingBuffer& sb : store.write_staging_buffers) {
+        //     PANIC_IF_GL_ERROR;
+        //     if (sb.world_id == 0) continue;
+        //     auto sz = group_size * group_size * group_size * sizeof(uint32_t);
+        //     assert(sb.ssbo_name != 0);
+        //     glFlushMappedNamedBufferRange(sb.ssbo_name, 0, sz);
+        //     PANIC_IF_GL_ERROR;
+        //     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, sb.ssbo_name);
+        //     PANIC_IF_GL_ERROR;
+        //     glTextureSubImage3D(
+        //         sb.texture_name, 0, 0, 0, 0,
+        //         group_size, group_size, group_size,
+        //         GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, nullptr);
+        //     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        // }
+        // PANIC_IF_GL_ERROR;
     }
 
   public:
@@ -1660,10 +1696,9 @@ class Renderer
             }
         }
 
-        PANIC_IF_GL_ERROR;
         draw_raycast_entries(draw_in_first_pass, false);
-        PANIC_IF_GL_ERROR;
-        // TODO memory barrier (5)
+        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT
+                      | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT); // (5)
         draw_raycast_entries(draw_in_second_pass, true); // (6)
 
         dispatch_write_staging_buffers_compute_shaders(); // (3)
