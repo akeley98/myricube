@@ -35,7 +35,7 @@ layout(location=PACKED_AABB_HIGH_IDX) in int packed_aabb_high;
 out vec3 aabb_residue_coord;
 flat out ivec3 aabb_low;
 flat out ivec3 aabb_high;
-flat out vec3 floor_ceil_fudge;
+flat out vec3 aabb_half_normal;
 uniform mat4 mvp_matrix;
 uniform vec3 eye_relative_group_origin;
 uniform int far_plane_squared;
@@ -65,5 +65,5 @@ void main() {
     // Draw as degenerate triangle if this chunk is not meant for raycasting.
     gl_Position = draw_raycast ? mvp_matrix * model_space_pos
                                : vec4(0,0,0,1);
-    floor_ceil_fudge = 0.5 * unit_box_normal;
+    aabb_half_normal = sign(unit_box_normal) * 0.5;
 }

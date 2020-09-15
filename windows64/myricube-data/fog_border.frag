@@ -32,6 +32,7 @@
 #define BORDER_WIDTH_LOW  0.075
 #define BORDER_WIDTH_HIGH 0.45
 #define BORDER_FADE  0.75
+// #define BORDER_FADE  0.95
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
 uniform bool fog_enabled;
@@ -70,6 +71,10 @@ vec4 fog_border_color(
     vec2 uv, // "Texture coordinate"
     vec3 fog_color)
 {
+    // const float n = 0.1;
+    // bool allow = false;
+    // allow = (uv.x < n) || (uv.x > 1-n) || (uv.y < n) || (uv.y > 1-n) || ((uv.x-uv.y < n) && (uv.x-uv.y > -n));
+    // if (!allow) discard;
     // Border fade diminishes with distance. First, calculate how
     // strong the border fade is (which might not actually matter if
     // this fragment is not on the border).
