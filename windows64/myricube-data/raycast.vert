@@ -28,8 +28,46 @@
 
 
 
-layout(location=UNIT_BOX_VERTEX_IDX) in vec3 unit_box_vertex;
-layout(location=UNIT_BOX_NORMAL_IDX) in vec3 unit_box_normal;
+// Vertex shader that expands packed AABB (defines lower and upper
+// corner of AABB -- passed as instanced vertex attribute) into actual
+// AABBs by stretching and positioning a built-in unit box.  Draw as a
+// 14-vertex triangle strip, with last vertex as provoking vertex and
+// counter-clockwise front faces.
+
+// https://stackoverflow.com/questions/28375338/cube-using-single-gl-triangle-strip
+
+vec4 unit_box_verts[14] = vec4[] (
+    vec4(1, 1, 1, 1),
+    vec4(0, 1, 1, 1),
+    vec4(1, 0, 1, 1), // +z face
+    vec4(0, 0, 1, 1), // +z face
+    vec4(0, 0, 0, 1), // -y face part 1
+    vec4(0, 1, 1, 1), // -x face
+    vec4(0, 1, 0, 1), // -x face
+    vec4(1, 1, 1, 1), // +y face
+    vec4(1, 1, 0, 1), // +y face
+    vec4(1, 0, 1, 1), // +x face
+    vec4(1, 0, 0, 1), // +x face
+    vec4(0, 0, 0, 1), // -y face part 2
+    vec4(1, 1, 0, 1), // -z face
+    vec4(0, 1, 0, 1));// -z face
+
+vec4 unit_box_normals[14] = vec4[] (
+    vec4(0, 0, 0, 0),
+    vec4(0, 0, 0, 0),
+    vec4(0, 0, 1, 0), // +z face
+    vec4(0, 0, 1, 0), // +z face
+    vec4(0,-1, 0, 0), // -y face part 1
+    vec4(-1,0, 0, 0), // -x face
+    vec4(-1,0, 0, 0), // -x face
+    vec4(0, 1, 0, 0), // +y face
+    vec4(0, 1, 0, 0), // +y face
+    vec4(1, 0, 0, 0), // +x face
+    vec4(1, 0, 0, 0), // +x face
+    vec4(0,-1, 0, 0), // -y face part 2
+    vec4(0, 0,-1, 0), // -z face
+    vec4(0, 0,-1, 0));// -z face
+
 layout(location=PACKED_AABB_LOW_IDX) in int packed_aabb_low;
 layout(location=PACKED_AABB_HIGH_IDX) in int packed_aabb_high;
 out vec3 aabb_residue_coord;
@@ -49,6 +87,7 @@ void main() {
     int high_z = (packed_aabb_high >> Z_SHIFT) & 255;
     vec3 f_aabb_low = vec3(low_x, low_y, low_z);
     vec3 sz = vec3(high_x, high_y, high_z) - f_aabb_low;
+    vec3 unit_box_vertex = unit_box_verts[gl_VertexID].xyz;
     vec4 model_space_pos = vec4(unit_box_vertex * sz + f_aabb_low, 1);
     vec3 disp = model_space_pos.xyz - eye_relative_group_origin;
     float distance = sqrt(dot(disp, disp));
@@ -65,5 +104,5 @@ void main() {
     // Draw as degenerate triangle if this chunk is not meant for raycasting.
     gl_Position = draw_raycast ? mvp_matrix * model_space_pos
                                : vec4(0,0,0,1);
-    aabb_half_normal = sign(unit_box_normal) * 0.5;
+    aabb_half_normal = unit_box_normals[gl_VertexID].xyz * 0.5;
 }

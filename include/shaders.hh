@@ -26,10 +26,6 @@ constexpr int packed_color_idx = 0;
 constexpr int packed_vertex_idx = 1;
 constexpr int packed_aabb_low_idx = 0;
 constexpr int packed_aabb_high_idx = 1;
-constexpr int unit_box_vertex_idx = 2;
-constexpr int unit_box_face_bit_idx = 3; // Used in mesh renderer.
-constexpr int unit_box_normal_idx = 3;   // Used in raycast renderer.
-constexpr int unit_box_uv_idx = 4;
 
 // bit assignments for packed colors.
 constexpr uint32_t red_shift = 24;
@@ -91,10 +87,6 @@ inline std::vector<std::string> get_preamble(std::string filename)
         // "#define BORDER_WIDTH " + std::to_string(border_width),
         "#define PACKED_VERTEX_IDX " + std::to_string(packed_vertex_idx),
         "#define PACKED_COLOR_IDX " + std::to_string(packed_color_idx),
-        "#define UNIT_BOX_VERTEX_IDX " + std::to_string(unit_box_vertex_idx),
-        "#define UNIT_BOX_NORMAL_IDX " + std::to_string(unit_box_normal_idx),
-        "#define UNIT_BOX_FACE_BIT_IDX " + std::to_string(unit_box_face_bit_idx),
-        "#define UNIT_BOX_UV_IDX " + std::to_string(unit_box_uv_idx),
         "#define PACKED_AABB_LOW_IDX " + std::to_string(packed_aabb_low_idx),
         "#define PACKED_AABB_HIGH_IDX " + std::to_string(packed_aabb_high_idx),
         "#define FOG_SCALAR 1.125",

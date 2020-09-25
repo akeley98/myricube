@@ -741,92 +741,6 @@ class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
     std::vector<QueueEntry> queue;
 };
 
-// AABB is drawn as a unit cube from (0,0,0) to (1,1,1), which is
-// stretched and positioned to the right shape and position in space.
-// The normals are "flat shaded" and needed for dealing with
-// floor/ceil rounding errors. (Basically, I add a bit of the normal
-// vector to each face in order to ensure the voxels fit comfortably
-// within the AABB).
-//
-// [positions] [normal]
-//
-// This really should be an array of structs, but I copied this from
-// some older project and I'm too scared to screw it up.
-static const float unit_box_vertices[48] =
-{
-    0, 1, 1,   -1, 0, 0,    // 0 -x face provoking vertex
-    0, 0, 1,   0, 0, 1,     // 1 +z face provoking vertex
-    1, 0, 1,   1, 0, 0,     // 2 +x face provoking vertex
-    1, 1, 1,   0, 0, 0,     // 3 unused as provoking vertex
-    0, 1, 0,   0, 1, 0,     // 4 +y face provoking vertex
-    0, 0, 0,   0, -1, 0,    // 5 -y face provoking vertex
-    1, 0, 0,   0, 0, 0,     // 6 unused as provoking vertex
-    1, 1, 0,   0, 0, -1,    // 7 -z face provoking vertex
-};
-
-static const GLushort unit_box_elements[36] = {
-    6, 7, 2, 7, 3, 2,   // +x face
-    4, 5, 0, 5, 1, 0,   // -x face
-    0, 3, 4, 3, 7, 4,   // +y face
-    6, 2, 5, 2, 1, 5,   // -y face
-    2, 3, 1, 3, 0, 1,   // +z face
-    6, 5, 7, 5, 4, 7,   // -z face
-};
-
-
-// Voxels rendered using the mesh renderer also need a unit cube, but
-// this time, instead of a normal I need a bit indicating which face
-// each vertex is part of (so I can discard hidden faces).
-struct VoxelUnitBoxVertex
-{
-    int32_t face_bit;
-    float x, y, z;
-    float u, v;
-};
-
-static const VoxelUnitBoxVertex voxel_unit_box_vertices[24] =
-{
-    { neg_x_face_bit, 0, 1, 1, 1, 1 },
-    { neg_x_face_bit, 0, 1, 0, 1, 0 },
-    { neg_x_face_bit, 0, 0, 1, 0, 1 },
-    { neg_x_face_bit, 0, 0, 0, 0, 0 },
-
-    { pos_x_face_bit, 1, 0, 0, 0, 0 },
-    { pos_x_face_bit, 1, 1, 0, 1, 0 },
-    { pos_x_face_bit, 1, 0, 1, 0, 1 },
-    { pos_x_face_bit, 1, 1, 1, 1, 1 },
-
-    { neg_y_face_bit, 0, 0, 0, 0, 0 },
-    { neg_y_face_bit, 1, 0, 1, 1, 1 },
-    { neg_y_face_bit, 0, 0, 1, 0, 1 },
-    { neg_y_face_bit, 1, 0, 0, 1, 0 },
-
-    { pos_y_face_bit, 1, 1, 1, 1, 1 },
-    { pos_y_face_bit, 1, 1, 0, 1, 0 },
-    { pos_y_face_bit, 0, 1, 0, 0, 0 },
-    { pos_y_face_bit, 0, 1, 1, 0, 1 },
-
-    { neg_z_face_bit, 0, 0, 0, 0, 0 },
-    { neg_z_face_bit, 0, 1, 0, 0, 1 },
-    { neg_z_face_bit, 1, 0, 0, 1, 0 },
-    { neg_z_face_bit, 1, 1, 0, 1, 1 },
-
-    { pos_z_face_bit, 0, 1, 1, 0, 1 },
-    { pos_z_face_bit, 1, 0, 1, 1, 0 },
-    { pos_z_face_bit, 1, 1, 1, 1, 1 },
-    { pos_z_face_bit, 0, 0, 1, 0, 0 },
-};
-
-static const GLushort voxel_unit_box_elements[36] =
-{
-    0, 1, 2,    1, 3, 2,
-    4, 5, 6,    5, 7, 6,
-    8, 9, 10,   8, 11, 9,
-    12, 13, 14, 15, 12, 14,
-    16, 17, 18, 19, 18, 17,
-    20, 21, 22, 21, 20, 23,
-};
-
 // Renderer class. Instantiate it with the camera and world to render
 // and use it once.
 class Renderer
@@ -1155,54 +1069,8 @@ class Renderer
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             PANIC_IF_GL_ERROR;
-
-            // The above was all boilerplate crap; this is where I
-            // bind once and forever the unit box buffers to the VAO.
-            GLuint buffers[2];
-            glGenBuffers(2, buffers);
-            glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
-
-            glBufferStorage(GL_ARRAY_BUFFER,
-                            sizeof voxel_unit_box_vertices,
-                            voxel_unit_box_vertices,
-                            0);
-            glBufferStorage(GL_ELEMENT_ARRAY_BUFFER,
-                            sizeof voxel_unit_box_elements,
-                            voxel_unit_box_elements,
-                            0);
-
-            glVertexAttribPointer(
-                unit_box_vertex_idx,
-                3,
-                GL_FLOAT,
-                false,
-                sizeof(VoxelUnitBoxVertex),
-                (void*) offsetof(VoxelUnitBoxVertex, x));
-            glEnableVertexAttribArray(unit_box_vertex_idx);
-
-            glVertexAttribIPointer(
-                unit_box_face_bit_idx,
-                1,
-                GL_UNSIGNED_INT,
-                sizeof(VoxelUnitBoxVertex),
-                (void*) offsetof(VoxelUnitBoxVertex, face_bit));
-            glEnableVertexAttribArray(unit_box_face_bit_idx);
-
-            glVertexAttribPointer(
-                unit_box_uv_idx,
-                2,
-                GL_FLOAT,
-                false,
-                sizeof(VoxelUnitBoxVertex),
-                (void*) offsetof(VoxelUnitBoxVertex, u));
-            glEnableVertexAttribArray(unit_box_uv_idx);
-
-            PANIC_IF_GL_ERROR;
         }
 
-        // If we're not using D-tier Intel drivers, this should
-        // restore the element array binding above...
         glBindVertexArray(vao);
 
         glUseProgram(program_id);
@@ -1269,19 +1137,19 @@ class Renderer
                         const ChunkMesh& mesh = entry->mesh_array[z][y][x];
                         if (mesh.vert_count == 0) continue;
 
-                        // Longest function name EVER. I need it because
+                        // Need to choose the base instance because
                         // every chunk's data is at a different offset
                         // within the VBO for instanced data (position/color).
-                        glDrawElementsInstancedBaseVertexBaseInstance(
+                        //
+                        // As requested by mesh.vert (includes
+                        // built-in model of a cube), need to draw as
+                        // GL_TRIANGLES with 36 vertices.
+                        glDrawArraysInstancedBaseInstance(
                             GL_TRIANGLES,
-                            36, // 12 triangles, 3 verts each.
-                            GL_UNSIGNED_SHORT,
-                            nullptr,
+                            0, 36,
                             mesh.vert_count,
-                            0, // base vertex is always 0, for the unit box.
-                            entry->vert_offset(x, y, z)
+                            entry->vert_offset(x, y, z));
                             // ^^^ Instance offset, depends on chunk.
-                        );
                         ++drawn_chunk_count;
                     }
                 }
@@ -1711,8 +1579,6 @@ class Renderer
 
         static GLuint vao = 0;
         static GLuint program_id;
-        static GLuint vertex_buffer_id;
-        static GLuint element_buffer_id;
         static GLint mvp_matrix_id;
         // Position of camera eye relative to the origin of the group
         // (origin == group_size times the group coordinate).
@@ -1758,39 +1624,6 @@ class Renderer
 
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
-
-            // The binding points for the non-instanced unit cube
-            // vertices, and the element buffer binding, will be
-            // stored forever in the VAO.
-            glGenBuffers(1, &vertex_buffer_id);
-            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer_id);
-            glBufferStorage(
-                GL_ARRAY_BUFFER, sizeof unit_box_vertices,
-                unit_box_vertices, 0);
-
-            glGenBuffers(1, &element_buffer_id);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer_id);
-            glBufferStorage(
-                GL_ELEMENT_ARRAY_BUFFER, sizeof unit_box_elements,
-                unit_box_elements, 0);
-
-            glVertexAttribPointer(
-                unit_box_vertex_idx,
-                3,
-                GL_FLOAT,
-                false,
-                sizeof(float) * 6,
-                (void*)0);
-            glEnableVertexAttribArray(unit_box_vertex_idx);
-
-            glVertexAttribPointer(
-                unit_box_normal_idx,
-                3,
-                GL_FLOAT,
-                false,
-                sizeof(float) * 6,
-                (void*)12);
-            glEnableVertexAttribArray(unit_box_normal_idx);
         }
 
         glBindVertexArray(vao);
@@ -1839,12 +1672,8 @@ class Renderer
             glUniform3fv(eye_relative_group_origin_id, 1,
                 &eye_relative_group_origin[0]);
 
-            // The unit box vertex attribs should already be bound by VAO.
-            //
             // Get the instanced vertex attribs going (i.e. bind the
-            // AABB residue coords, packed as integers). I should
-            // probably make a VAO per chunk group in the
-            // RaycastEntry.
+            // AABB residue coords, packed as integers).
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
             glVertexAttribIPointer(
                 packed_aabb_low_idx,
@@ -1869,9 +1698,10 @@ class Renderer
             glBindTexture(GL_TEXTURE_3D, entry->texture_name);
 
             // Draw all edge_chunks^3 chunks in the chunk group.
+            // As specified in raycast.vert, need 14 triangle strip drawn.
             auto instances = edge_chunks * edge_chunks * edge_chunks;
-            glDrawElementsInstanced(
-                GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr, instances);
+            glDrawArraysInstanced(
+                GL_TRIANGLE_STRIP, 0, 14, instances);
             PANIC_IF_GL_ERROR;
         }
 
