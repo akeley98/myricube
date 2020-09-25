@@ -39,136 +39,64 @@ layout(location=PACKED_COLOR_IDX) in int packed_color;
 
 // Position coordinate of unit box:
 vec3 unit_box_verts[36] = vec3[] (
-    vec3(0, 1, 1),
-    vec3(0, 1, 0),
-    vec3(0, 0, 1),
-    vec3(0, 1, 0),
-    vec3(0, 0, 0),
-    vec3(0, 0, 1), // -x face
+    vec3(0, 1, 1),    vec3(0, 1, 0),    vec3(0, 0, 1),
+    vec3(0, 1, 0),    vec3(0, 0, 0),    vec3(0, 0, 1), // -x face
 
-    vec3(1, 0, 0),
-    vec3(1, 1, 0),
-    vec3(1, 0, 1),
-    vec3(1, 1, 0),
-    vec3(1, 1, 1),
-    vec3(1, 0, 1), // +x face
+    vec3(1, 0, 0),    vec3(1, 1, 0),    vec3(1, 0, 1),
+    vec3(1, 1, 0),    vec3(1, 1, 1),    vec3(1, 0, 1), // +x face
 
-    vec3(0, 0, 0),
-    vec3(1, 0, 1),
-    vec3(0, 0, 1),
-    vec3(0, 0, 0),
-    vec3(1, 0, 0),
-    vec3(1, 0, 1), // -y face
+    vec3(0, 0, 0),    vec3(1, 0, 1),    vec3(0, 0, 1),
+    vec3(0, 0, 0),    vec3(1, 0, 0),    vec3(1, 0, 1), // -y face
 
-    vec3(1, 1, 1),
-    vec3(1, 1, 0),
-    vec3(0, 1, 0),
-    vec3(0, 1, 1),
-    vec3(1, 1, 1),
-    vec3(0, 1, 0), // +y face
+    vec3(1, 1, 1),    vec3(1, 1, 0),    vec3(0, 1, 0),
+    vec3(0, 1, 1),    vec3(1, 1, 1),    vec3(0, 1, 0), // +y face
 
-    vec3(0, 0, 0),
-    vec3(0, 1, 0),
-    vec3(1, 0, 0),
-    vec3(1, 1, 0),
-    vec3(1, 0, 0),
-    vec3(0, 1, 0), // -z face
+    vec3(0, 0, 0),    vec3(0, 1, 0),    vec3(1, 0, 0),
+    vec3(1, 1, 0),    vec3(1, 0, 0),    vec3(0, 1, 0), // -z face
 
-    vec3(0, 1, 1),
-    vec3(1, 0, 1),
-    vec3(1, 1, 1),
-    vec3(1, 0, 1),
-    vec3(0, 1, 1),
-    vec3(0, 0, 1));// +z face
+    vec3(0, 1, 1),    vec3(1, 0, 1),    vec3(1, 1, 1),
+    vec3(1, 0, 1),    vec3(0, 1, 1),    vec3(0, 0, 1));// +z face
 
 // Bit corresponding to the face being drawn of the unit box; for
 // example, if we're drawing the +x face, this is POS_X_FACE_BIT.
 int unit_box_face_bits[36] = int[] (
-    NEG_X_FACE_BIT,
-    NEG_X_FACE_BIT,
-    NEG_X_FACE_BIT,
-    NEG_X_FACE_BIT,
-    NEG_X_FACE_BIT,
-    NEG_X_FACE_BIT,
+    NEG_X_FACE_BIT,    NEG_X_FACE_BIT,    NEG_X_FACE_BIT,
+    NEG_X_FACE_BIT,    NEG_X_FACE_BIT,    NEG_X_FACE_BIT,
 
-    POS_X_FACE_BIT,
-    POS_X_FACE_BIT,
-    POS_X_FACE_BIT,
-    POS_X_FACE_BIT,
-    POS_X_FACE_BIT,
-    POS_X_FACE_BIT,
+    POS_X_FACE_BIT,    POS_X_FACE_BIT,    POS_X_FACE_BIT,
+    POS_X_FACE_BIT,    POS_X_FACE_BIT,    POS_X_FACE_BIT,
 
-    NEG_Y_FACE_BIT,
-    NEG_Y_FACE_BIT,
-    NEG_Y_FACE_BIT,
-    NEG_Y_FACE_BIT,
-    NEG_Y_FACE_BIT,
-    NEG_Y_FACE_BIT,
+    NEG_Y_FACE_BIT,    NEG_Y_FACE_BIT,    NEG_Y_FACE_BIT,
+    NEG_Y_FACE_BIT,    NEG_Y_FACE_BIT,    NEG_Y_FACE_BIT,
 
-    POS_Y_FACE_BIT,
-    POS_Y_FACE_BIT,
-    POS_Y_FACE_BIT,
-    POS_Y_FACE_BIT,
-    POS_Y_FACE_BIT,
-    POS_Y_FACE_BIT,
+    POS_Y_FACE_BIT,    POS_Y_FACE_BIT,    POS_Y_FACE_BIT,
+    POS_Y_FACE_BIT,    POS_Y_FACE_BIT,    POS_Y_FACE_BIT,
 
-    NEG_Z_FACE_BIT,
-    NEG_Z_FACE_BIT,
-    NEG_Z_FACE_BIT,
-    NEG_Z_FACE_BIT,
-    NEG_Z_FACE_BIT,
-    NEG_Z_FACE_BIT,
+    NEG_Z_FACE_BIT,    NEG_Z_FACE_BIT,    NEG_Z_FACE_BIT,
+    NEG_Z_FACE_BIT,    NEG_Z_FACE_BIT,    NEG_Z_FACE_BIT,
 
-    POS_Z_FACE_BIT,
-    POS_Z_FACE_BIT,
-    POS_Z_FACE_BIT,
-    POS_Z_FACE_BIT,
-    POS_Z_FACE_BIT,
-    POS_Z_FACE_BIT);
+    POS_Z_FACE_BIT,    POS_Z_FACE_BIT,    POS_Z_FACE_BIT,
+    POS_Z_FACE_BIT,    POS_Z_FACE_BIT,    POS_Z_FACE_BIT);
 
 // Texture coordinate (for now, just used for the color border).
 vec2 uv_array[36] = vec2[] (
-    vec2(1, 1),
-    vec2(1, 0),
-    vec2(0, 1),
-    vec2(1, 0),
-    vec2(0, 0),
-    vec2(0, 1), // -x face
+    vec2(1, 1),    vec2(1, 0),    vec2(0, 1),
+    vec2(1, 0),    vec2(0, 0),    vec2(0, 1), // -x face
 
-    vec2(0, 0),
-    vec2(1, 0),
-    vec2(0, 1),
-    vec2(1, 0),
-    vec2(1, 1),
-    vec2(0, 1), // +x face
+    vec2(0, 0),    vec2(1, 0),    vec2(0, 1),
+    vec2(1, 0),    vec2(1, 1),    vec2(0, 1), // +x face
 
-    vec2(0, 0),
-    vec2(1, 1),
-    vec2(0, 1),
-    vec2(0, 0),
-    vec2(1, 0),
-    vec2(1, 1), // -y face
+    vec2(0, 0),    vec2(1, 1),    vec2(0, 1),
+    vec2(0, 0),    vec2(1, 0),    vec2(1, 1), // -y face
 
-    vec2(1, 1),
-    vec2(1, 0),
-    vec2(0, 0),
-    vec2(0, 1),
-    vec2(1, 1),
-    vec2(0, 0), // +y face
+    vec2(1, 1),    vec2(1, 0),    vec2(0, 0),
+    vec2(0, 1),    vec2(1, 1),    vec2(0, 0), // +y face
 
-    vec2(0, 0),
-    vec2(0, 1),
-    vec2(1, 0),
-    vec2(1, 1),
-    vec2(1, 0),
-    vec2(0, 1), // -z face
+    vec2(0, 0),    vec2(0, 1),    vec2(1, 0),
+    vec2(1, 1),    vec2(1, 0),    vec2(0, 1), // -z face
 
-    vec2(0, 1),
-    vec2(1, 0),
-    vec2(1, 1),
-    vec2(1, 0),
-    vec2(0, 1),
-    vec2(0, 0));// +z face
+    vec2(0, 1),    vec2(1, 0),    vec2(1, 1),
+    vec2(1, 0),    vec2(0, 1),    vec2(0, 0));// +z face
 
 out vec3 v_color;
 out vec3 v_residue_coord;
