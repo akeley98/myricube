@@ -1793,6 +1793,7 @@ void gl_first_time_setup()
     glDepthFunc(GL_LEQUAL);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
+    glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
 }
 
 void gl_clear()

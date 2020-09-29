@@ -31,30 +31,28 @@
 // Vertex shader that expands packed AABB (defines lower and upper
 // corner of AABB -- passed as instanced vertex attribute) into actual
 // AABBs by stretching and positioning a built-in unit box.  Draw as a
-// 14-vertex triangle strip, with last vertex as provoking vertex and
-// counter-clockwise front faces.
+// 14-vertex triangle strip, with FIRST vertex as provoking vertex and
+// counter-clockwise front (unculled) faces.
 
 // https://stackoverflow.com/questions/28375338/cube-using-single-gl-triangle-strip
 
 vec4 unit_box_verts[14] = vec4[] (
-    vec4(1, 1, 1, 1),
-    vec4(0, 1, 1, 1),
-    vec4(1, 0, 1, 1), // +z face
-    vec4(0, 0, 1, 1), // +z face
-    vec4(0, 0, 0, 1), // -y face part 1
-    vec4(0, 1, 1, 1), // -x face
-    vec4(0, 1, 0, 1), // -x face
-    vec4(1, 1, 1, 1), // +y face
-    vec4(1, 1, 0, 1), // +y face
-    vec4(1, 0, 1, 1), // +x face
-    vec4(1, 0, 0, 1), // +x face
-    vec4(0, 0, 0, 1), // -y face part 2
-    vec4(1, 1, 0, 1), // -z face
-    vec4(0, 1, 0, 1));// -z face
+    vec4(1, 1, 1, 1), // +z face
+    vec4(0, 1, 1, 1), // +z face
+    vec4(1, 0, 1, 1), // -y face part 1
+    vec4(0, 0, 1, 1), // -x face
+    vec4(0, 0, 0, 1), // -x face
+    vec4(0, 1, 1, 1), // +y face
+    vec4(0, 1, 0, 1), // +y face
+    vec4(1, 1, 1, 1), // +x face
+    vec4(1, 1, 0, 1), // +x face
+    vec4(1, 0, 1, 1), // -y face part 2
+    vec4(1, 0, 0, 1), // -z face
+    vec4(0, 0, 0, 1), // -z face
+    vec4(1, 1, 0, 1),
+    vec4(0, 1, 0, 1));
 
 vec4 unit_box_normals[14] = vec4[] (
-    vec4(0, 0, 0, 0),
-    vec4(0, 0, 0, 0),
     vec4(0, 0, 1, 0), // +z face
     vec4(0, 0, 1, 0), // +z face
     vec4(0,-1, 0, 0), // -y face part 1
@@ -66,7 +64,9 @@ vec4 unit_box_normals[14] = vec4[] (
     vec4(1, 0, 0, 0), // +x face
     vec4(0,-1, 0, 0), // -y face part 2
     vec4(0, 0,-1, 0), // -z face
-    vec4(0, 0,-1, 0));// -z face
+    vec4(0, 0,-1, 0), // -z face
+    vec4(0, 0, 0, 0),
+    vec4(0, 0, 0, 0));
 
 layout(location=PACKED_AABB_LOW_IDX) in int packed_aabb_low;
 layout(location=PACKED_AABB_HIGH_IDX) in int packed_aabb_high;
