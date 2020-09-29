@@ -34,7 +34,6 @@ flat in ivec3 aabb_high;
 flat in vec3 aabb_half_normal;
 uniform vec3 eye_relative_group_origin;
 uniform bool chunk_debug;
-uniform bool use_old_raycast;
 
 out vec4 out_color;
 
@@ -74,9 +73,6 @@ void main()
         voxel_color = vec4(residue_floor & ivec3(1, 1, 1), 1);
         disp = frag_residue_coord - eye_relative_group_origin;
         uv = vec2(0.5, 0.5);
-    }
-    else if (use_old_raycast) {
-        old_raycast(frag_residue_coord, voxel_color, disp, uv);
     }
     else {
         raycast(frag_residue_coord, voxel_color, disp, uv);
@@ -203,102 +199,4 @@ void raycast(
     voxel_color = vec4(1, 0, 1, 1);
     disp = vec3(1, 0, 0);
     uv = vec2(0, 0);
-}
-
-void old_raycast(
-    vec3 frag_residue_coord,
-    out vec4 best_color,
-    out vec3 disp,
-    out vec2 uv)
-{
-    vec3 init_coord = frag_residue_coord + aabb_half_normal;
-    float x0 = eye_relative_group_origin.x;
-    float y0 = eye_relative_group_origin.y;
-    float z0 = eye_relative_group_origin.z;
-    vec3 slope = aabb_residue_coord - eye_relative_group_origin;
-    float xm = slope.x;
-    float ym = slope.y;
-    float zm = slope.z;
-    float rcp = 1.0/GROUP_SIZE;
-    float best_t = 1.0 / 0.0;
-    best_color = vec4(0,0,0,0);
-    vec3 best_coord = vec3(0,0,0);
-    int iter = 0;
-
-    int x_init = int(xm > 0 ? ceil(init_coord.x)
-                            : floor(init_coord.x));
-    int x_end = xm > 0 ? aabb_high.x : aabb_low.x;
-    int x_step = xm > 0 ? 1 : -1;
-    float x_bias = xm > 0 ? .25 : -.25;
-    for (int x = x_init; x != x_end; x += x_step) {
-        if (iter++ >= 255) { best_color = vec4(1,0,1,1); return; }
-        float t = (x - x0) / xm;
-        float y = y0 + ym * t;
-        float z = z0 + zm * t;
-        if (y < aabb_low.y || y >= aabb_high.y) break;
-        if (z < aabb_low.z || z >= aabb_high.z) break;
-        ivec3 texcoord = ivec3(floor(vec3(x + x_bias, y, z)));
-        vec4 lookup_color = read_group_voxel(texcoord);
-        if (lookup_color.a > 0 && t > 0) {
-            if (best_t > t) {
-                best_t = t;
-                best_color = lookup_color;
-                best_coord = vec3(x,y,z);
-                uv.x = y;
-                uv.y = z;
-            }
-            break;
-        }
-    }
-    int y_init = int(ym > 0 ? ceil(init_coord.y)
-                            : floor(init_coord.y));
-    int y_end = ym > 0 ? aabb_high.y : aabb_low.y;
-    int y_step = ym > 0 ? 1 : -1;
-    float y_bias = ym > 0 ? .25 : -.25;
-    for (int y = y_init; y != y_end; y += y_step) {
-        if (iter++ >= 255) { best_color = vec4(1,0,1,1); return; }
-        float t = (y - y0) / ym;
-        float x = x0 + xm * t;
-        float z = z0 + zm * t;
-        if (x < aabb_low.x || x >= aabb_high.x) break;
-        if (z < aabb_low.z || z >= aabb_high.z) break;
-        ivec3 texcoord = ivec3(floor(vec3(x, y + y_bias, z)));
-        vec4 lookup_color = read_group_voxel(texcoord);
-        if (lookup_color.a > 0 && t > 0) {
-            if (best_t > t) {
-                best_t = t;
-                best_color = lookup_color;
-                best_coord = vec3(x,y,z);
-                uv.x = x;
-                uv.y = z;
-            }
-            break;
-        }
-    }
-    int z_init = int(zm > 0 ? ceil(init_coord.z)
-                            : floor(init_coord.z));
-    int z_end = zm > 0 ? aabb_high.z : aabb_low.z;
-    int z_step = zm > 0 ? 1 : -1;
-    float z_bias = zm > 0 ? .25 : -.25;
-    for (int z = z_init; z != z_end; z += z_step) {
-        if (iter++ >= 255) { best_color = vec4(1,0,1,1); return; }
-        float t = (z - z0) / zm;
-        float x = x0 + xm * t;
-        float y = y0 + ym * t;
-        if (x < aabb_low.x || x >= aabb_high.x) break;
-        if (y < aabb_low.y || y >= aabb_high.y) break;
-        ivec3 texcoord = ivec3(floor(vec3(x, y, z + z_bias)));
-        vec4 lookup_color = read_group_voxel(texcoord);
-        if (lookup_color.a > 0 && t > 0) {
-            if (best_t > t) {
-                best_t = t;
-                best_color = lookup_color;
-                best_coord = vec3(x,y,z);
-                uv.x = x;
-                uv.y = y;
-            }
-            break;
-        }
-    }
-    disp = best_coord - eye_relative_group_origin;
 }

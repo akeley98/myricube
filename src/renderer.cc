@@ -24,7 +24,6 @@ namespace myricube {
 bool chunk_debug = false;
 bool evict_stats_debug = false;
 bool disable_zcull_sort = false;
-bool use_old_raycast = false;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -1588,7 +1587,6 @@ class Renderer
         static GLint fog_enabled_id;
         static GLint black_fog_id;
         static GLint chunk_debug_id;
-        static GLint use_old_raycast_id;
         static GLint chunk_group_texture_id;
 
         if (vao == 0) {
@@ -1603,9 +1601,6 @@ class Renderer
             assert(eye_relative_group_origin_id >= 0);
             chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
             assert(chunk_debug_id >= 0);
-            use_old_raycast_id = glGetUniformLocation(program_id,
-                "use_old_raycast");
-            assert(use_old_raycast_id >= 0);
 
             far_plane_squared_id = glGetUniformLocation(program_id,
                 "far_plane_squared");
@@ -1631,7 +1626,6 @@ class Renderer
 
         // Set uniforms unchanged per-chunk-group.
         glUniform1i(chunk_debug_id, chunk_debug);
-        glUniform1i(use_old_raycast_id, use_old_raycast);
         glUniform1i(fog_enabled_id, camera.get_fog());
         glUniform1i(black_fog_id, camera.use_black_fog());
         glUniform1i(far_plane_squared_id, far_plane * far_plane);

@@ -309,16 +309,6 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
 
-    extern bool use_old_raycast;
-    KeyTarget toggle_old_raycast;
-    toggle_old_raycast.down = [&] (KeyArg) -> bool
-    {
-        use_old_raycast = !use_old_raycast;
-        fprintf(stderr, "Using %s raycast\n", use_old_raycast ? "old" : "new");
-        return true;
-    };
-    window.add_key_target("toggle_old_raycast", toggle_old_raycast);
-
     // Enable/disable mesh renderer by toggling raycast threshold from 0.
     static int old_raycast_threshold = 0;
     KeyTarget toggle_mesh_renderer;
