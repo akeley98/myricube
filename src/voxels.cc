@@ -76,6 +76,11 @@ void unmap_bin_chunk_group(const BinChunkGroup* ptr)
     unmap_file(ptr);
 }
 
+void unmap_bin_group_bitfield(BinGroupBitfield* ptr)
+{
+    unmap_file(ptr);
+}
+
 WorldHandle::WorldHandle(const filename_string& world_filename_arg)
 {
     auto on_bad_filename = [&world_filename_arg]
@@ -123,27 +128,40 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
     }
 }
 
+// Filename (not including directory) of the file storing the named
+// chunk group.
 std::string group_coord_filename(glm::ivec3 group_coord)
 {
     std::string result;
     result.resize(50);
     int bytes = sprintf(
         result.data(),
-        "%08X-%08X-%08X",
+        "z%08X-%08X-%08X",
         unsigned(group_coord.x),
         unsigned(group_coord.y),
         unsigned(group_coord.z));
     assert(bytes < int(result.size()));
+    result.resize(bytes);
     return result;
 }
 
 UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 {
+    // Map the correct file for this chunk group.
     auto filename = filename_concat_c_str(
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
+    int flags = create_flag;
     auto result =
-        UPtrMutChunkGroup(map_file<BinChunkGroup>(filename, create_flag));
+        UPtrMutChunkGroup(map_file<BinChunkGroup>(filename, &flags));
     assert(result != nullptr);
+
+    // Unconditionally set the bit in the BinGroupBitfield for this
+    // chunk group, even if it was already created. This is more
+    // robust against data races and I expect WorldMutator to avoid
+    // calling us as much as possible.
+    bitfield_for_chunk_group(group_coord)->set_chunk_group_on_disk(group_coord);
+
+    // Check magic number and return.
     if (result->magic_number != result->expected_magic) {
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
@@ -152,6 +170,8 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 
 UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
 {
+    // Note: we don't check the group bitfield; someone else could
+    // (for performance) have already checked that before calling us.
     auto filename = filename_concat_c_str(
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
     auto result = UPtrChunkGroup(map_file<const BinChunkGroup>(filename, 0));
@@ -159,6 +179,22 @@ UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
     if (result->magic_number != result->expected_magic) {
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
+    return result;
+}
+
+UPtrGroupBitfield
+WorldHandle::bitfield_for_chunk_group(glm::ivec3 group_coord) const
+{
+    // Make the filename for this bitfield by appending a 'b' to
+    // the filename for the (canonical) chunk group within.
+    auto canonical = BinGroupBitfield::canonical_group_coord(group_coord);
+    std::string n = group_coord_filename(canonical) + "b";
+    auto filename = filename_concat_c_str(
+        directory_trailing_slash, n.c_str());
+
+    auto result =
+        UPtrGroupBitfield(map_file<BinGroupBitfield>(filename, create_flag));
+    assert(result != nullptr);
     return result;
 }
 

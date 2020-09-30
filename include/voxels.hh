@@ -2,9 +2,19 @@
 // chunk groups, and entire "infinite" voxel worlds stored on disk and
 // accessed via mmap.
 //
-// My rough plan is to have voxel worlds be stored in a single directory.
-// Each chunk group will be have its exact binary representation stored
-// on disk in a file of the directory labeled with the group coordinate.
+// My rough plan is to have voxel worlds be stored in a single
+// directory.  Each chunk group will be have its exact binary
+// representation stored on disk in a file of the directory labeled
+// with the group coordinate.
+//
+// Additionally, each chunk group is the "infinite" world (whether it
+// actually exists or not) is assigned a bit in a group bitfield that
+// tells whether the chunk group actually exists on disk or not --
+// this is to save time on repeatedly looking up files for chunk
+// groups that do not actually exist yet.
+//
+// NOTE: Some structs are templatized in case I want to make changes to the
+// chunk / group sizes later and need to convert world files as a result.
 
 #ifndef MYRICUBE_VOXELS_HH_
 #define MYRICUBE_VOXELS_HH_
@@ -28,6 +38,8 @@ constexpr uint64_t chunk_group_base_magic_number = 587569177;
 
 constexpr uint64_t renderer_mesh_dirty_flag = uint64_t(1) << 63;
 constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
+
+
 
 // Voxels are really represented as 32-bit packed ints now. This is
 // needed for compatibility.
@@ -65,6 +77,8 @@ struct Voxel
     }
 };
 
+
+
 // Chunk of voxels as it appears in binary on-disk.
 template <size_t ChunkSize>
 struct BinChunkT
@@ -93,6 +107,8 @@ struct BinChunkT
 
 using BinChunk = BinChunkT<chunk_size>;
 
+
+
 // Chunk group as it appears in binary on-disk.
 template <size_t EdgeChunks, size_t ChunkSize>
 struct BinChunkGroupT
@@ -108,6 +124,9 @@ struct BinChunkGroupT
     // Set to ~uint64_t(0) _after_ making modifications.  You can also
     // set it periodically while doing modifications to speed-up the
     // renderer's view of it.
+    //
+    // If this chunk group is newly created on disk, remember to set
+    // the corresponding BinGroupBitfield bit as well.
     mutable std::atomic<uint64_t> dirty_flags = { 0 };
 
     // Chunks within this chunk group, in [z][y][x] order.
@@ -145,6 +164,51 @@ using BinChunkGroup = BinChunkGroupT<edge_chunks, chunk_size>;
 static_assert(sizeof(BinChunkGroup) ==
     4096 + sizeof(uint32_t) * (group_size * group_size * group_size));
 
+
+
+// File on-disk for recording whether chunk groups exist on disk or not.
+// Each 64 x 64 x 64 section of chunk groups share one BinGroupBitfield.
+struct BinGroupBitfield
+{
+    static constexpr int32_t modulus = 64;
+
+    // Read next function for format.
+    std::atomic<uint64_t> x_bitfield_zy[modulus][modulus] = {};
+
+    // Given the GROUP COORDINATE of a group within the section of chunk
+    // groups (i.e. upper bits masked away), return whether this bitfield
+    // records said chunk group as existing on disk.
+    bool chunk_group_on_disk(glm::ivec3 group_coord)
+    {
+        auto x = group_coord.x & (modulus - 1);
+        auto y = group_coord.y & (modulus - 1);
+        auto z = group_coord.z & (modulus - 1);
+        return (x_bitfield_zy[z][y].load() >> x) & 1u;
+    }
+
+    // Set the bit corresponding to the above.
+    void set_chunk_group_on_disk(glm::ivec3 group_coord)
+    {
+        auto x = group_coord.x & (modulus - 1);
+        auto y = group_coord.y & (modulus - 1);
+        auto z = group_coord.z & (modulus - 1);
+        x_bitfield_zy[z][y] |= uint64_t(1) << x;
+    }
+
+    // Return the group coordinate of the lower-left chunk group
+    // covered by this group bitfield. Gives this bitfield a unique
+    // identifier.
+    static glm::ivec3 canonical_group_coord(glm::ivec3 group_coord)
+    {
+        group_coord.x &= ~(modulus - 1);
+        group_coord.y &= ~(modulus - 1);
+        group_coord.z &= ~(modulus - 1);
+        return group_coord;
+    }
+};
+
+
+
 // File on-disk for representing the whole voxel world.
 //
 // Note that there's no actual link to chunk groups here; they
@@ -172,6 +236,8 @@ using BinWorld = BinWorldT<edge_chunks, chunk_size>;
 
 static_assert(sizeof(BinWorld) == 4096);
 
+
+
 // Deleter for BinChunkGroup returned by WorldHandle (to be declared).
 // You can rely on mutable chunk groups having their dirty flag set
 // upon deletion.
@@ -197,14 +263,26 @@ struct ChunkGroupDeleter {
 using UPtrMutChunkGroup = std::unique_ptr<BinChunkGroup, MutChunkGroupDeleter>;
 using UPtrChunkGroup = std::unique_ptr<const BinChunkGroup, ChunkGroupDeleter>;
 
+
+
+// Similar deal for the chunk group bitfield.
+void unmap_bin_group_bitfield(BinGroupBitfield*);
+struct GroupBitfieldDeleter {
+    void operator () (BinGroupBitfield* arg)
+    {
+        unmap_bin_group_bitfield(arg);
+    }
+};
+using UPtrGroupBitfield =
+    std::unique_ptr<BinGroupBitfield, GroupBitfieldDeleter>;
+
+
+
 // Handle for a voxel world (directory storing chunk groups).
 // Multiple handles to the same world may exist; we rely on the OS
 // file system for (somewhat) handling synchronization problems.
 class WorldHandle
 {
-    friend void unmap_mut_bin_chunk_group(BinChunkGroup*);
-    friend void unmap_bin_chunk_group(const BinChunkGroup*);
-
     // Directory that the world is stored in, with trailing slash
     // so filenames can be appended directly.
     filename_string directory_trailing_slash;
@@ -225,16 +303,6 @@ class WorldHandle
     WorldHandle(const WorldHandle&) = default;
     WorldHandle& operator=(WorldHandle&&) = default;
     WorldHandle& operator=(const WorldHandle&) = default;
-
-    // Return a pointer suitable for modifying the memory-mapped chunk
-    // group with the given group coordinate. The chunk group is
-    // created on disk if it does not exist.
-    UPtrMutChunkGroup mut_chunk_group(glm::ivec3);
-
-    // Return a pointer for viewing the chunk group with the given
-    // group coordinate. Returns nullptr if there is no such chunk
-    // group.
-    UPtrChunkGroup view_chunk_group(glm::ivec3) const;
 
     // Each world has its own 64-bit monotonic-increasing atomic
     // counter.  (Assuming no-one goes behind our back and modifies it
@@ -262,6 +330,24 @@ class WorldHandle
         assert(bin_world != nullptr);
         return 1u + bin_world->atomic_counter.load();
     }
+
+    // These next functions are rather expensive as they involve file
+    // system access. Typically, use the WorldMutator class instead,
+    // which caches results.
+
+    // Return a pointer suitable for modifying the memory-mapped chunk
+    // group with the given group coordinate. The chunk group is
+    // created on disk if it does not exist.
+    UPtrMutChunkGroup mut_chunk_group(glm::ivec3);
+
+    // Return a pointer for viewing the chunk group with the given
+    // group coordinate. Returns nullptr if there is no such chunk
+    // group.
+    UPtrChunkGroup view_chunk_group(glm::ivec3) const;
+
+    // Return the entire group bitfield (not an individual bit!) that
+    // holds the bit for the given chunk group.
+    UPtrGroupBitfield bitfield_for_chunk_group(glm::ivec3) const;
 };
 
 } // end namespace myricube
