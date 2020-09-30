@@ -27,12 +27,6 @@ constexpr int packed_vertex_idx = 1;
 constexpr int packed_aabb_low_idx = 0;
 constexpr int packed_aabb_high_idx = 1;
 
-// bit assignments for packed colors.
-constexpr uint32_t red_shift = 24;
-constexpr uint32_t green_shift = 16;
-constexpr uint32_t blue_shift = 8;
-constexpr uint32_t visible_bit = 128;
-
 // bit assignments for packed verts.
 constexpr uint32_t x_shift = 0;
 constexpr uint32_t y_shift = 8;

@@ -17,6 +17,11 @@
 
 namespace myricube {
 
+// bit assignments for packed 32-bit colors.
+constexpr uint32_t red_shift = 24;
+constexpr uint32_t green_shift = 16;
+constexpr uint32_t blue_shift = 8;
+constexpr uint32_t visible_bit = 128;
 
 // Bit shift counts of the below.
 constexpr int group_shift = 6;
