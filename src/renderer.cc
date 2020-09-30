@@ -20,16 +20,13 @@
 
 namespace myricube {
 
-struct PositionedChunkGroup
-{
-    glm::ivec3 group_coord;
-    UPtrChunkGroup ptr;
-};
-
-glm::ivec3 group_coord(const PositionedChunkGroup& pcg)
-{
-    return pcg.group_coord;
-}
+// "Temporary" I used to support the idea of changing the world being
+// rendered but not anymore, and they were distinguished with id's.
+// Since I stopped this, for now I just give the global world a bogus ID.
+//
+// Eventually I should rip this out, but world_id also has a side
+// effect of identifying valid/invalid cache entries.
+const uint64_t bogus_world_id = 1;
 
 // Hacky debug variables.
 bool chunk_debug = false;
@@ -500,18 +497,18 @@ class BaseStore
 
   public:
     uint64_t eviction_count = 0;
-    // If possible, return a valid, updated Entry for the given chunk
-    // group extracted from the given world. See StoreRequest for
-    // control parameters.
+    // If possible, return a valid, updated Entry for the chunk group
+    // with the given group coordinate. See StoreRequest for control
+    // parameters.
     //
     // This requires a template parameter providing static functions:
     //
-    // replace(PositionedChunkGroup, VoxelWorld, Entry*)
+    // replace(glm::ivec3 group_coord, Entry*)
     //
     //     Fill the Entry with data for this new chunk group,
     //     initializing OpenGL resources if needed.
     //
-    // bool update(PositionedChunkGroup, VoxelWorld, Entry*, bool read_only)
+    // bool update(glm::ivec3 group_coord, Entry*, bool read_only)
     //
     //     Assuming replace was already called with identical
     //     arguments, above, just re-upload any changed data, unless
@@ -519,16 +516,18 @@ class BaseStore
     //     up-to-date (i.e. return false only when read_only was
     //     true, but some changed data needed to be re-uploaded).
     template <typename EntryFiller>
-    Entry* request(PositionedChunkGroup& pcg,
-                   VoxelWorld& world,
+    Entry* request(EntryFiller& filler,
+                   glm::ivec3 group_coord,
                    StoreRequest* request)
     {
         assert(!request->read_only or request->may_fail);
 
-        glm::ivec3 gc = group_coord(pcg);
         bool valid;
         Entry* entry =
-            cached_location(&valid, gc, world.id(), request->may_fail);
+            cached_location(&valid,
+                            group_coord,
+                            bogus_world_id,
+                            request->may_fail);
         request->was_in_store = valid;
 
         // If the Entry in the array already corresponds to the given
@@ -536,7 +535,7 @@ class BaseStore
         // dirty chunks) and return.
         if (valid) {
             bool success =
-                EntryFiller::update(pcg, world, entry, request->read_only);
+                filler.update(group_coord, entry, request->read_only);
             assert(success or request->read_only);
             return success ? entry : nullptr;
         }
@@ -545,8 +544,9 @@ class BaseStore
         // cache entry with data for the new chunk group.
         if (request->may_fail) return nullptr;
 
-        EntryFiller::replace(pcg, world, entry);
-        assert(entry->world_id == world.id() and entry->group_coord == gc);
+        filler.replace(group_coord, entry);
+        assert(entry->world_id == bogus_world_id);
+        assert(entry->group_coord == group_coord);
         ++eviction_count;
         return entry;
     }
@@ -560,15 +560,21 @@ class BaseStore
     // The raycast and mesh storage strategies are different enough
     // now that I probably should stop trying to share the common code
     // (or really factor out just the common LRU algorithm).
-    Entry* request_no_update(glm::ivec3 gc,
-                             uint64_t world_id,
+    //
+    // (Actually, I'm now planning to fundamentally re-think my device
+    // management scheme to allow queueing work and having worker
+    // threads process the queue, in preparation for learning Vulkan).
+    Entry* request_no_update(glm::ivec3 group_coord,
                              StoreRequest* request)
     {
         assert(!request->read_only or request->may_fail);
 
         bool valid;
         Entry* entry =
-            cached_location(&valid, gc, world_id, request->may_fail);
+            cached_location(&valid,
+                            group_coord,
+                            bogus_world_id,
+                            request->may_fail);
         request->was_in_store = valid;
 
         // If the Entry in the array already corresponds to the given
@@ -582,8 +588,8 @@ class BaseStore
         // cache entry with data for the new chunk group.
         if (request->may_fail) return nullptr;
 
-        entry->world_id = world_id;
-        entry->group_coord = gc;
+        entry->world_id = bogus_world_id;
+        entry->group_coord = group_coord;
         ++eviction_count;
         return entry;
     }
@@ -595,8 +601,9 @@ class BaseStore
     // I put a noexcept because I don't really know how to properly
     // handle exceptions in the middle of OpenGL code, not because
     // this is guaranteed foolproof.
-    void set_modulus(uint32_t new_modulus, uint64_t world_id) noexcept
+    void set_modulus(uint32_t new_modulus) noexcept
     {
+        uint64_t world_id = bogus_world_id;
         if (new_modulus == modulus) return;
         assert(int(new_modulus) > 0);
 
@@ -819,10 +826,32 @@ class Renderer
     Camera& camera;
     VoxelWorld& world;
     WorldHandle world_handle;
+    ViewWorldCache world_cache;
+    const BinChunkGroup* current_chunk_group = nullptr;
+
   public:
     Renderer(VoxelWorld& world_, Camera& camera_) :
-        camera(camera_), world(world_), world_handle(world_.handle) { }
+        camera(camera_),
+        world(world_),
+        world_handle(world_.handle),
+        world_cache(world_.handle) { }
 
+  private:
+    // Sets the current_chunk_group ptr to point to the named chunk group.
+    // (nullptr if it doesn't exist). This seems oddly stateful for my
+    // tastes but I did it anyway to avoid causing a dangling pointer.
+    // (Subsequent world_cache.get_entry may overwrite ptr).
+    //
+    // I may re-think the design of this program at some point. It used to
+    // be quite clean but the quality has eroded with time as I stapled-on
+    // more optimizations. But for now I'm just having fun.
+    void set_current_chunk_group(glm::ivec3 group_coord)
+    {
+        auto& entry = world_cache.get_entry(group_coord);
+        current_chunk_group = entry.chunk_group_ptr.get();
+    }
+
+  public:
     // Culling strategy: There are two phases to culling chunks: group
     // culling and distance culling. In group culling, entire groups of
     // chunks are culled if they are outside the view frustum, or if they
@@ -834,7 +863,7 @@ class Renderer
     // Should this group be culled? If not, return through
     // *squared_dist the squared distance between the eye and the
     // nearest point in the group.
-    bool cull_group(PositionedChunkGroup& pcg, float* squared_dist=nullptr)
+    bool cull_group(glm::ivec3 group_coord, float* squared_dist=nullptr)
     {
         glm::mat4 vp = camera.get_residue_vp();
         glm::ivec3 eye_group;
@@ -844,7 +873,7 @@ class Renderer
         // Never cull the group the eye is in (this avoids
         // pathological cases e.g. 7 corners behind eye and 1 in front
         // and out of the frustum).
-        if (group_coord(pcg) == eye_group) {
+        if (group_coord == eye_group) {
             if (squared_dist) *squared_dist = 0.0f;
             return false;
         }
@@ -853,7 +882,7 @@ class Renderer
 
         // Position of this chunk group relative to the group that the
         // eye is in, in voxel units.
-        glm::vec3 low_corner(group_size * (group_coord(pcg) - eye_group));
+        glm::vec3 low_corner(group_size * (group_coord - eye_group));
 
         const glm::vec3 x_edge = glm::vec3(group_size, 0, 0);
         const glm::vec3 y_edge = glm::vec3(0, group_size, 0);
@@ -1024,12 +1053,10 @@ class Renderer
 
     // Fill the given MeshEntry with mesh data for the given chunk
     // group from the given world.
-    static void replace(PositionedChunkGroup& pcg,
-                        VoxelWorld& world,
-                        MeshEntry* entry)
+    void replace(glm::ivec3 group_coord, MeshEntry* entry)
     {
-        entry->world_id = world.id();
-        entry->group_coord = group_coord(pcg);
+        entry->world_id = bogus_world_id;
+        entry->group_coord = group_coord;
 
         if (entry->vbo_name == 0) {
             glGenBuffers(1, &entry->vbo_name);
@@ -1044,40 +1071,45 @@ class Renderer
         // Parasitically depend on the update, using the AlwaysDirty
         // parameter to get every chunk's mesh copied onto the new (or
         // reused) VBO even if not marked dirty.
-        update<true>(pcg, world, entry, false);
+        update<true>(group_coord, entry, false);
     }
 
-    // Update the given mesh entry with new data from dirty chunks,
-    // except report failure (return false) if read_only is true
-    // but dirty data needed to be re-uploaded anyway.
+    // Update the given mesh entry with new data from dirty chunks in
+    // the named chunk group, except report failure (return false) if
+    // read_only is true but dirty data needed to be re-uploaded
+    // anyway.
     //
     // Requires that the MeshEntry corresponds to the given chunk
     // group of the given world.
     template <bool AlwaysDirty=false>
-    static bool update(PositionedChunkGroup& pcg,
-                       VoxelWorld& world,
+    bool update(glm::ivec3 group_coord,
                        MeshEntry* entry,
                        bool read_only)
     {
-        assert(entry->world_id == world.id());
-        assert(entry->group_coord == group_coord(pcg));
+        assert(entry->world_id == bogus_world_id);
+        assert(entry->group_coord == group_coord);
 
         auto vbo_name = entry->vbo_name;
         assert(vbo_name != 0);
 
+        // Load in the needed chunk group.
+        set_current_chunk_group(group_coord);
+        assert(current_chunk_group != nullptr);
+
         bool dirty = AlwaysDirty ||
-            pcg.ptr->dirty_flags & renderer_mesh_dirty_flag;
+            current_chunk_group->dirty_flags & renderer_mesh_dirty_flag;
 
         if (!dirty) return true;
         if (read_only) return false;
 
         // Recompute and reupload the mesh for every chunk and reset
         // the dirty flag BEFORE reading (handles data races better).
-        pcg.ptr->dirty_flags &= ~renderer_mesh_dirty_flag;
+        current_chunk_group->dirty_flags &= ~renderer_mesh_dirty_flag;
         for (int z = 0; z < edge_chunks; ++z) {
             for (int y = 0; y < edge_chunks; ++y) {
                 for (int x = 0; x < edge_chunks; ++x) {
-                    const BinChunk& chunk = pcg.ptr->chunk_array[z][y][x];
+                    const BinChunk& chunk = current_chunk_group
+                                          ->chunk_array[z][y][x];
                     ChunkMesh& mesh = entry->mesh_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
                     fill_mesh_verts(mesh, chunk, residue);
@@ -1157,9 +1189,9 @@ class Renderer
         unsigned drawn_group_count = 0;
         unsigned drawn_chunk_count = 0;
 
-        auto draw_group = [&] (PositionedChunkGroup& pcg)
+        auto draw_group = [&] (glm::ivec3 group_coord)
         {
-            MeshEntry* entry = store.request<Renderer>(pcg, world, &request);
+            MeshEntry* entry = store.request(*this, group_coord, &request);
 
             assert(entry->vbo_name != 0);
             glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
@@ -1188,7 +1220,7 @@ class Renderer
             // The view matrix only takes into account the eye's
             // residue coordinate, so the model position of the group
             // actually needs to be shifted by the eye's group coord.
-            glm::vec3 model_offset = glm::vec3(group_coord(pcg) - eye_group)
+            glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
@@ -1200,12 +1232,13 @@ class Renderer
             glUniform3fv(eye_relative_group_origin_id, 1,
                 &eye_relative_group_origin[0]);
 
-            auto gc = group_coord(pcg);
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
                         PackedAABB aabb = entry->mesh_array[z][y][x].aabb;
-                        if (decide_chunk(gc, aabb) != draw_mesh) continue;
+                        if (decide_chunk(group_coord, aabb) != draw_mesh) {
+                            continue;
+                        }
 
                         const ChunkMesh& mesh = entry->mesh_array[z][y][x];
                         if (mesh.vert_count == 0) continue;
@@ -1234,7 +1267,6 @@ class Renderer
         float squared_thresh = camera.get_raycast_threshold();
         squared_thresh *= squared_thresh;
 
-        PositionedChunkGroup pcg;
         glm::ivec3 group_coord_low, group_coord_high;
         glm::dvec3 disp(camera.get_far_plane());
         split_coordinate(camera.get_eye() - disp, &group_coord_low);
@@ -1243,17 +1275,18 @@ class Renderer
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
         for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
-            pcg.group_coord = glm::ivec3(xH, yH, zH);
-            pcg.ptr = world_handle.view_chunk_group(pcg.group_coord);
-            if (pcg.ptr == nullptr) continue;
+            auto group_coord = glm::ivec3(xH, yH, zH);
+
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
 
             float min_squared_dist;
-            bool cull = cull_group(pcg, &min_squared_dist);
+            bool cull = cull_group(group_coord, &min_squared_dist);
             // Skip culled chunk groups or those so far away that they
             // cannot possibly contain chunks near enough to be drawn
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
-            draw_group(pcg);
+            draw_group(group_coord);
         }
         }
         }
@@ -1354,20 +1387,16 @@ class Renderer
     // Functions required by BaseStore. Since I'm revamping voxel upload
     // using the SSBO-approach above, I just provide dummy functions for
     // the BaseStore. So this design didn't age well...
-    static void replace(PositionedChunkGroup& pcg,
-                        VoxelWorld& world,
+    static void replace(glm::ivec3 group_coord,
                         RaycastEntry* entry)
     {
-        entry->world_id = world.id();
-        entry->group_coord = group_coord(pcg);
+        entry->world_id = bogus_world_id; // Really didn't age well...
+        entry->group_coord = group_coord;
         entry->should_draw = false;
     }
 
     // Another dummy function.
-    static bool update(PositionedChunkGroup&,
-                       VoxelWorld&,
-                       RaycastEntry*,
-                       bool)
+    static bool update(glm::ivec3, RaycastEntry*, bool)
     {
         return true;
     }
@@ -1384,12 +1413,11 @@ class Renderer
 
     // Handle step 2 of the data flow: try to get a staging buffer
     // (return true iff this is done) and fill it with data from the
-    // given PositionedChunkGroup (implicitly from the world being
-    // rendered).
+    // chunk group with the given group_coordinate.
     //
     // We can clear the dirty flags exactly when this is done
     // successfully.
-    bool try_upload_to_staging(PositionedChunkGroup& pcg)
+    bool try_upload_to_staging(glm::ivec3 group_coord)
     {
         RaycastStore& store = camera.get_raycast_store();
         StagingBuffer* p_sb = nullptr;
@@ -1404,13 +1432,18 @@ class Renderer
 
         // Label this StagingBuffer as ours.
         StagingBuffer& sb = *p_sb;
-        sb.world_id = world.id();
-        sb.group_coord = group_coord(pcg);
+        sb.world_id = bogus_world_id;
+        sb.group_coord = group_coord;
         sb.make_ready();
+
+        // Load the needed chunk group. No need to upload (report success)
+        // if the chunk group does not exist.
+        set_current_chunk_group(group_coord);
+        if (current_chunk_group == nullptr) return true;
 
         // Fill in the texels and AABBs. Clear the dirty flag before
         // reading the actual data to handle data races better.
-        pcg.ptr->dirty_flags &= ~renderer_raycast_dirty_flag;
+        current_chunk_group->dirty_flags &= ~renderer_raycast_dirty_flag;
         assert(sb.mapped_ssbo != nullptr);
         auto& big_ol_array = sb.mapped_ssbo->voxel_colors;
         StagingBuffer::AABBs a;
@@ -1418,7 +1451,8 @@ class Renderer
         for (int zH = 0; zH < edge_chunks; ++zH) {
         for (int yH = 0; yH < edge_chunks; ++yH) {
         for (int xH = 0; xH < edge_chunks; ++xH) {
-            const BinChunk& chunk = pcg.ptr->chunk_array[zH][yH][xH];
+            const BinChunk& chunk = current_chunk_group
+                                  ->chunk_array[zH][yH][xH];
             glm::ivec3 chunk_residue(
                 xH * chunk_size, yH * chunk_size, zH * chunk_size);
             a.aabb_array[zH][yH][xH] = PackedAABB(chunk, chunk_residue);
@@ -1455,14 +1489,8 @@ class Renderer
             auto world_id = it->world_id;
             auto group_coord = it->group_coord;
 
-            if (world_id != world.id()) continue;
-
-            PositionedChunkGroup pcg;
-            pcg.group_coord = group_coord;
-            pcg.ptr = world_handle.view_chunk_group(group_coord);
-            if (pcg.ptr == nullptr) continue;
-
-            bool success = try_upload_to_staging(pcg);
+            if (world_id != bogus_world_id) continue;
+            bool success = try_upload_to_staging(group_coord);
             if (!success) break;
         }
 
@@ -1482,7 +1510,7 @@ class Renderer
 
             StoreRequest request;
             RaycastEntry* entry =
-                store.request_no_update(sb.group_coord, world.id(), &request);
+                store.request_no_update(sb.group_coord, &request);
 
             assert(entry != nullptr);
             using std::swap;
@@ -1554,7 +1582,7 @@ class Renderer
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = camera.get_far_plane();
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
-        store.set_modulus(modulus, world.id());
+        store.set_modulus(modulus);
         store.resize_victim_cache(0);
 
         // Count and limit the number of new chunk groups added to the
@@ -1567,10 +1595,9 @@ class Renderer
         // the early depth test optimization.
         float squared_thresh = camera.get_far_plane();
         squared_thresh *= squared_thresh;
-        std::vector<std::pair<float, PositionedChunkGroup>> pcg_by_depth;
+        std::vector<std::pair<float, glm::ivec3>> group_coord_by_depth;
 
         unsigned drawn_group_count = 0;
-        PositionedChunkGroup pcg;
         glm::ivec3 group_coord_low, group_coord_high;
         glm::dvec3 disp(camera.get_far_plane());
         split_coordinate(camera.get_eye() - disp, &group_coord_low);
@@ -1579,14 +1606,14 @@ class Renderer
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
         for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
-            pcg.group_coord = glm::ivec3(xH, yH, zH);
-            pcg.ptr = world_handle.view_chunk_group(pcg.group_coord);
-            if (pcg.ptr == nullptr) continue;
+            auto group_coord = glm::ivec3(xH, yH, zH);
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
 
             float min_squared_dist;
-            bool cull = cull_group(pcg, &min_squared_dist);
+            bool cull = cull_group(group_coord, &min_squared_dist);
             if (cull or min_squared_dist >= squared_thresh) continue;
-            pcg_by_depth.emplace_back(min_squared_dist, std::move(pcg));
+            group_coord_by_depth.emplace_back(min_squared_dist, group_coord);
             ++drawn_group_count;
         }
         }
@@ -1597,7 +1624,9 @@ class Renderer
             {
                 return left.first < right.first;
             };
-            std::sort(pcg_by_depth.begin(), pcg_by_depth.end(), lt_depth);
+            std::sort(group_coord_by_depth.begin(),
+                      group_coord_by_depth.end(),
+                      lt_depth);
         }
         std::vector<RaycastEntry*> draw_in_first_pass;
         std::vector<RaycastEntry*> draw_in_second_pass;
@@ -1608,32 +1637,38 @@ class Renderer
         mark_write_staging_buffers_unused();
         queue_to_staging_buffers(); // (2)
 
-        for (auto& pair : pcg_by_depth) {
+        for (auto& pair : group_coord_by_depth) {
             // Steps 1 and 2: prepare to add dirty chunk groups to staging.
+            auto group_coord = pair.second;
             StoreRequest request;
             request.may_fail = remaining_new_chunk_groups_allowed <= 0;
-            PositionedChunkGroup& pcg = pair.second;
-            RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
+            RaycastEntry* entry = store.request<Renderer>(
+                *this, group_coord, &request);
 
             if (entry == nullptr) continue;
 
-            bool dirty = pcg.ptr->dirty_flags & renderer_raycast_dirty_flag;
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
+
+            bool dirty = current_chunk_group->dirty_flags
+                       & renderer_raycast_dirty_flag;
             if (dirty or !request.was_in_store) {
-                bool success = try_upload_to_staging(pcg); // (2)
+                bool success = try_upload_to_staging(group_coord); // (2)
                 if (!success) {
                     // (1)
-                    store.queue.push_back( { world.id(), group_coord(pcg) } );
+                    store.queue.push_back( { bogus_world_id, group_coord } );
                 }
             }
             remaining_new_chunk_groups_allowed -= !request.was_in_store;
         }
 
         swap_read_staging_buffers_into_RaycastStore(); // (6)
-        for (auto& pair : pcg_by_depth) {
+        for (auto& pair : group_coord_by_depth) {
             StoreRequest request;
             request.may_fail = true;
-            PositionedChunkGroup& pcg = pair.second;
-            RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
+            auto group_coord = pair.second;
+            RaycastEntry* entry = store.request<Renderer>(
+                *this, group_coord, &request);
 
             if (entry == nullptr) continue;
             if (!entry->should_draw) continue;

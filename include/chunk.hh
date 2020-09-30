@@ -25,13 +25,6 @@ class VoxelWorld
     MutWorldCache world_cache = { handle };
 
   public:
-    // Meaningless placeholder for now; all VoxelWorld refer to the
-    // same world.
-    uint64_t id() const
-    {
-        return 1;
-    }
-
     // Return voxel at the given coordinate.
     uint32_t operator() (glm::ivec3 c)
     {
