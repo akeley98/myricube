@@ -24,35 +24,6 @@ namespace myricube {
 // File name of the BinWorld file, and filename format for chunk group files.
 const char world_filename[] = "world.myricube";
 
-// Windows uses UTF-16, sigh. (wstring is 16-bit on windows). TODO test.
-#if defined(__WIN32__) || defined(__WIN32) || defined(WIN32)
-#define MYRICUBE_WINDOWS 1
-using filename_string = std::wstring;
-#endif
-
-// Meanwhile the free world uses UTF-8 like civilized individuals.
-#if defined(__linux__) || defined(__unix__)
-using filename_string = std::string;
-#endif
-
-using filename_char = filename_string::value_type;
-
-// Dumb function for appending an ascii C string to a filename.
-// Needed to deal with platform differences.
-inline filename_string filename_concat_c_str(
-    filename_string filename, const char* c_str)
-{
-    auto len = strlen(c_str);
-    filename.reserve(filename.size() + len + 1);
-
-    for (size_t i = 0; i < len; ++i) {
-        char c = c_str[i];
-        assert(0 < c and c <= 127); // Must be ASCII.
-        filename.push_back(static_cast<filename_char>(c));
-    }
-    return filename;
-}
-
 constexpr uint64_t chunk_group_base_magic_number = 587569177;
 
 // Chunk of voxels as it appears in binary on-disk.
