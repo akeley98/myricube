@@ -824,17 +824,22 @@ class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
 class Renderer
 {
     Camera& camera;
-    VoxelWorld& world;
     WorldHandle world_handle;
     ViewWorldCache world_cache;
     const BinChunkGroup* current_chunk_group = nullptr;
 
   public:
-    Renderer(VoxelWorld& world_, Camera& camera_) :
-        camera(camera_),
-        world(world_),
-        world_handle(world_.handle),
-        world_cache(world_.handle) { }
+    Renderer(const WorldHandle& world_, Camera* camera_) :
+        camera(*camera_),
+        world_handle(world_),
+        world_cache(world_)
+    {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
+    }
 
   private:
     // Sets the current_chunk_group ptr to point to the named chunk group.
@@ -1569,7 +1574,6 @@ class Renderer
         }
     }
 
-  public:
     // Render, to the current framebuffer, chunks around the camera
     // using the AABB-raycast algorithm. Chunks that are near
     // enough to have been drawn using the mesh algorithm will
@@ -1841,58 +1845,85 @@ class Renderer
         PANIC_IF_GL_ERROR;
         glBindVertexArray(0);
     }
-};
 
-void render_world_mesh_step(VoxelWorld& world, Camera& camera)
-{
-    Renderer(world, camera).render_world_mesh_step();
-}
+    // Render the background. This uses a shader hard-wired to draw a
+    // full-screen rectangle.
+    void render_background()
+    {
+        static GLuint vao = 0;
+        static GLuint program_id;
+        static GLint inverse_vp_id;
+        static GLint eye_world_position_id;
+        static GLint black_fog_id;
 
-void render_world_raycast_step(VoxelWorld& world, Camera& camera)
-{
-    Renderer(world, camera).render_world_raycast_step();
-}
+        if (vao == 0) {
+            glGenVertexArrays(1, &vao);
+            program_id = make_program(
+                { "background.vert", "background.frag", "fog_border.frag" } );
 
-// Render the background. This uses a shader hard-wired to draw a
-// full-screen rectangle.
-void render_background(Camera& camera)
-{
-    static GLuint vao = 0;
-    static GLuint program_id;
-    static GLint inverse_vp_id;
-    static GLint eye_world_position_id;
-    static GLint black_fog_id;
+            inverse_vp_id = glGetUniformLocation(program_id,
+                "inverse_vp");
+            assert(inverse_vp_id >= 0);
+            eye_world_position_id = glGetUniformLocation(program_id,
+                "eye_world_position");
+            assert(eye_world_position_id >= 0);
+            black_fog_id = glGetUniformLocation(program_id,
+                "black_fog");
+            assert(black_fog_id >= 0);
+            PANIC_IF_GL_ERROR;
+        }
 
-    if (vao == 0) {
-        glGenVertexArrays(1, &vao);
-        program_id = make_program(
-            { "background.vert", "background.frag", "fog_border.frag" } );
+        glm::vec3 eye_residue;
+        camera.get_eye(nullptr, &eye_residue);
+        glm::mat4 inverse_vp = glm::inverse(camera.get_residue_vp());
 
-        inverse_vp_id = glGetUniformLocation(program_id,
-            "inverse_vp");
-        assert(inverse_vp_id >= 0);
-        eye_world_position_id = glGetUniformLocation(program_id,
-            "eye_world_position");
-        assert(eye_world_position_id >= 0);
-        black_fog_id = glGetUniformLocation(program_id,
-            "black_fog");
-        assert(black_fog_id >= 0);
+        glBindVertexArray(vao);
+        glUseProgram(program_id);
+        glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
+        glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
+        glUniform1i(black_fog_id, camera.use_black_fog());
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
         PANIC_IF_GL_ERROR;
+    };
+
+  public:
+    void draw_frame()
+    {
+        fprintf(stderr, "bitfield_vector.size() = %i\n", int(world_cache.bitfield_vector.size()));
+
+        int x, y;
+        camera.get_window_size(&x, &y);
+        glViewport(0, 0, x, y);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        auto target_fragments = camera.get_target_fragments();
+        if (target_fragments > 0) {
+            bind_global_f32_depth_framebuffer(x, y, target_fragments);
+        }
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        render_world_mesh_step();
+        render_world_raycast_step();
+        render_background();
+        if (target_fragments > 0) {
+            finish_global_f32_depth_framebuffer(x, y);
+        }
     }
-
-    glm::vec3 eye_residue;
-    camera.get_eye(nullptr, &eye_residue);
-    glm::mat4 inverse_vp = glm::inverse(camera.get_residue_vp());
-
-    glBindVertexArray(vao);
-    glUseProgram(program_id);
-    glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
-    glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
-    glUniform1i(black_fog_id, camera.use_black_fog());
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glBindVertexArray(0);
-    PANIC_IF_GL_ERROR;
 };
+
+Renderer* new_renderer(const WorldHandle& world, Camera* camera)
+{
+    return new Renderer(world, camera);
+}
+
+void delete_renderer(Renderer* renderer)
+{
+    delete renderer;
+}
+
+void draw_frame(Renderer* renderer)
+{
+    renderer->draw_frame();
+}
 
 MeshStore* new_mesh_store()
 {
@@ -1912,26 +1943,6 @@ RaycastStore* new_raycast_store()
 void delete_raycast_store(RaycastStore* raycast_store)
 {
     delete raycast_store;
-}
-
-void viewport(int x, int y)
-{
-    glViewport(0, 0, x, y);
-    PANIC_IF_GL_ERROR;
-};
-
-void gl_first_time_setup()
-{
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
-}
-
-void gl_clear()
-{
-    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 }
 
 static GLuint f32_depth_framebuffer = 0;

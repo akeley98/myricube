@@ -21,10 +21,10 @@ class VoxelWorld
 {
     friend class Renderer;
 
+  public:
     WorldHandle handle = { expand_filename("scratch/world.myricube") };
     MutWorldCache world_cache = { handle };
 
-  public:
     // Return voxel at the given coordinate.
     uint32_t operator() (glm::ivec3 c)
     {

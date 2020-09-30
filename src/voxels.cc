@@ -37,7 +37,7 @@ template <typename T> T* map_file(const filename_string& filename, int* flags);
 template <typename T> T* map_file(const filename_string& filename, int flags)
 {
 #ifndef MYRICUBE_WINDOWS
-    // fprintf(stderr, "Mapping %s\n", filename.c_str());
+    fprintf(stderr, "Mapping %s\n", filename.c_str());
 #endif
     return map_file<T>(filename, &flags);
 }

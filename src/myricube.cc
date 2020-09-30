@@ -102,7 +102,6 @@ bool ends_with_bin_or_exe(const std::string& in)
 }
 
 bool paused = false;
-int target_fragments = 0;
 
 void add_key_targets(Window& window, Camera& camera)
 {
@@ -361,23 +360,25 @@ void add_key_targets(Window& window, Camera& camera)
 
     increase_target_fragments.down = [&] (KeyArg) -> bool
     {
-        if (target_fragments <= 0) target_fragments = min_nonzero_fragments;
-        else target_fragments *= 2;
+        if (camera.get_target_fragments() <= 0) {
+            camera.set_target_fragments(min_nonzero_fragments);
+        }
+        else camera.set_target_fragments(camera.get_target_fragments() * 2);
 
-        fprintf(stderr, "%i target fragments.\n", target_fragments);
+        fprintf(stderr, "%i target fragments.\n", camera.get_target_fragments());
         return true;
     };
     window.add_key_target(
         "increase_target_fragments", increase_target_fragments);
     decrease_target_fragments.down = [&] (KeyArg) -> bool
     {
-        if (target_fragments <= min_nonzero_fragments) {
-            target_fragments = 0;
+        if (camera.get_target_fragments() <= min_nonzero_fragments) {
+            camera.set_target_fragments(0);
             fprintf(stderr, "Unlimited fragments.\n");
         }
         else {
-            target_fragments /= 2;
-            fprintf(stderr, "%i target fragments.\n", target_fragments);
+            camera.set_target_fragments(camera.get_target_fragments() / 2);
+            fprintf(stderr, "%i target fragments.\n", camera.get_target_fragments());
         }
         return true;
     };
@@ -618,29 +619,18 @@ int Main(std::vector<std::string> args)
     VoxelWorld* world = &app->update(dt);
 
     // Render loop.
-    gl_first_time_setup();
+    Renderer* renderer = new_renderer(world->handle, &camera);
+
     while (window.update_swap_buffers(&dt)) {
         if (!paused) world = &app->update(dt);
         camera.fix_dirty();
 
-        viewport(screen_x, screen_y);
-        gl_clear();
-        if (target_fragments > 0) {
-            bind_global_f32_depth_framebuffer(screen_x, screen_y, target_fragments);
-        }
-        gl_clear();
-        render_world_mesh_step(*world, camera);
-        render_world_raycast_step(*world, camera);
-        render_background(camera);
-        if (target_fragments > 0) {
-            finish_global_f32_depth_framebuffer(screen_x, screen_y);
-        }
-
+        draw_frame(renderer);
         extern bool evict_stats_debug;
         evict_stats_debug = false;
-
         set_window_title(window);
     }
+    delete_renderer(renderer);
     return 0;
 }
 

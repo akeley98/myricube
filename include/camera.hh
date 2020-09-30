@@ -51,6 +51,11 @@ class Camera
     bool fog_enabled = true;
     bool black_fog = false;
 
+    // Maximum number of fragments for the screen (integer
+    // downsampling is done to meet this limit). Non-positive value
+    // indicates no limit.
+    int target_fragments = 0;
+
     // *** True when members below need to be recomputed due to ***
     // *** changes in members above.                            ***
     bool dirty = true;
@@ -246,6 +251,12 @@ class Camera
         window_y = y;
     }
 
+    void get_window_size(int* x=nullptr, int* y=nullptr)
+    {
+        if (x) *x = window_x;
+        if (y) *y = window_y;
+    }
+
     bool get_fog() const
     {
         return fog_enabled;
@@ -274,6 +285,16 @@ class Camera
     void set_max_frame_new_chunk_groups(int in)
     {
         max_frame_new_chunk_groups = in;
+    }
+
+    int get_target_fragments() const
+    {
+        return target_fragments;
+    }
+
+    void set_target_fragments(int in)
+    {
+        target_fragments = in;
     }
 
     // Move by the specified multiples of the normal right, up, and
