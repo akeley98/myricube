@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string>
 #include <string.h>
+#include <vector>
 
 namespace myricube {
 
@@ -348,7 +349,278 @@ class WorldHandle
     // Return the entire group bitfield (not an individual bit!) that
     // holds the bit for the given chunk group.
     UPtrGroupBitfield bitfield_for_chunk_group(glm::ivec3) const;
+
+    // Overloaded version of mut/view_chunk_group.
+    void get_chunk_group_uptr(
+        glm::ivec3 group_coord, UPtrMutChunkGroup& ptr)
+    {
+        ptr = mut_chunk_group(group_coord);
+    }
+
+    void get_chunk_group_uptr(
+        glm::ivec3 group_coord, UPtrChunkGroup& ptr) const
+    {
+        ptr = view_chunk_group(group_coord);
+    }
 };
+
+
+
+// Object for efficiently viewing and modifying chunks in a voxel
+// world. Holds a direct-mapped cache of pointers to memory-mapped
+// chunk groups, minimizing the need to interact with the file system.
+//
+// The object itself is not threadsafe, but multiple caches for the same
+// world may be used concurrently (assuming no OS bugs).
+// This is still not exactly super efficient.
+template <typename UPtr, bool CheckBitfield>
+class WorldCache
+{
+    WorldHandle world;
+
+    static constexpr int32_t modulus = 16;
+
+    // First, we need to store the bitfields corresponding to the
+    // chunk groups we tried to read or modify. Every time we
+    // encounter a new (or evicted) chunk group, we look into the
+    // bitfield_vector for a pointer to its corresponding mmap'd
+    // bitfield. If not found, we have to add it.
+    //
+    // Note that nothing is ever removed from bitfield_vector; in
+    // practice this doesn't matter as bitfields cover a huge amount
+    // of space, so this simplification is worth it to prevent
+    // worrying about dangling pointers.
+    struct CanonicalGroupBitfield
+    {
+        glm::ivec3 canonical_group_coord;
+        UPtrGroupBitfield bitfield_ptr;
+    };
+    std::vector<CanonicalGroupBitfield> bitfield_vector;
+
+  public:
+    struct Entry
+    {
+        // Index into bitfield_vector that gives us the bitfield for
+        // this entry. Negative value indicates this Entry has not
+        // yet been populated (i.e. is invalid).
+        int32_t bitfield_index = -1;
+
+        // Group coordinate of the chunk group this Entry is for.
+        glm::ivec3 group_coord;
+
+        // Pointer to chunk group on disk. Null if it doesn't exist.
+        UPtrMutChunkGroup chunk_group_ptr;
+
+        // Helper for determining if this entry is for the group with
+        // the given group coordinate.
+        bool is_for_group(glm::ivec3 group_coord_arg)
+        {
+            return group_coord == group_coord_arg and bitfield_index >= 0;
+        }
+    };
+    Entry cache[modulus][modulus][modulus];
+
+  private:
+    // Return the location to store the Entry for the named chunk group.
+    Entry& get_entry_location(glm::ivec3 group_coord)
+    {
+        return cache[group_coord.z & (modulus-1)]
+                    [group_coord.y & (modulus-1)]
+                    [group_coord.x & (modulus-1)];
+    }
+
+  public:
+    // Get the Entry for the named chunk group, reading the named
+    // chunk group and store it in the cache if needed.  The returned
+    // reference is valid as long as this->get_entry is not called
+    // again with a different group coordinate.
+    const Entry& get_entry(glm::ivec3 group_coord)
+    {
+        Entry& entry = get_entry_location(group_coord);
+
+        // Case 1: Already found in cache. In this case we just need to
+        // check if there's a null pointer, and if so, check the bitfield
+        // (if required) to see if the chunk group now exists on disk.
+        if (entry.is_for_group(group_coord)) {
+            if (entry.chunk_group_ptr == nullptr) {
+                bool lookup = true;
+                if (CheckBitfield) {
+                    lookup = bitfield_vector.at(entry.bitfield_index)
+                            .bitfield_ptr->chunk_group_on_disk(group_coord);
+                }
+                if (lookup) {
+                    world.get_chunk_group_uptr(group_coord,
+                                               entry.chunk_group_ptr);
+                }
+            }
+            return entry;
+        }
+
+        // Case 2: Not in cache; we have to load it in.
+        // Construct the new entry separately for exception safety.
+        Entry new_entry;
+        new_entry.group_coord = group_coord;
+
+        // Search for the bitfield for this chunk group.
+        new_entry.bitfield_index = 0;
+        glm::ivec3 canonical =
+            BinGroupBitfield::canonical_group_coord(group_coord);
+        for (const auto& n : bitfield_vector) {
+            if (n.canonical_group_coord == canonical) goto found;
+            new_entry.bitfield_index++;
+        }
+        // If we reach (no goto) this point, have to load the
+        // bitfield and APPEND to the bitfield vector (so
+        // bitfield_index is correct).
+        bitfield_vector.push_back(
+            { canonical, world.bitfield_for_chunk_group(canonical) } );
+
+      found:
+        // Now check the bitfield (if required) to see if the chunk
+        // group is on disk and if so load it in.
+        bool lookup = true;
+        if (CheckBitfield) {
+            lookup = bitfield_vector.at(new_entry.bitfield_index)
+                    .bitfield_ptr->chunk_group_on_disk(group_coord);
+        }
+        if (lookup) {
+            world.get_chunk_group_uptr(group_coord, new_entry.chunk_group_ptr);
+        }
+
+        // No exceptions thrown: can safely overwrite evicted entry.
+        entry = std::move(new_entry);
+        return entry;
+    }
+
+    WorldCache(WorldHandle world_) : world(std::move(world_)) { }
+    ~WorldCache() = default;
+    WorldCache(const WorldCache&) = delete;
+};
+
+// Cache specialized for modifying voxel worlds: cache pointers to mutable,
+// and skip bitfield checks (so nonexistent chunks will be created).
+using MutWorldCache = WorldCache<UPtrMutChunkGroup, false>;
+
+// Cache specialized for reading voxel worlds: cache pointers to const,
+// and check bitfields to lower overhead of accessing nonexistent groups.
+using ViewWorldCache = WorldCache<UPtrChunkGroup, true>;
+
+
+// Object for efficiently viewing and modifying a voxel world.  Holds
+// a direct-mapped cache of pointers to memory-mapped chunk groups,
+// minimizing the need to interact with the file system.
+// This is still not exactly super efficient.
+// class WorldMutator
+// {
+//     WorldHandle world;
+
+//     static constexpr int32_t modulus = 16;
+
+//     // First, we need to store the bitfields corresponding to the
+//     // chunk groups we tried to read or modify. Every time we
+//     // encounter a new (or evicted) chunk group, we look into the
+//     // bitfield_vector for a pointer to its corresponding mmap'd
+//     // bitfield. If not found, we have to add it.
+//     //
+//     // Note that nothing is ever removed from bitfield_vector; in
+//     // practice this doesn't matter as bitfields cover a huge amount
+//     // of space, so this simplification is worth it to prevent
+//     // worrying about dangling pointers.
+//     struct CanonicalGroupBitfield
+//     {
+//         glm::ivec3 canonical_group_coord;
+//         UPtrGroupBitfield bitfield_ptr;
+//     };
+//     std::vector<CanonicalGroupBitfield> bitfield_vector;
+
+//     struct Entry
+//     {
+//         // Index into bitfield_vector that gives us the bitfield for
+//         // this entry. Negative value indicates this Entry has not
+//         // yet been populated (i.e. is invalid).
+//         int32_t bitfield_index = -1;
+
+//         // Group coordinate of the chunk group this Entry is for.
+//         glm::ivec3 group_coord;
+
+//         // Pointer to chunk group on disk. Null if it doesn't exist.
+//         UPtrMutChunkGroup chunk_group_ptr;
+
+//         // Helper for determining if this entry is for the group with
+//         // the given group coordinate.
+//         bool is_for_group(glm::ivec3 group_coord_arg)
+//         {
+//             return group_coord == group_coord_arg and bitfield_index >= 0;
+//         }
+//     };
+//     Entry cache[modulus][modulus][modulus];
+
+//     // Return the location to store the Entry for the named chunk group.
+//     Entry& get_entry_location(glm::ivec3 group_coord)
+//     {
+//         return cache[group_coord.z & (modulus-1)]
+//                     [group_coord.y & (modulus-1)]
+//                     [group_coord.x & (modulus-1)];
+//     }
+
+//     // Get the Entry for the named chunk group, reading the named
+//     // chunk group and store it in the cache if needed.
+//     Entry& get_loaded_entry(glm::ivec3 group_coord)
+//     {
+//         Entry& entry = get_entry_location(group_coord);
+//         if (entry.)
+
+//         // Find the bitfield corresponding to the looked-for chunk group.
+//         int32_t index = 0;
+//         for (auto& n : bitfield_vector) {
+//             if (n.canonical_group_coord == canonical) break;
+//             index++;
+//         }
+//         // Not found case.
+//         if (index == bitfield_vector.size()) {
+
+//         }
+
+//         entry.bitfield_index = index;
+//     }
+
+//   public:
+//     WorldMutator() = default;
+//     ~WorldMutator() = default;
+//     WorldMutator(const Mutator&) = delete;
+
+//     // Return voxel at the given coordinate.
+//     uint32_t operator() (glm::ivec3 c)
+//     {
+//         glm::ivec3 group_coord = to_group_coord(c);
+
+
+//         // Case: already have entry in cache.
+//         if (cached_read.is_for_group(group_coord)) {
+//             if (cached_read.chunk_group_ptr != nullptr) {
+//                 return (*cached_read.chunk_group_ptr)(c);
+//             }
+
+//             return 0;
+//         }
+
+
+
+//     }
+
+//     // Set the voxel at the given coordinate.
+//     void set(glm::ivec3 c, uint32_t voxel)
+//     {
+//         glm::ivec3 group_coord = to_group_coord(c);
+//         if (group_coord != cached_write.group_coord
+//         or cached_write.ptr == nullptr)
+//         {
+//             cached_write.ptr = handle.mut_chunk_group(group_coord);
+//             cached_write.group_coord = group_coord;
+//         }
+//         return cached_write.ptr->set(c, voxel);
+//     }
+// };
 
 } // end namespace myricube
 

@@ -21,24 +21,8 @@ class VoxelWorld
 {
     friend class Renderer;
 
-    // Last-used pointer for reading from a chunk group, and its group coord.
-    // Used to minimize looking up files.
-    struct PositionedReadChunkGroup
-    {
-        glm::ivec3 group_coord;
-        UPtrChunkGroup ptr;
-    };
-    PositionedReadChunkGroup cached_read;
-
-    // Similar to above, but for writing.
-    struct PositionedWriteChunkGroup
-    {
-        glm::ivec3 group_coord;
-        UPtrMutChunkGroup ptr;
-    };
-    PositionedWriteChunkGroup cached_write;
-
     WorldHandle handle = { expand_filename("scratch/world.myricube") };
+    MutWorldCache world_cache = { handle };
 
   public:
     // Meaningless placeholder for now; all VoxelWorld refer to the
@@ -52,26 +36,20 @@ class VoxelWorld
     uint32_t operator() (glm::ivec3 c)
     {
         glm::ivec3 group_coord = to_group_coord(c);
-        if (group_coord != cached_read.group_coord
-        or cached_read.ptr == nullptr)
-        {
-            cached_read.ptr = handle.view_chunk_group(group_coord);
-            cached_read.group_coord = group_coord;
-        }
-        return cached_read.ptr ? (*cached_read.ptr)(group_coord) : 0;
+        BinChunkGroup* ptr =
+            world_cache.get_entry(group_coord).chunk_group_ptr.get();
+        return ptr ? (*ptr)(c) : 0;
     }
 
     // Set the voxel at the given coordinate.
     void set(glm::ivec3 c, uint32_t voxel)
     {
         glm::ivec3 group_coord = to_group_coord(c);
-        if (group_coord != cached_write.group_coord
-        or cached_write.ptr == nullptr)
-        {
-            cached_write.ptr = handle.mut_chunk_group(group_coord);
-            cached_write.group_coord = group_coord;
-        }
-        return cached_write.ptr->set(c, voxel);
+        BinChunkGroup* ptr =
+            world_cache.get_entry(group_coord).chunk_group_ptr.get();
+        ptr->dirty_flags.store(~uint64_t(0));
+        assert(ptr != nullptr);
+        ptr->set(c, voxel);
     }
 };
 
