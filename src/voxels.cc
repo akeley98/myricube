@@ -59,8 +59,19 @@ template <typename T> T* map_file(const filename_string& filename, int* flags)
 
 template <typename T> void unmap_file(const T* ptr)
 {
+    // fprintf(stderr, "unmap_file of size %ld\n", long(sizeof(T)));
     auto code = munmap((void*)ptr, sizeof(T));
     assert(code == 0); // Seems like munmap only fails due to logic errors.
+}
+
+void unmap_mut_bin_chunk_group(BinChunkGroup* ptr)
+{
+    unmap_file(ptr);
+}
+
+void unmap_bin_chunk_group(const BinChunkGroup* ptr)
+{
+    unmap_file(ptr);
 }
 
 WorldHandle::WorldHandle(const filename_string& world_filename_arg)
@@ -87,6 +98,7 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
 #ifdef MYRICUBE_WINDOWS
         if (directory_trailing_slash.back() == filename_char('\\')) break;
 #endif
+        directory_trailing_slash.pop_back();
     }
 
     // Check that the file name was as expected (world.myricube at the moment).
@@ -101,6 +113,12 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
     bin_world = std::shared_ptr<BinWorld>(
         map_file<BinWorld>(bin_world_filename, create_flag),
         unmap_file<BinWorld>);
+
+    // Finally check the magic number.
+    if (bin_world->magic_number != bin_world->expected_magic) {
+        throw std::runtime_error("Incorrect magic number: "
+            + bin_world_filename);
+    }
 }
 
 std::string group_coord_filename(glm::ivec3 group_coord)
@@ -121,14 +139,23 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 {
     auto filename = filename_concat_c_str(
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
-    return UPtrMutChunkGroup(map_file<BinChunkGroup>(filename, create_flag));
+    auto result =
+        UPtrMutChunkGroup(map_file<BinChunkGroup>(filename, create_flag));
+    if (result->magic_number != result->expected_magic) {
+        throw std::runtime_error("Incorrect magic number: " + filename);
+    }
+    return result;
 }
 
 UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord)
 {
     auto filename = filename_concat_c_str(
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
-    return UPtrChunkGroup(map_file<const BinChunkGroup>(filename, 0));
+    auto result = UPtrChunkGroup(map_file<const BinChunkGroup>(filename, 0));
+    if (result->magic_number != result->expected_magic) {
+        throw std::runtime_error("Incorrect magic number: " + filename);
+    }
+    return result;
 }
 
 #ifdef MYRICUBE_WINDOWS
@@ -170,7 +197,8 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
 
         // Create file now.
         doing = "Creating";
-        fd = open(filename.c_str(), O_RDWR | O_CREAT, 0666);
+        fd = open(filename.c_str(), O_RDWR | O_CREAT, 0777);
+        *flags |= file_created_flag;
         check_code();
 
         doing = "Resizing created";
@@ -188,6 +216,7 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
     if (stats.st_size == 0) {
         if (*flags & create_flag) {
             doing = "Resizing";
+            *flags |= file_created_flag;
             code = ftruncate(fd, sz);
             check_code();
         }
@@ -196,7 +225,8 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
         }
     }
     else if (stats.st_size != (off_t)sz) {
-        throw std::runtime_error(filename + " incorrect size");
+        throw std::runtime_error(filename +
+            " incorrect size (consider removing file manually)");
     }
 
     // Finally can access the mapping.

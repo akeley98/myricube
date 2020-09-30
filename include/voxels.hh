@@ -39,7 +39,7 @@ using filename_char = filename_string::value_type;
 
 // Dumb function for appending an ascii C string to a filename.
 // Needed to deal with platform differences.
-filename_string filename_concat_c_str(
+inline filename_string filename_concat_c_str(
     filename_string filename, const char* c_str)
 {
     auto len = strlen(c_str);
@@ -98,8 +98,10 @@ struct BinWorldT
     const char shebang[80] =
         "#!/usr/bin/env myricube\n";
 
-    const uint64_t magic_number =
+    static constexpr uint64_t expected_magic =
         BinChunkGroupT<EdgeChunks, ChunkSize>::expected_magic;
+
+    const uint64_t magic_number = expected_magic;
 
     // Should only ever increase. This is forever, so don't increase
     // it by more than needed (although with 64 bits this should not
@@ -117,20 +119,20 @@ static_assert(sizeof(BinWorld) == 4096);
 // Deleter for BinChunkGroup returned by WorldHandle (to be declared).
 // You can rely on mutable chunk groups having their dirty flag set
 // upon deletion.
-void delete_mut_bin_chunk_group(BinChunkGroup*);
-void delete_bin_chunk_group(const BinChunkGroup*);
+void unmap_mut_bin_chunk_group(BinChunkGroup*);
+void unmap_bin_chunk_group(const BinChunkGroup*);
 struct MutChunkGroupDeleter {
     void operator () (BinChunkGroup* arg)
     {
         arg->dirty_flags.store(~uint64_t(0));
-        delete_mut_bin_chunk_group(arg);
+        unmap_mut_bin_chunk_group(arg);
     }
 };
 
 struct ChunkGroupDeleter {
     void operator () (const BinChunkGroup* arg)
     {
-        delete_bin_chunk_group(arg);
+        unmap_bin_chunk_group(arg);
     }
 };
 
@@ -144,8 +146,8 @@ using UPtrChunkGroup = std::unique_ptr<const BinChunkGroup, ChunkGroupDeleter>;
 // file system for (somewhat) handling synchronization problems.
 class WorldHandle
 {
-    friend void delete_mut_bin_chunk_group(BinChunkGroup*);
-    friend void delete_bin_chunk_group(const BinChunkGroup*);
+    friend void unmap_mut_bin_chunk_group(BinChunkGroup*);
+    friend void unmap_bin_chunk_group(const BinChunkGroup*);
 
     // Directory that the world is stored in, with trailing slash
     // so filenames can be appended directly.
