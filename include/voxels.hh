@@ -370,16 +370,16 @@ class WorldHandle
 // world. Holds a direct-mapped cache of pointers to memory-mapped
 // chunk groups, minimizing the need to interact with the file system.
 //
-// The object itself is not threadsafe, but multiple caches for the same
-// world may be used concurrently (assuming no OS bugs).
-// This is still not exactly super efficient.
+// The object itself is not threadsafe, but multiple caches for the
+// same world may be used concurrently (assuming no OS bugs).  This is
+// still not exactly super efficient -- the cache itself is a huge 1
+// megabyte-ish structure.
 template <typename UPtr, bool CheckBitfield>
 class WorldCache
 {
-    friend class Renderer; // XXX
     WorldHandle world;
 
-    static constexpr int32_t modulus = 16;
+    static constexpr int32_t modulus = 32;
 
     // First, we need to store the bitfields corresponding to the
     // chunk groups we tried to read or modify. Every time we
@@ -410,7 +410,7 @@ class WorldCache
         glm::ivec3 group_coord;
 
         // Pointer to chunk group on disk. Null if it doesn't exist.
-        UPtrMutChunkGroup chunk_group_ptr;
+        UPtr chunk_group_ptr;
 
         // Helper for determining if this entry is for the group with
         // the given group coordinate.

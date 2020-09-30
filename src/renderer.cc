@@ -1890,8 +1890,6 @@ class Renderer
   public:
     void draw_frame()
     {
-        fprintf(stderr, "bitfield_vector.size() = %i\n", int(world_cache.bitfield_vector.size()));
-
         int x, y;
         camera.get_window_size(&x, &y);
         glViewport(0, 0, x, y);
