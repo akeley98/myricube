@@ -2,8 +2,8 @@ default: myricube-bin
 	./myricube
 
 CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm
-CXXFLAGS=-Wall -Wextra -O3 -g -fPIC -std=c++17
-CFLAGS=  -Wall -Wextra -O3 -g -fPIC
+CXXFLAGS=-Wall -Wextra -O0 -g -fPIC -std=c++17
+CFLAGS=  -Wall -Wextra -O0 -g -fPIC
 
 -include cckiss/Makefile
 -include OBJS-list

@@ -20,6 +20,17 @@
 
 namespace myricube {
 
+struct PositionedChunkGroup
+{
+    glm::ivec3 group_coord;
+    UPtrChunkGroup ptr;
+};
+
+glm::ivec3 group_coord(const PositionedChunkGroup& pcg)
+{
+    return pcg.group_coord;
+}
+
 // Hacky debug variables.
 bool chunk_debug = false;
 bool evict_stats_debug = false;
@@ -51,6 +62,119 @@ template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
         uint32_t(v.blue) << 8 |
         uint32_t(v.visible ? 255 : 0);
 }
+
+// For memory efficiency, the AABB of a chunk is stored in packed
+// format on the GPU.
+struct PackedAABB
+{
+    uint32_t packed_low;
+    uint32_t packed_high;
+
+    static_assert(group_size <= 255,
+                  "group too big for 8-bit unsigned coordinates.");
+
+    PackedAABB() = default;
+
+    PackedAABB(glm::ivec3 aabb_low, glm::ivec3 aabb_high)
+    {
+        auto x = aabb_low.x;
+        auto y = aabb_low.y;
+        auto z = aabb_low.z;
+        packed_low = uint32_t(x) << x_shift
+                   | uint32_t(y) << y_shift
+                   | uint32_t(z) << z_shift;
+        x = aabb_high.x;
+        y = aabb_high.y;
+        z = aabb_high.z;
+        packed_high = uint32_t(x) << x_shift
+                    | uint32_t(y) << y_shift
+                    | uint32_t(z) << z_shift;
+    }
+
+    // Compute the AABB (in residue coordinates) of the given chunk.
+    // The residue coordinates of the lower corner of the chunk must
+    // also be given (as the AABB is relative to the chunk group's
+    // origin, not the chunk itself).
+    PackedAABB(const BinChunk& chunk, glm::ivec3 chunk_residue)
+    {
+        // {xyz}_array[n] has visible_bit set iff there's some visible
+        // voxel in the chunk with n == the voxel's {xyz} coordinate.
+        uint32_t x_array[chunk_size] = { 0 };
+        uint32_t y_array[chunk_size] = { 0 };
+        uint32_t z_array[chunk_size] = { 0 };
+
+        uint32_t all_orrd = 0;
+
+        for (size_t z = 0; z < chunk_size; ++z) {
+            for (size_t y = 0; y < chunk_size; ++y) {
+                for (size_t x = 0; x < chunk_size; ++x) {
+                    uint32_t voxel = chunk.voxel_array[z][y][x];
+                    all_orrd |= voxel;
+                    x_array[x] |= voxel;
+                    y_array[y] |= voxel;
+                    z_array[z] |= voxel;
+                }
+            }
+        }
+
+        // Return trivial PackedAABB if chunk is empty.
+        if ((all_orrd & visible_bit) == 0) {
+            packed_low = 0;
+            packed_high = 0;
+            return;
+        }
+
+        // Otherwise, we actually have to calculate the AABB. Do it
+        // in the coordinate system of the chunk first.
+        glm::ivec3 chunk_aabb_low(chunk_size, chunk_size, chunk_size);
+        glm::ivec3 chunk_aabb_high(0, 0, 0);
+
+        for (int32_t i = 0; i < chunk_size; ++i) {
+            if (x_array[i] & visible_bit) {
+                chunk_aabb_low.x = glm::min(chunk_aabb_low.x, i);
+                chunk_aabb_high.x = glm::max(chunk_aabb_low.x, i+1);
+            }
+            if (y_array[i] & visible_bit) {
+                chunk_aabb_low.y = glm::min(chunk_aabb_low.y, i);
+                chunk_aabb_high.y = glm::max(chunk_aabb_low.y, i+1);
+            }
+            if (z_array[i] & visible_bit) {
+                chunk_aabb_low.z = glm::min(chunk_aabb_low.z, i);
+                chunk_aabb_high.z = glm::max(chunk_aabb_low.z, i+1);
+            }
+        }
+
+        // Reposition computed AABB by the chunk's residue coordinate.
+        *this = PackedAABB(
+            chunk_aabb_low + chunk_residue,
+            chunk_aabb_high + chunk_residue);
+    }
+
+    uint8_t low_x() const
+    {
+        return uint8_t((packed_low >> x_shift) & 255);
+    }
+    uint8_t low_y() const
+    {
+        return uint8_t((packed_low >> y_shift) & 255);
+    }
+    uint8_t low_z() const
+    {
+        return uint8_t((packed_low >> z_shift) & 255);
+    }
+    uint8_t high_x() const
+    {
+        return uint8_t((packed_high >> x_shift) & 255);
+    }
+    uint8_t high_y() const
+    {
+        return uint8_t((packed_high >> y_shift) & 255);
+    }
+    uint8_t high_z() const
+    {
+        return uint8_t((packed_high >> z_shift) & 255);
+    }
+};
 
 // My new plan for the GPU voxel mesh: each visible voxel will be
 // represented by ONE vertex in a VBO; instanced rendering will
@@ -93,11 +217,13 @@ struct MeshVoxelVertex
 constexpr size_t chunk_max_verts = chunk_size * chunk_size * chunk_size;
 
 // CPU-side copy of the "mesh" (i.e. list of visible voxels) for a
-// single chunk.
+// single chunk. The AABB is also needed for now (decide_chunk needs
+// this info).
 struct ChunkMesh
 {
     MeshVoxelVertex verts[chunk_max_verts];
     size_t vert_count = 0;
+    PackedAABB aabb;
 };
 
 // Handle for GPU resources for the mesh of one chunk group.  The
@@ -165,60 +291,6 @@ struct MeshEntry
         swap(left.group_coord, right.group_coord);
         swap(left.mesh_array, right.mesh_array);
         swap(left.vbo_name, right.vbo_name);
-    }
-};
-
-// For memory efficiency, the AABB of a chunk is stored in packed
-// format on the GPU.
-struct PackedAABB
-{
-    uint32_t packed_low;
-    uint32_t packed_high;
-
-    static_assert(group_size <= 255,
-                  "group too big for 8-bit unsigned coordinates.");
-
-    PackedAABB() = default;
-
-    PackedAABB(glm::ivec3 aabb_low, glm::ivec3 aabb_high)
-    {
-        auto x = aabb_low.x;
-        auto y = aabb_low.y;
-        auto z = aabb_low.z;
-        packed_low = uint32_t(x) << x_shift
-                   | uint32_t(y) << y_shift
-                   | uint32_t(z) << z_shift;
-        x = aabb_high.x;
-        y = aabb_high.y;
-        z = aabb_high.z;
-        packed_high = uint32_t(x) << x_shift
-                    | uint32_t(y) << y_shift
-                    | uint32_t(z) << z_shift;
-    }
-
-    uint8_t low_x() const
-    {
-        return uint8_t((packed_low >> x_shift) & 255);
-    }
-    uint8_t low_y() const
-    {
-        return uint8_t((packed_low >> y_shift) & 255);
-    }
-    uint8_t low_z() const
-    {
-        return uint8_t((packed_low >> z_shift) & 255);
-    }
-    uint8_t high_x() const
-    {
-        return uint8_t((packed_high >> x_shift) & 255);
-    }
-    uint8_t high_y() const
-    {
-        return uint8_t((packed_high >> y_shift) & 255);
-    }
-    uint8_t high_z() const
-    {
-        return uint8_t((packed_high >> z_shift) & 255);
     }
 };
 
@@ -746,9 +818,10 @@ class Renderer
 {
     Camera& camera;
     VoxelWorld& world;
+    WorldHandle world_handle;
   public:
     Renderer(VoxelWorld& world_, Camera& camera_) :
-        camera(camera_), world(world_) { }
+        camera(camera_), world(world_), world_handle(world_.handle) { }
 
     // Culling strategy: There are two phases to culling chunks: group
     // culling and distance culling. In group culling, entire groups of
@@ -763,8 +836,6 @@ class Renderer
     // nearest point in the group.
     bool cull_group(PositionedChunkGroup& pcg, float* squared_dist=nullptr)
     {
-        if (group(pcg).total_visible == 0) return true;
-
         glm::mat4 vp = camera.get_residue_vp();
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
@@ -851,11 +922,11 @@ class Renderer
     // floor(eye) -- this prevents subtle disagreements due to
     // different FP representations.
     int decide_chunk(glm::ivec3 group_coord,
-                     Chunk& chunk)
+                     PackedAABB aabb)
     {
-        if (chunk.total_visible == 0) return cull;
-        glm::ivec3 aabb_low, aabb_high;
-        chunk.get_aabb(&aabb_low, &aabb_high);
+        glm::ivec3 aabb_low(aabb.low_x(), aabb.low_y(), aabb.low_z());
+        glm::ivec3 aabb_high(aabb.high_x(), aabb.high_y(), aabb.high_z());
+
         glm::ivec3 eye_group;
         glm::vec3 eye_residue;
         camera.get_eye(&eye_group, &eye_residue);
@@ -881,9 +952,11 @@ class Renderer
     // is in) because the mesh is defined to be in residue
     // coordinates.
     static void fill_mesh_verts(ChunkMesh& mesh,
-                                const Chunk& chunk,
+                                const BinChunk& chunk,
                                 glm::ivec3 chunk_residue)
     {
+        mesh.aabb = PackedAABB(chunk, chunk_residue);
+
         // Look up whether the voxel at the given coordinate
         // (relative to the lower-left of this chunk) is visible.
         // Act as if voxels outside the chunk are always invisible.
@@ -896,7 +969,7 @@ class Renderer
             // this coord. (I'm kind of violating my own comment in
             // Chunk::operator() because coord won't actually be in
             // the chunk unless that chunk is at (0,0,0)).
-            return chunk(coord).visible;
+            return chunk(coord) & visible_bit;
         };
 
         auto visit_voxel = [&mesh, &chunk, visible_block, chunk_residue]
@@ -992,17 +1065,19 @@ class Renderer
         auto vbo_name = entry->vbo_name;
         assert(vbo_name != 0);
 
-        // Recompute and reupload the mesh for any dirty chunk, and
-        // reset the chunk dirty flag.
+        bool dirty = AlwaysDirty ||
+            pcg.ptr->dirty_flags & renderer_mesh_dirty_flag;
+
+        if (!dirty) return true;
+        if (read_only) return false;
+
+        // Recompute and reupload the mesh for every chunk and reset
+        // the dirty flag BEFORE reading (handles data races better).
+        pcg.ptr->dirty_flags &= ~renderer_mesh_dirty_flag;
         for (int z = 0; z < edge_chunks; ++z) {
             for (int y = 0; y < edge_chunks; ++y) {
                 for (int x = 0; x < edge_chunks; ++x) {
-                    Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                    if (!AlwaysDirty and !chunk.mesh_dirty) continue;
-                    if (chunk.total_visible == 0) continue;
-
-                    if (read_only) return false;
-
+                    const BinChunk& chunk = pcg.ptr->chunk_array[z][y][x];
                     ChunkMesh& mesh = entry->mesh_array[z][y][x];
                     glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
                     fill_mesh_verts(mesh, chunk, residue);
@@ -1010,10 +1085,10 @@ class Renderer
                                          entry->byte_offset(x, y, z),
                                          sizeof mesh.verts[0] * mesh.vert_count,
                                          mesh.verts);
-                    chunk.mesh_dirty = false;
                 }
             }
         }
+
         PANIC_IF_GL_ERROR;
         return true;
     }
@@ -1084,7 +1159,6 @@ class Renderer
 
         auto draw_group = [&] (PositionedChunkGroup& pcg)
         {
-            if (group(pcg).total_visible == 0) return;
             MeshEntry* entry = store.request<Renderer>(pcg, world, &request);
 
             assert(entry->vbo_name != 0);
@@ -1130,8 +1204,8 @@ class Renderer
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
-                        Chunk& chunk = group(pcg).chunk_array[z][y][x];
-                        if (decide_chunk(gc, chunk) != draw_mesh) continue;
+                        PackedAABB aabb = entry->mesh_array[z][y][x].aabb;
+                        if (decide_chunk(gc, aabb) != draw_mesh) continue;
 
                         const ChunkMesh& mesh = entry->mesh_array[z][y][x];
                         if (mesh.vert_count == 0) continue;
@@ -1160,8 +1234,19 @@ class Renderer
         float squared_thresh = camera.get_raycast_threshold();
         squared_thresh *= squared_thresh;
 
-        // TODO: Avoid visiting too-far-away chunk groups.
-        for (PositionedChunkGroup& pcg : world.group_map) {
+        PositionedChunkGroup pcg;
+        glm::ivec3 group_coord_low, group_coord_high;
+        glm::dvec3 disp(camera.get_far_plane());
+        split_coordinate(camera.get_eye() - disp, &group_coord_low);
+        split_coordinate(camera.get_eye() + disp, &group_coord_high);
+
+        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
+        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
+        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
+            pcg.group_coord = glm::ivec3(xH, yH, zH);
+            pcg.ptr = world_handle.view_chunk_group(pcg.group_coord);
+            if (pcg.ptr == nullptr) continue;
+
             float min_squared_dist;
             bool cull = cull_group(pcg, &min_squared_dist);
             // Skip culled chunk groups or those so far away that they
@@ -1169,6 +1254,8 @@ class Renderer
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
             draw_group(pcg);
+        }
+        }
         }
 
         glBindVertexArray(0);
@@ -1321,8 +1408,9 @@ class Renderer
         sb.group_coord = group_coord(pcg);
         sb.make_ready();
 
-        // Fill in the texels and AABBs.
-        ChunkGroup& cg = group(pcg);
+        // Fill in the texels and AABBs. Clear the dirty flag before
+        // reading the actual data to handle data races better.
+        pcg.ptr->dirty_flags &= ~renderer_raycast_dirty_flag;
         assert(sb.mapped_ssbo != nullptr);
         auto& big_ol_array = sb.mapped_ssbo->voxel_colors;
         StagingBuffer::AABBs a;
@@ -1330,24 +1418,22 @@ class Renderer
         for (int zH = 0; zH < edge_chunks; ++zH) {
         for (int yH = 0; yH < edge_chunks; ++yH) {
         for (int xH = 0; xH < edge_chunks; ++xH) {
-            Chunk& chunk = group(pcg).chunk_array[zH][yH][xH];
-            glm::ivec3 low, high;
-            chunk.get_aabb(&low, &high);
-            chunk.texture_dirty = false;
-            a.aabb_array[zH][yH][xH] = PackedAABB(low, high);
+            const BinChunk& chunk = pcg.ptr->chunk_array[zH][yH][xH];
+            glm::ivec3 chunk_residue(
+                xH * chunk_size, yH * chunk_size, zH * chunk_size);
+            a.aabb_array[zH][yH][xH] = PackedAABB(chunk, chunk_residue);
 
             for (int zL = 0; zL < chunk_size; ++zL) {
             for (int yL = 0; yL < chunk_size; ++yL) {
             for (int xL = 0; xL < chunk_size; ++xL) {
                 big_ol_array[zH][yH][xH][zL][yL][xL] =
-                    to_packed_color(chunk.voxel_array[zL][yL][xL]);
+                    chunk.voxel_array[zL][yL][xL];
             }
             }
             }
         }
         }
         }
-        cg.dirty = false;
 
         assert(sb.vbo_name != 0);
         glNamedBufferSubData(
@@ -1371,9 +1457,10 @@ class Renderer
 
             if (world_id != world.id()) continue;
 
-            auto pcg_it = world.group_map.find(group_coord);
-            if (pcg_it == world.group_map.end()) continue;
-            PositionedChunkGroup& pcg = *pcg_it;
+            PositionedChunkGroup pcg;
+            pcg.group_coord = group_coord;
+            pcg.ptr = world_handle.view_chunk_group(group_coord);
+            if (pcg.ptr == nullptr) continue;
 
             bool success = try_upload_to_staging(pcg);
             if (!success) break;
@@ -1480,20 +1567,37 @@ class Renderer
         // the early depth test optimization.
         float squared_thresh = camera.get_far_plane();
         squared_thresh *= squared_thresh;
-        std::vector<std::pair<float, PositionedChunkGroup*>> pcg_by_depth;
+        std::vector<std::pair<float, PositionedChunkGroup>> pcg_by_depth;
 
-        // TODO: Avoid visiting far away chunk groups.
         unsigned drawn_group_count = 0;
-        for (PositionedChunkGroup& pcg : world.group_map) {
+        PositionedChunkGroup pcg;
+        glm::ivec3 group_coord_low, group_coord_high;
+        glm::dvec3 disp(camera.get_far_plane());
+        split_coordinate(camera.get_eye() - disp, &group_coord_low);
+        split_coordinate(camera.get_eye() + disp, &group_coord_high);
+
+        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
+        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
+        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
+            pcg.group_coord = glm::ivec3(xH, yH, zH);
+            pcg.ptr = world_handle.view_chunk_group(pcg.group_coord);
+            if (pcg.ptr == nullptr) continue;
+
             float min_squared_dist;
             bool cull = cull_group(pcg, &min_squared_dist);
             if (cull or min_squared_dist >= squared_thresh) continue;
-            pcg_by_depth.emplace_back(min_squared_dist, &pcg);
+            pcg_by_depth.emplace_back(min_squared_dist, std::move(pcg));
             ++drawn_group_count;
+        }
+        }
         }
 
         if (!disable_zcull_sort) {
-            std::sort(pcg_by_depth.begin(), pcg_by_depth.end());
+            auto lt_depth = [] (const auto& left, const auto& right)
+            {
+                return left.first < right.first;
+            };
+            std::sort(pcg_by_depth.begin(), pcg_by_depth.end(), lt_depth);
         }
         std::vector<RaycastEntry*> draw_in_first_pass;
         std::vector<RaycastEntry*> draw_in_second_pass;
@@ -1508,13 +1612,13 @@ class Renderer
             // Steps 1 and 2: prepare to add dirty chunk groups to staging.
             StoreRequest request;
             request.may_fail = remaining_new_chunk_groups_allowed <= 0;
-            PositionedChunkGroup& pcg = *pair.second;
+            PositionedChunkGroup& pcg = pair.second;
             RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
 
             if (entry == nullptr) continue;
 
-            ChunkGroup& cg = group(pcg);
-            if (cg.dirty or !request.was_in_store) {
+            bool dirty = pcg.ptr->dirty_flags & renderer_raycast_dirty_flag;
+            if (dirty or !request.was_in_store) {
                 bool success = try_upload_to_staging(pcg); // (2)
                 if (!success) {
                     // (1)
@@ -1528,7 +1632,7 @@ class Renderer
         for (auto& pair : pcg_by_depth) {
             StoreRequest request;
             request.may_fail = true;
-            PositionedChunkGroup& pcg = *pair.second;
+            PositionedChunkGroup& pcg = pair.second;
             RaycastEntry* entry = store.request<Renderer>(pcg, world, &request);
 
             if (entry == nullptr) continue;

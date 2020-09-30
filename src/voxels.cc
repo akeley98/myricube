@@ -38,7 +38,9 @@ template <typename T> T* map_file(const filename_string& filename, int flags)
     return map_file<T>(filename, &flags);
 }
 
-constexpr int readonly_flag = 1; // Added automatically if const ptr requested.
+// Forget about readonly_flag for now because of mutable atomic counter.
+// constexpr int readonly_flag = 1; // Added automatically if const ptr requested.
+
 constexpr int create_flag = 2;   // If set, create file if needed.
 constexpr int file_created_flag = 4; // Set by the map_file function iff
                                      // the file needed to be created.
@@ -47,7 +49,7 @@ void* map_file_impl(const filename_string&, size_t sz, int* flags);
 
 template <typename T> T* map_file(const filename_string& filename, int* flags)
 {
-    if (std::is_const_v<T>) *flags |= readonly_flag;
+    // if (std::is_const_v<T>) *flags |= readonly_flag;
     auto ptr = static_cast<T*>(map_file_impl(filename, sizeof(T), flags));
     if (*flags & file_created_flag) {
         new((void*)ptr) T;
@@ -141,17 +143,19 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
     auto result =
         UPtrMutChunkGroup(map_file<BinChunkGroup>(filename, create_flag));
+    assert(result != nullptr);
     if (result->magic_number != result->expected_magic) {
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
     return result;
 }
 
-UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord)
+UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
 {
     auto filename = filename_concat_c_str(
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
     auto result = UPtrChunkGroup(map_file<const BinChunkGroup>(filename, 0));
+    if (result == nullptr) return nullptr;
     if (result->magic_number != result->expected_magic) {
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
@@ -178,7 +182,8 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
     };
 
     // Try to open the file if it exists.
-    int open_flags = *flags & readonly_flag ? O_RDONLY : O_RDWR;
+    // int open_flags = *flags & readonly_flag ? O_RDONLY : O_RDWR;
+    int open_flags = O_RDWR;
     int fd = open(filename.c_str(), open_flags);
 
     // Cheap RAII for fd.
@@ -199,6 +204,7 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
         doing = "Creating";
         fd = open(filename.c_str(), O_RDWR | O_CREAT, 0777);
         *flags |= file_created_flag;
+        code = fd < 0 ? -1 : 0;
         check_code();
 
         doing = "Resizing created";
@@ -230,8 +236,8 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
     }
 
     // Finally can access the mapping.
-    auto prot = PROT_READ;
-    if (!(*flags & readonly_flag)) prot |= PROT_WRITE;
+    auto prot = PROT_READ | PROT_WRITE;
+    // if (!(*flags & readonly_flag)) prot |= PROT_WRITE;
     void* mapping = mmap(nullptr, sz, prot, MAP_SHARED, fd, 0);
 
     if (mapping == nullptr) {

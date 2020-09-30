@@ -75,7 +75,6 @@
 #include "app.hh"
 #include "camera.hh"
 #include "chunk.hh"
-#include "hexload.hh"
 #include "renderer.hh"
 #include "window.hh"
 #include "voxels.hh"
@@ -617,11 +616,6 @@ int Main(std::vector<std::string> args)
     app->add_key_targets(window);
     float dt = 0;
     VoxelWorld* world = &app->update(dt);
-
-    // WorldHandle wh("foo/world.myricube");
-    // WorldHandle b = wh;
-    // wh.inc_nz_atomic();
-    // wh.mut_chunk_group(glm::ivec3(1, 0, -1));
 
     // Render loop.
     gl_first_time_setup();

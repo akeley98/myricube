@@ -26,13 +26,72 @@ const char world_filename[] = "world.myricube";
 
 constexpr uint64_t chunk_group_base_magic_number = 587569177;
 
+constexpr uint64_t renderer_mesh_dirty_flag = uint64_t(1) << 63;
+constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
+
+// Voxels are really represented as 32-bit packed ints now. This is
+// needed for compatibility.
+struct Voxel
+{
+    bool visible = false;
+    uint8_t red = 0, green = 0, blue = 0;
+    operator bool() const { return visible; }
+    operator uint32_t() const
+    {
+        return uint32_t(blue) << blue_shift
+             | uint32_t(green) << green_shift
+             | uint32_t(red) << red_shift
+             | (visible ? visible_bit : 0);
+    }
+
+    Voxel() = default;
+    Voxel(const Voxel&) = default;
+    Voxel& operator= (const Voxel&) = default;
+
+    Voxel(uint8_t red_, uint8_t green_, uint8_t blue_)
+    {
+        visible = true;
+        red = red_;
+        green = green_;
+        blue = blue_;
+    }
+
+    Voxel(uint32_t packed)
+    {
+        visible = (packed & visible_bit) != 0;
+        red   = (packed >> red_shift)   & 255u;
+        green = (packed >> green_shift) & 255u;
+        blue  = (packed >> blue_shift)  & 255u;
+    }
+};
+
 // Chunk of voxels as it appears in binary on-disk.
 template <size_t ChunkSize>
 struct BinChunkT
 {
     // Voxels (packed 32-bit color) in this chunk, in [z][y][x] order.
     uint32_t voxel_array[ChunkSize][ChunkSize][ChunkSize] = { };
+
+    // Given the world or residue or in-chunk coordinate of a voxel
+    // within this chunk (masking makes all those coordinates the
+    // same), return said voxel.
+    uint32_t operator() (glm::ivec3 coord) const
+    {
+        return voxel_array[coord.z & (ChunkSize-1)]
+                          [coord.y & (ChunkSize-1)]
+                          [coord.x & (ChunkSize-1)];
+    }
+
+    // Set the voxel with the given world/residue/chunk coordinate.
+    void set(glm::ivec3 coord, uint32_t voxel)
+    {
+        voxel_array[coord.z & (ChunkSize-1)]
+                   [coord.y & (ChunkSize-1)]
+                   [coord.x & (ChunkSize-1)] = voxel;
+    }
 };
+
+using BinChunk = BinChunkT<chunk_size>;
 
 // Chunk group as it appears in binary on-disk.
 template <size_t EdgeChunks, size_t ChunkSize>
@@ -46,13 +105,39 @@ struct BinChunkGroupT
     const uint64_t magic_number = expected_magic;
     uint64_t reserved[510] = { 0 };
 
-    // Set to UINT64_MAX _after_ making modifications.
-    // You can also set it periodically while doing modifications
-    // to speed-up the renderer's view of it.
-    std::atomic<uint64_t> dirty_flags = { 0 };
+    // Set to ~uint64_t(0) _after_ making modifications.  You can also
+    // set it periodically while doing modifications to speed-up the
+    // renderer's view of it.
+    mutable std::atomic<uint64_t> dirty_flags = { 0 };
 
     // Chunks within this chunk group, in [z][y][x] order.
     BinChunkT<ChunkSize> chunk_array[EdgeChunks][EdgeChunks][EdgeChunks];
+
+    // Given the world or residue coordinate of a voxel in this chunk
+    // group (again masking equalizes all those systems), return said
+    // voxels' value.
+    uint32_t operator() (glm::ivec3 coord) const
+    {
+        auto group_mask = EdgeChunks * ChunkSize - 1;
+        auto residue_x = coord.x & group_mask;
+        auto residue_y = coord.y & group_mask;
+        auto residue_z = coord.z & group_mask;
+        return chunk_array[residue_z / ChunkSize]
+                          [residue_y / ChunkSize]
+                          [residue_x / ChunkSize] (coord);
+    }
+
+    // Like above but set the voxel's value.
+    void set(glm::ivec3 coord, uint32_t voxel)
+    {
+        auto group_mask = EdgeChunks * ChunkSize - 1;
+        auto residue_x = coord.x & group_mask;
+        auto residue_y = coord.y & group_mask;
+        auto residue_z = coord.z & group_mask;
+        return chunk_array[residue_z / ChunkSize]
+                          [residue_y / ChunkSize]
+                          [residue_x / ChunkSize].set(coord, voxel);
+    }
 };
 
 using BinChunkGroup = BinChunkGroupT<edge_chunks, chunk_size>;
@@ -149,7 +234,7 @@ class WorldHandle
     // Return a pointer for viewing the chunk group with the given
     // group coordinate. Returns nullptr if there is no such chunk
     // group.
-    UPtrChunkGroup view_chunk_group(glm::ivec3);
+    UPtrChunkGroup view_chunk_group(glm::ivec3) const;
 
     // Each world has its own 64-bit monotonic-increasing atomic
     // counter.  (Assuming no-one goes behind our back and modifies it
@@ -165,14 +250,14 @@ class WorldHandle
     }
 
     // Return the result of the "previous" call to inc_nz_atomic.
-    uint64_t get_last_nz_atomic()
+    uint64_t get_last_nz_atomic() const
     {
         assert(bin_world != nullptr);
         return bin_world->atomic_counter.load();
     }
 
     // Return the result of the "next" call to inc_nz_atomic.
-    uint64_t get_next_nz_atomic()
+    uint64_t get_next_nz_atomic() const
     {
         assert(bin_world != nullptr);
         return 1u + bin_world->atomic_counter.load();
