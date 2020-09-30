@@ -17,12 +17,12 @@
 #include <stdexcept>
 #include <stdio.h>
 #include <string>
+#include <string.h>
 
 namespace myricube {
 
 // File name of the BinWorld file, and filename format for chunk group files.
 const char world_filename[] = "world.myricube";
-const char chunk_group_filename_format[] = "%08X-%08X-%08X";
 
 // Windows uses UTF-16, sigh. (wstring is 16-bit on windows). TODO test.
 #if defined(__WIN32__) || defined(__WIN32) || defined(WIN32)
@@ -37,20 +37,20 @@ using filename_string = std::string;
 
 using filename_char = filename_string::value_type;
 
-
 // Dumb function for appending an ascii C string to a filename.
 // Needed to deal with platform differences.
-void filename_append_c_str(filename_string& filename, const char* c_str)
+filename_string filename_concat_c_str(
+    filename_string filename, const char* c_str)
 {
     auto len = strlen(c_str);
     filename.reserve(filename.size() + len + 1);
-    using CharT = filename_string::value_type;
 
     for (size_t i = 0; i < len; ++i) {
         char c = c_str[i];
-        assert(0 < c and c < 128); // Must be ASCII.
+        assert(0 < c and c <= 127); // Must be ASCII.
         filename.push_back(static_cast<filename_char>(c));
     }
+    return filename;
 }
 
 constexpr uint64_t chunk_group_base_magic_number = 587569177;
@@ -60,7 +60,7 @@ template <size_t ChunkSize>
 struct BinChunkT
 {
     // Voxels (packed 32-bit color) in this chunk, in [z][y][x] order.
-    uint32_t voxel_array[ChunkSize][ChunkSize][ChunkSize] = { 0 };
+    uint32_t voxel_array[ChunkSize][ChunkSize][ChunkSize] = { };
 };
 
 // Chunk group as it appears in binary on-disk.
@@ -175,18 +175,8 @@ class WorldHandle
 
     // Return a pointer for viewing the chunk group with the given
     // group coordinate. Returns nullptr if there is no such chunk
-    // group. The two versions return either a shared mapping (others'
-    // modifications are visible) or a private mapping (cannot view
-    // others' modifications) respectively.
-    UPtrChunkGroup view_chunk_group(glm::ivec3 group_coord)
-    {
-        return view_chunk_group_maybe_shared(group_coord, true);
-    }
-    UPtrChunkGroup private_chunk_group(glm::ivec3)
-    {
-        return view_chunk_group_maybe_shared(group_coord, false);
-    }
-    UPtrChunkGroup view_chunk_group_maybe_shared(glm::ivec3, bool shared);
+    // group.
+    UPtrChunkGroup view_chunk_group(glm::ivec3);
 
     // Each world has its own 64-bit monotonic-increasing atomic
     // counter.  (Assuming no-one goes behind our back and modifies it
@@ -205,14 +195,14 @@ class WorldHandle
     uint64_t get_last_nz_atomic()
     {
         assert(bin_world != nullptr);
-        return bin_world->atomic_counter_.load();
+        return bin_world->atomic_counter.load();
     }
 
     // Return the result of the "next" call to inc_nz_atomic.
     uint64_t get_next_nz_atomic()
     {
         assert(bin_world != nullptr);
-        return 1u + bin_world->atomic_counter_.load();
+        return 1u + bin_world->atomic_counter.load();
     }
 };
 
