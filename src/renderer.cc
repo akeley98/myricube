@@ -846,7 +846,10 @@ class Renderer
     MeshStore mesh_store;
     RaycastStore raycast_store;
 
-    std::atomic<bool> thread_exit_flag;
+    // Used for communicating with the render thread.
+    std::atomic<bool> thread_exit_flag { false };
+    std::atomic<double> fps { 0 };
+    std::atomic<double> frame_time { 0 };
 
     // Declare thread LAST so that thread starts with Renderer fully initialized.
     std::thread thread;
@@ -860,7 +863,6 @@ class Renderer
         sync_camera_ptr(std::move(sync_camera_)),
         world_handle(world_),
         world_cache(world_),
-        thread_exit_flag(false),
         thread(render_loop, this) { }
 
     ~Renderer()
@@ -870,6 +872,9 @@ class Renderer
     }
 
     Renderer(Renderer&&) = delete;
+
+    friend double get_fps(const Renderer& renderer);
+    friend double get_frame_time(const Renderer& renderer);
 
   private:
     // Sets the current_chunk_group ptr to point to the named chunk group.
@@ -1919,7 +1924,7 @@ class Renderer
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         if (tr.target_fragments > 0) {
-            fprintf(stderr, "TODO thread safety.");
+            fprintf(stderr, "TODO thread safety.\n");
             bind_global_f32_depth_framebuffer(x, y, tr.target_fragments);
         }
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
@@ -1943,8 +1948,43 @@ class Renderer
         glCullFace(GL_BACK);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
 
+        // In principle we just have to draw frames in a loop now, but
+        // this function is bigger than you expect since I want to
+        // compute FPS.
+
+        // Seconds (since glfw initialization?) of previous drawn frame.
+        double previous_update = glfwGetTime();
+
+        double previous_fps_update = glfwGetTime();
+        int frames = 0;
+        double frame_time = 0;
+
         while (!renderer->thread_exit_flag.load()) {
+            // First, actually draw the frame.
             renderer->draw_frame();
+
+            // Calculate (approximate) frame time. Require at least 2
+            // ms between frames (workaround to system freeze bug).
+            double now;
+            double dt;
+            do {
+                now = glfwGetTime();
+                dt = now - previous_update;
+            } while (dt < 0.002);
+            previous_update = now;
+
+            // Update FPS and frame time. Periodically report the
+            // frame time back to the Renderer.
+            ++frames;
+            frame_time = std::max(frame_time, dt);
+            if (now - previous_fps_update >= 0.5) {
+                renderer->fps.store(frames / (now - previous_fps_update));
+                renderer->frame_time.store(frame_time);
+
+                previous_fps_update = now;
+                frames = 0;
+                frame_time = 0;
+            }
         }
     }
 };
@@ -1960,6 +2000,16 @@ Renderer* new_renderer(
 void delete_renderer(Renderer* renderer)
 {
     delete renderer;
+}
+
+double get_fps(const Renderer& renderer)
+{
+    return renderer.fps.load();
+}
+
+double get_frame_time(const Renderer& renderer)
+{
+    return renderer.frame_time.load();
 }
 
 static GLuint f32_depth_framebuffer = 0;

@@ -93,15 +93,6 @@ class Window
     // rendering out to another thread.
     double previous_update = glfwGetTime();
 
-    // Used for fps calculation.
-    double previous_fps_update = glfwGetTime();
-    int frames = 0;
-    double fps = 0.0;
-
-    // Used to calculate maximum latency between frames.
-    double frame_time = 0;
-    double next_frame_time = 0;
-
     // Current cursor position; negative if not yet set.
     double cursor_x = -1;
     double cursor_y = -1;
@@ -151,15 +142,6 @@ class Window
     // Swap front/back OpenGL buffers for this window.
     void swap_buffers();
 
-    double get_fps() const
-    {
-        return fps;
-    }
-
-    int get_frame_time_ms() const
-    {
-        return int(frame_time * 1000);
-    }
   private:
     void handle_down(int, float);
     void handle_up(int);

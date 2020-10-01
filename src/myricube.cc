@@ -540,11 +540,11 @@ void bind_keys(Window& window)
     }
 }
 
-void set_window_title(Window& window)
+void set_window_title(Window& window, const Renderer& renderer)
 {
     const char format[] = "Myricube %07.2f FPS %03dms frame time";
     char title[sizeof format + 20];
-    sprintf(title, format, window.get_fps(), window.get_frame_time_ms());
+    sprintf(title, format, get_fps(renderer), get_frame_time_ms(renderer));
     window.set_title(title);
 }
 
@@ -606,7 +606,7 @@ int Main(std::vector<std::string> args)
 
         extern bool evict_stats_debug;
         evict_stats_debug = false;
-        set_window_title(window);
+        set_window_title(window, *renderer);
     }
 
     // Stop renderer thread.

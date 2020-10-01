@@ -32,6 +32,16 @@ struct RendererDeleter
 };
 using UPtrRenderer = std::unique_ptr<Renderer, RendererDeleter>;
 
+// Get (approximate) FPS and frame time reported by the Renderer.
+double get_fps(const Renderer&);
+double get_frame_time(const Renderer&);
+
+// Get said frame time in integer milliseconds.
+inline int get_frame_time_ms(const Renderer& renderer)
+{
+    return int(get_frame_time(renderer) * 1000);
+}
+
 // Experimental: Trying out 32-bit float depth buffer. This requires
 // (in practice) rendering to an offscreen framebuffer.
 

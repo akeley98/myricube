@@ -7,8 +7,6 @@
 
 #include "glad/glad.h"
 
-static constexpr double fps_report_interval = 0.5;
-
 namespace myricube {
 
 // For now I'm just indicating mouse buttons with negative numbers.
@@ -95,13 +93,13 @@ void Window::gl_make_current() const
 
 bool Window::update_events(float* out_dt)
 {
-    // Calculate dt. Require at least 1 ms between calls (workaround).
+    // Calculate dt. Require at least 2 ms between calls (workaround).
     double now;
     double dt;
     do {
         now = glfwGetTime();
         dt = now - previous_update;
-    } while (dt < 0.001);
+    } while (dt < 0.002);
 
     previous_update = now;
     if (out_dt) *out_dt = dt;
@@ -117,18 +115,6 @@ bool Window::update_events(float* out_dt)
         arg.mouse_rel_y = pair.second->mouse_rel_y;
         auto& cb = pair.second->per_frame;
         if (cb) cb(arg);
-    }
-
-    // Update FPS and frame time. NOTE: This is totally wrong now
-    // that rendering is in a separate thread.
-    ++frames;
-    next_frame_time = std::max(next_frame_time, dt);
-    if (now - previous_fps_update >= fps_report_interval) {
-        fps = frames / (now - previous_fps_update);
-        previous_fps_update = now;
-        frames = 0;
-        frame_time = next_frame_time;
-        next_frame_time = 0;
     }
     return true;
 }
