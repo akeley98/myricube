@@ -287,6 +287,7 @@ class Congestion : public App
     congestion_model<Size, Border> model;
     double previous_update = 0;
     double time_counter = 0;
+    double interval = 0.075;
 
   public:
     Congestion() : model(Load, world) {}
@@ -295,7 +296,6 @@ class Congestion : public App
     {
         time_counter += double(dt);
         const double slip = time_counter - previous_update;
-        constexpr double interval = 0.075;
         if (slip > interval * 1.5) {
             previous_update = time_counter;
         }
@@ -321,6 +321,20 @@ class Congestion : public App
             return true;
         };
         window.add_key_target("do_it", skip_100);
+
+        KeyTarget app_speed_up, app_slow_down;
+        app_speed_up.down = [this] (KeyArg)
+        {
+            interval /= 1.5;
+            return true;
+        };
+        app_slow_down.down = [this] (KeyArg)
+        {
+            interval *= 1.5;
+            return true;
+        };
+        window.add_key_target("app_speed_up", app_speed_up);
+        window.add_key_target("app_slow_down", app_slow_down);
     }
 };
 

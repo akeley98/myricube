@@ -42,6 +42,9 @@ f10             increase_far_plane      # Careful, can crash GPU if too high.
 f3              decrease_target_fragments
 f4              increase_target_fragments
 
+up              app_speed_up
+down            app_slow_down
+
 # Put my own keybinds in the git repo to make *my* life easier.
 # u               forward
 # space           backward
