@@ -1,14 +1,18 @@
 // Implementation of the hybrid voxel renderer. I don't see how I can
 // make much of this exception safe, so I wrap everything in a
 // noexcept at the end. As usual with OpenGL, none of this is
-// thread-safe either.
+// thread-safe either (but this could change later now that I'm
+// factoring everything into threads and may get rid of all the darn
+// static variables).
 
 #include "myricube.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <stdio.h>
 #include <typeinfo>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -17,6 +21,7 @@
 #include "glad/glad.h"
 #include "renderer.hh"
 #include "shaders.hh"
+#include "window.hh"
 
 namespace myricube {
 
@@ -824,10 +829,11 @@ class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
     std::vector<QueueEntry> queue;
 };
 
-// Renderer class. Instantiate it with the camera and world to render
-// and use it once.
+// Renderer class. Stores state that is used by a voxel rendering
+// thread running for the lifetime of the Renderer.
 class Renderer
 {
+    std::shared_ptr<Window> window_ptr;
     std::shared_ptr<SyncCamera> sync_camera_ptr;
     WorldHandle world_handle;
     ViewWorldCache world_cache;
@@ -840,21 +846,30 @@ class Renderer
     MeshStore mesh_store;
     RaycastStore raycast_store;
 
+    std::atomic<bool> thread_exit_flag;
+
+    // Declare thread LAST so that thread starts with Renderer fully initialized.
+    std::thread thread;
   public:
     Renderer(
+        std::shared_ptr<Window> window_,
         const WorldHandle& world_,
-        std::shared_ptr<SyncCamera> sync_camera_arg) :
+        std::shared_ptr<SyncCamera> sync_camera_) :
 
-        sync_camera_ptr(std::move(sync_camera_arg)),
+        window_ptr(std::move(window_)),
+        sync_camera_ptr(std::move(sync_camera_)),
         world_handle(world_),
-        world_cache(world_)
+        world_cache(world_),
+        thread_exit_flag(false),
+        thread(render_loop, this) { }
+
+    ~Renderer()
     {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_BACK);
-        glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
+        thread_exit_flag.store(true);
+        thread.join();
     }
+
+    Renderer(Renderer&&) = delete;
 
   private:
     // Sets the current_chunk_group ptr to point to the named chunk group.
@@ -871,7 +886,6 @@ class Renderer
         current_chunk_group = entry.chunk_group_ptr.get();
     }
 
-  public:
     // Culling strategy: There are two phases to culling chunks: group
     // culling and distance culling. In group culling, entire groups of
     // chunks are culled if they are outside the view frustum, or if they
@@ -1069,6 +1083,7 @@ class Renderer
         }
     }
 
+  public:
     // Fill the given MeshEntry with mesh data for the given chunk
     // group from the given world.
     void replace(glm::ivec3 group_coord, MeshEntry* entry)
@@ -1143,6 +1158,7 @@ class Renderer
         return true;
     }
 
+  private:
     // Render, to the current framebuffer, chunks near the camera
     // using the conventional mesh-based algorithm.
     //
@@ -1399,7 +1415,7 @@ class Renderer
     //
     //   Swap write_staging_buffers and read_staging_buffers. (4)
 
-
+  public:
     // Functions required by BaseStore. Since I'm revamping voxel upload
     // using the SSBO-approach above, I just provide dummy functions for
     // the BaseStore. So this design didn't age well...
@@ -1712,7 +1728,6 @@ class Renderer
         }
     }
 
-  private:
     // Draw the given list of RaycastEntry (they have the needed group
     // coord).  The should_have_memory_barrier_bit is for checking
     // purposes: it should be set to false before the memory barrier
@@ -1896,7 +1911,6 @@ class Renderer
         PANIC_IF_GL_ERROR;
     };
 
-  public:
     void draw_frame()
     {
         tr = CameraTransforms(*sync_camera_ptr);
@@ -1905,6 +1919,7 @@ class Renderer
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         if (tr.target_fragments > 0) {
+            fprintf(stderr, "TODO thread safety.");
             bind_global_f32_depth_framebuffer(x, y, tr.target_fragments);
         }
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
@@ -1914,44 +1929,37 @@ class Renderer
         if (tr.target_fragments > 0) {
             finish_global_f32_depth_framebuffer(x, y);
         }
+
+        window_ptr->swap_buffers();
+    }
+
+    static void render_loop(Renderer* renderer)
+    {
+        renderer->window_ptr->gl_make_current();
+
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
+
+        while (!renderer->thread_exit_flag.load()) {
+            renderer->draw_frame();
+        }
     }
 };
 
 Renderer* new_renderer(
-    const WorldHandle& world,
+    std::shared_ptr<Window> window,
+    WorldHandle world,
     std::shared_ptr<SyncCamera> camera)
 {
-    return new Renderer(world, std::move(camera));
+    return new Renderer(std::move(window), std::move(world), std::move(camera));
 }
 
 void delete_renderer(Renderer* renderer)
 {
     delete renderer;
-}
-
-void draw_frame(Renderer* renderer)
-{
-    renderer->draw_frame();
-}
-
-MeshStore* new_mesh_store()
-{
-    return new MeshStore;
-}
-
-void delete_mesh_store(MeshStore* mesh_store)
-{
-    delete mesh_store;
-}
-
-RaycastStore* new_raycast_store()
-{
-    return new RaycastStore;
-}
-
-void delete_raycast_store(RaycastStore* raycast_store)
-{
-    delete raycast_store;
 }
 
 static GLuint f32_depth_framebuffer = 0;

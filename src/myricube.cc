@@ -574,7 +574,8 @@ int Main(std::vector<std::string> args)
     {
         camera_ptr->set_framebuffer_size(x, y);
     };
-    Window window(on_window_resize);
+    std::shared_ptr<Window> window_ptr(new Window(on_window_resize));
+    Window& window = *window_ptr;
 
     // Set up keyboard controls.
     add_key_targets(window, camera_ptr);
@@ -595,18 +596,22 @@ int Main(std::vector<std::string> args)
     float dt = 0;
     VoxelWorld* world = &app->update(dt);
 
-    // Render loop.
-    Renderer* renderer = new_renderer(world->handle, camera_ptr);
+    // Start renderer thread.
+    UPtrRenderer renderer(
+        new_renderer(window_ptr, world->handle, camera_ptr));
 
-    while (window.update_swap_buffers(&dt)) {
+    // Meanwhile main thread handles user input and runs the demonstration app.
+    while (window.update_events(&dt)) {
         if (!paused) world = &app->update(dt);
 
-        draw_frame(renderer);
         extern bool evict_stats_debug;
         evict_stats_debug = false;
         set_window_title(window);
     }
-    delete_renderer(renderer);
+
+    // Stop renderer thread.
+    renderer.reset();
+
     return 0;
 }
 

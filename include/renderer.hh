@@ -1,5 +1,5 @@
-// Functions for drawing the voxel world. As typical for OpenGL, these
-// are NOT threadsafe, even for drawing different worlds in parallel.
+// Renderer class that spawns a secondary thread running OpenGL code
+// for drawing a voxel world.
 
 #ifndef MYRICUBE_RENDERER_HH_
 #define MYRICUBE_RENDERER_HH_
@@ -10,11 +10,27 @@ namespace myricube {
 
 class Renderer;
 class SyncCamera;
+class Window;
 
-// Not threadsafe for now; todo.
-Renderer* new_renderer(const WorldHandle&, std::shared_ptr<SyncCamera>);
+// TODO: Multiple Renderers won't work correctly due to global state.
+
+// Start up a thread drawing the given voxel world. The OpenGL context
+// of the given Window is used, and the camera can be controlled from
+// other threads through the shared SyncCamera.
+Renderer* new_renderer(
+    std::shared_ptr<Window>,
+    WorldHandle,
+    std::shared_ptr<SyncCamera>);
+
+// Stop the renderer thread, then clean up its resources.
 void delete_renderer(Renderer*);
-void draw_frame(Renderer*);
+
+// Get some RAII going for Renderer.
+struct RendererDeleter
+{
+    void operator() (Renderer* victim) { delete_renderer(victim); }
+};
+using UPtrRenderer = std::unique_ptr<Renderer, RendererDeleter>;
 
 // Experimental: Trying out 32-bit float depth buffer. This requires
 // (in practice) rendering to an offscreen framebuffer.

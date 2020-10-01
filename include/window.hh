@@ -89,7 +89,8 @@ class Window
     OnWindowResize on_window_resize;
 
     // Seconds (since glfw initialization?) of previous
-    // update_swap_buffers call.
+    // update_swap_buffers call. BOGUS for now as I factored
+    // rendering out to another thread.
     double previous_update = glfwGetTime();
 
     // Used for fps calculation.
@@ -125,7 +126,7 @@ class Window
     }
 
     // Make the OpenGL context of this window current.
-    void gl_make_current();
+    void gl_make_current() const;
 
     // Provide a name for the given key target. Physical keys can then
     // be bound to this name.
@@ -142,10 +143,13 @@ class Window
         keycode_map[keycode].emplace_back(std::move(target_name));
     }
 
-    // Update events and swap OpenGL buffers. Return true iff the user
-    // hasn't ordered the window closed yet. Optionally write out dt
-    // to the given pointer.
-    bool update_swap_buffers(float* out_dt=nullptr);
+    // Update events. Return true iff the user hasn't ordered the
+    // window closed yet. Optionally write out dt to the given
+    // pointer.
+    bool update_events(float* out_dt=nullptr);
+
+    // Swap front/back OpenGL buffers for this window.
+    void swap_buffers();
 
     double get_fps() const
     {

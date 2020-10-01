@@ -88,24 +88,25 @@ void Window::set_title(const char* title)
     glfwSetWindowTitle(window, title);
 }
 
-void Window::gl_make_current()
+void Window::gl_make_current() const
 {
     glfwMakeContextCurrent(window);
 }
 
-bool Window::update_swap_buffers(float* out_dt)
+bool Window::update_events(float* out_dt)
 {
+    // Calculate dt. Require at least 1 ms between calls (workaround).
+    double now;
+    double dt;
+    do {
+        now = glfwGetTime();
+        dt = now - previous_update;
+    } while (dt < 0.001);
 
-    // Calculate dt.
-    double now = glfwGetTime();
-    double dt = now - previous_update;
     previous_update = now;
     if (out_dt) *out_dt = dt;
 
     if (glfwWindowShouldClose(window)) return false;
-
-    // Swap buffers as promised.
-    glfwSwapBuffers(window);
 
     // Call per-frame callbacks of pressed keys.
     glfwPollEvents();
@@ -118,7 +119,8 @@ bool Window::update_swap_buffers(float* out_dt)
         if (cb) cb(arg);
     }
 
-    // Update FPS and frame time.
+    // Update FPS and frame time. NOTE: This is totally wrong now
+    // that rendering is in a separate thread.
     ++frames;
     next_frame_time = std::max(next_frame_time, dt);
     if (now - previous_fps_update >= fps_report_interval) {
@@ -129,6 +131,11 @@ bool Window::update_swap_buffers(float* out_dt)
         next_frame_time = 0;
     }
     return true;
+}
+
+void Window::swap_buffers()
+{
+    glfwSwapBuffers(window);
 }
 
 // Given that the key/mouse button with the specified key code has
