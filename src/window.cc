@@ -39,7 +39,7 @@ static inline Window& get_Window(GLFWwindow* window)
 
 Window::Window(OnWindowResize on_window_resize_)
 {
-    on_window_resize = on_window_resize_;
+    on_window_resize = std::move(on_window_resize_);
 
     // Should factor glfw initialization and hint setting out if I want
     // Window to be threadsafe (not sure if I really care for now...)
@@ -50,14 +50,14 @@ Window::Window(OnWindowResize on_window_resize_)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    window = glfwCreateWindow(window_x, window_y, "Myricube", nullptr, nullptr);
+    window = glfwCreateWindow(1920, 1080, "Myricube", nullptr, nullptr);
 
     if (window == nullptr) {
         panic("Could not initialize window");
     }
 
     glfwSetWindowUserPointer(window, this);
-    glfwSetWindowSizeCallback(window, window_size_callback);
+    glfwSetFramebufferSizeCallback(window, frame_size_callback);
     glfwSetKeyCallback(window, key_callback);
     glfwSetCharModsCallback(window, character_callback);
     glfwSetCursorPosCallback(window, cursor_position_callback);
@@ -68,7 +68,8 @@ Window::Window(OnWindowResize on_window_resize_)
     if (!gladLoadGL()) {
         panic("gladLoadGL failure");
     }
-    on_window_resize(window_x, window_y);
+    glfwGetFramebufferSize(window, &frame_x, &frame_y);
+    on_window_resize(frame_x, frame_y);
 }
 
 Window::~Window()
@@ -213,7 +214,7 @@ void Window::handle_up(int keycode)
     pressed_keys_map.erase(it);
 }
 
-void Window::window_size_callback(GLFWwindow* window, int x, int y)
+void Window::frame_size_callback(GLFWwindow* window, int x, int y)
 {
     Window& w = get_Window(window);
     if (w.on_window_resize) w.on_window_resize(x, y);
@@ -223,17 +224,17 @@ void Window::window_size_callback(GLFWwindow* window, int x, int y)
 }
 
 void Window::key_callback(
-    GLFWwindow* window, int key, int scancode, int action, int mods)
+    GLFWwindow* window, int key, int, int action, int)
 {
     Window& w = get_Window(window);
     action != GLFW_RELEASE ? w.handle_down(key, 1) : w.handle_up(key);
 }
 
 void Window::character_callback(
-    GLFWwindow* window, unsigned int codepoint, int mods)
+    GLFWwindow*, unsigned int, int)
 {
     // Might be useful later.
-    fprintf(stderr, "Codepoint input: %Xh   mods %i\n", codepoint, mods);
+    // fprintf(stderr, "Codepoint input: %Xh   mods %i\n", codepoint, mods);
 }
 
 void Window::cursor_position_callback(
@@ -256,7 +257,7 @@ void Window::cursor_position_callback(
 }
 
 void Window::mouse_button_callback(
-    GLFWwindow* window, int button, int action, int mods)
+    GLFWwindow* window, int button, int action, int)
 {
     Window& w = get_Window(window);
     int keycode = keycode_from_glfw_button(button);

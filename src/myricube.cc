@@ -569,13 +569,10 @@ int Main(std::vector<std::string> args)
     // Instantiate the shared camera (shared with Renderer).
     std::shared_ptr<SyncCamera> camera_ptr(new SyncCamera());
 
-    // Create a window; callback ensures these window dimensions stay accurate.
-    int screen_x = 0, screen_y = 0;
-    auto on_window_resize = [&camera_ptr, &screen_x, &screen_y] (int x, int y)
+    // Create a window; callback ensures the window dimensions stay accurate.
+    auto on_window_resize = [&camera_ptr] (int x, int y)
     {
-        camera_ptr->set_window_size(x, y);
-        screen_x = x;
-        screen_y = y;
+        camera_ptr->set_framebuffer_size(x, y);
     };
     Window window(on_window_resize);
 

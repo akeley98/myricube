@@ -51,7 +51,7 @@ struct CameraTransforms
     int max_frame_new_chunk_groups;
 
     int target_fragments;
-    int screen_x, screen_y;
+    int frame_x, frame_y;
 };
 
 // Your typical camera info (eye position, far plane, fov, etc.).
@@ -77,8 +77,8 @@ class SyncCamera
     // Field of view (y direction), radians.
     float fovy_radians = 1.0f;
 
-    // Window size in pixels.
-    int window_x = 1, window_y = 1;
+    // Size of the window's framebuffer.
+    int frame_x = 1, frame_y = 1;
 
     // Maximum number of new chunk groups added to GPU memory per frame.
     int max_frame_new_chunk_groups = 10;
@@ -211,18 +211,18 @@ class SyncCamera
         fovy_radians = in;
     }
 
-    void set_window_size(int x, int y)
+    void set_framebuffer_size(int x, int y)
     {
         std::lock_guard guard(camera_mutex);
-        window_x = x;
-        window_y = y;
+        frame_x = x;
+        frame_y = y;
     }
 
     void get_window_size(int* x=nullptr, int* y=nullptr)
     {
         std::lock_guard guard(camera_mutex);
-        if (x) *x = window_x;
-        if (y) *y = window_y;
+        if (x) *x = frame_x;
+        if (y) *y = frame_y;
     }
 
     bool get_fog() const
@@ -302,7 +302,7 @@ class SyncCamera
 
         t.projection_matrix = glm::perspective(
             float(fovy_radians),
-            float(window_x) / window_y,
+            float(frame_x) / frame_y,
             float(near_plane),
             float(far_plane));
 
@@ -314,8 +314,8 @@ class SyncCamera
         t.use_black_fog = black_fog;
         t.max_frame_new_chunk_groups = max_frame_new_chunk_groups;
         t.target_fragments = target_fragments;
-        t.screen_x = window_x;
-        t.screen_y = window_y;
+        t.frame_x = frame_x;
+        t.frame_y = frame_y;
 
         return t;
     }

@@ -1900,7 +1900,7 @@ class Renderer
     void draw_frame()
     {
         tr = CameraTransforms(*sync_camera_ptr);
-        int x = tr.screen_x, y = tr.screen_y;
+        int x = tr.frame_x, y = tr.frame_y;
 
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
@@ -1959,44 +1959,44 @@ static GLuint f32_depth_texture = 0;
 static GLuint f32_depth_renderbuffer = 0;
 static int f32_depth_framebuffer_x, f32_depth_framebuffer_y = 0;
 
-// Used to detect requested screen size changes.
-static int prev_screen_x = 0, prev_screen_y = 0, prev_target_fragments = 0;
+// Used to detect requested screen (framebuffer) size changes.
+static int prev_frame_x = 0, prev_frame_y = 0, prev_target_fragments = 0;
 
 // Ratio of screen size (length / width) to framebuffer size.
 static int framebuffer_divisor = 1;
 
 
 void bind_global_f32_depth_framebuffer(
-    int screen_x, int screen_y, int target_fragments)
+    int frame_x, int frame_y, int target_fragments)
 {
     int want_framebuffer_x = f32_depth_framebuffer_x;
     int want_framebuffer_y = f32_depth_framebuffer_y;
 
     if (target_fragments <= 0) {
-        want_framebuffer_x = screen_x;
-        want_framebuffer_y = screen_y;
+        want_framebuffer_x = frame_x;
+        want_framebuffer_y = frame_y;
         framebuffer_divisor = 1;
     }
 
     // Recalculate the actual framebuffer size if needed.
-    else if (screen_x != prev_screen_x
-         or screen_y != prev_screen_y
+    else if (frame_x != prev_frame_x
+         or frame_y != prev_frame_y
          or prev_target_fragments != target_fragments) {
 
         for (framebuffer_divisor = 1;
              framebuffer_divisor <= 16;
              ++framebuffer_divisor) {
 
-            want_framebuffer_x = screen_x / framebuffer_divisor;
-            want_framebuffer_y = screen_y / framebuffer_divisor;
+            want_framebuffer_x = frame_x / framebuffer_divisor;
+            want_framebuffer_y = frame_y / framebuffer_divisor;
             if (want_framebuffer_x * want_framebuffer_y <= target_fragments) {
                 break;
             }
         }
     }
 
-    prev_screen_x = screen_x;
-    prev_screen_y = screen_y;
+    prev_frame_x = frame_x;
+    prev_frame_y = frame_y;
     prev_target_fragments = target_fragments;
 
     // Destroy the framebuffer and its attachments if the screen size changed.
@@ -2072,7 +2072,7 @@ void bind_global_f32_depth_framebuffer(
     PANIC_IF_GL_ERROR;
 }
 
-void finish_global_f32_depth_framebuffer(int screen_x, int screen_y)
+void finish_global_f32_depth_framebuffer(int frame_x, int frame_y)
 {
     assert(f32_depth_framebuffer != 0);
     glBlitNamedFramebuffer(
@@ -2081,7 +2081,7 @@ void finish_global_f32_depth_framebuffer(int screen_x, int screen_y)
         0, 0,
         f32_depth_framebuffer_x, f32_depth_framebuffer_y,
         0, 0,
-        screen_x, screen_y,
+        frame_x, frame_y,
         GL_COLOR_BUFFER_BIT,
         GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

@@ -1,6 +1,6 @@
 // Window class. Creates OpenGL context and manages user input via callbacks.
 // Note: Although this is written as a class, I'm not confident this will
-// work if there are multiple windows. Still, I avoid global state by habit.
+// work if there are multiple windows (also glfw is not threadsafe, so...)
 
 #ifndef MYRICUBE_WINDOW_HH_
 #define MYRICUBE_WINDOW_HH_
@@ -69,8 +69,8 @@ class Window
     // GLFW window pointer and OpenGL context.
     GLFWwindow* window = nullptr;
 
-    // Current size in pixels of the window.
-    int window_x = 1920, window_y = 1080;
+    // Current size of the window framebuffer.
+    int frame_x = 1920, frame_y = 1080;
 
     // Mapping from names of key targets to the actual key target structures.
     std::unordered_map<std::string, KeyTarget> key_target_map;
@@ -117,11 +117,11 @@ class Window
     void set_title(const std::string& title);
     void set_title(const char* title);
 
-    // Get window size as pair of ints.
-    void get_window_size(int* x, int* y) const
+    // Get framebuffer size as pair of ints.
+    void get_framebuffer_size(int* x, int* y) const
     {
-        if (x) *x = window_x;
-        if (y) *y = window_y;
+        if (x) *x = frame_x;
+        if (y) *y = frame_y;
     }
 
     // Make the OpenGL context of this window current.
@@ -160,7 +160,7 @@ class Window
     void handle_down(int, float);
     void handle_up(int);
 
-    static void window_size_callback(GLFWwindow*, int, int);
+    static void frame_size_callback(GLFWwindow*, int, int);
     static void key_callback(
         GLFWwindow* window, int key, int scancode, int action, int mods);
     static void character_callback(
