@@ -1,7 +1,4 @@
-// Camera class. Mostly just some vectors and matrices and stuff;
-// however, I also associate the GPU resource management classes with
-// the camera. Since the set of GPU-loaded chunks depends on camera
-// position, this seems like a somewhat natural place to store it.
+// Camera class. Mostly just some vectors and matrices and stuff.
 
 #ifndef MYRICUBE_CAMERA_HH_
 #define MYRICUBE_CAMERA_HH_
@@ -10,55 +7,16 @@
 
 #include <assert.h>
 #include <math.h>
+#include <mutex>
 #include <stddef.h>
-
-#include "renderer.hh"
 
 namespace myricube {
 
-class Camera
+// Matrices, etc. derived from a camera.
+struct CameraTransforms
 {
-    // Mysterious GPU storage managers along for the ride.
-    RaycastStore* ptr_raycast_store = nullptr;
-    MeshStore* ptr_mesh_store = nullptr;
-
-    // Position of the eye.
-    glm::dvec3 eye = glm::dvec3(0.0, 0.0, 0.0);
-
-    // Near and far plane for z-depth.
-    // Far plane influences the chunk render distance.
-    float near_plane = 0.1f;
-    int far_plane = 512;
-
-    // (roughly) minimum distance from the camera that a chunk needs
-    // to be to switch from mesh to raycast graphics.
-    // Keep as int to avoid rounding errors in distance culling.
-    int raycast_threshold = 120;
-
-    // Horizontal and vertical angle camera is pointed in.
-    float theta = 1.5707f, phi = 1.5707f;
-
-    // Field of view (y direction), radians.
-    float fovy_radians = 1.0f;
-
-    // Window size in pixels.
-    int window_x = 1, window_y = 1;
-
-    // Maximum number of new chunk groups added to GPU memory per frame.
-    int max_frame_new_chunk_groups = 10;
-
-    // Fog setting.
-    bool fog_enabled = true;
-    bool black_fog = false;
-
-    // Maximum number of fragments for the screen (integer
-    // downsampling is done to meet this limit). Non-positive value
-    // indicates no limit.
-    int target_fragments = 0;
-
-    // *** True when members below need to be recomputed due to ***
-    // *** changes in members above.                            ***
-    bool dirty = true;
+    // Eye coordinates.
+    glm::dvec3 eye;
 
     // Group and residue coordinates of the eye.
     glm::ivec3 eye_group;
@@ -81,13 +39,67 @@ class Camera
     // Projection * View matrix
     glm::mat4 residue_vp_matrix;
 
-  public:
-    // Respond if needed to dirty flag and recompute derived data.
-    void fix_dirty()
-    {
-        if (!dirty) return;
-        split_coordinate(eye, &eye_group, &eye_residue);
+    // Near and far plane used to make the projection matrix.
+    float near_plane;
+    int far_plane;
 
+    // Fog flags
+    bool use_fog;
+    bool use_black_fog;
+
+    // Maximum number of new chunk groups added to GPU memory per frame.
+    int max_frame_new_chunk_groups;
+
+    int target_fragments;
+    int screen_x, screen_y;
+};
+
+// Your typical camera info (eye position, far plane, fov, etc.).
+//
+// Used to communicate between render and control threads, so every
+// member function is mutex protected.
+class SyncCamera
+{
+    // Mutex, to be locked when reading/writing from this Camera.
+    mutable std::mutex camera_mutex;
+
+    // Position of the eye.
+    glm::dvec3 eye = glm::dvec3(0.0, 0.0, 0.0);
+
+    // Near and far plane for z-depth.
+    // Far plane influences the chunk render distance.
+    float near_plane = 0.1f;
+    int far_plane = 512;
+
+    // Horizontal and vertical angle camera is pointed in.
+    float theta = 1.5707f, phi = 1.5707f;
+
+    // Field of view (y direction), radians.
+    float fovy_radians = 1.0f;
+
+    // Window size in pixels.
+    int window_x = 1, window_y = 1;
+
+    // Maximum number of new chunk groups added to GPU memory per frame.
+    int max_frame_new_chunk_groups = 10;
+
+    // Fog setting.
+    bool fog_enabled = true;
+    bool black_fog = false;
+
+    // Maximum number of fragments for the screen (integer
+    // downsampling is done to meet this limit). Non-positive value
+    // indicates no limit.
+    int target_fragments = 0;
+
+    // Frenet frame of the camera. This is updated every time the
+    // camera angle changes (I don't try to be clever).
+    glm::vec3 forward_normal_vector;
+    glm::vec3 right_vector;
+    glm::vec3 up_vector;
+
+    void update_frenet_frame()
+    {
         forward_normal_vector = glm::vec3(
             sinf(phi) * cosf(theta),
             cosf(phi),
@@ -96,99 +108,49 @@ class Camera
         right_vector = glm::normalize(
             glm::cross(forward_normal_vector, glm::vec3(0, 1, 0)));
         up_vector = glm::cross(right_vector, forward_normal_vector);
-
-        residue_view_matrix = glm::lookAt(eye_residue,
-                                          eye_residue + forward_normal_vector,
-                                          glm::vec3(0, 1, 0));
-
-        projection_matrix = glm::perspective(
-            float(fovy_radians),
-            float(window_x) / window_y,
-            float(near_plane),
-            float(far_plane));
-
-        residue_vp_matrix = projection_matrix * residue_view_matrix;
-
-        dirty = false;
     }
 
-    Camera() = default;
-
-    ~Camera()
+  public:
+    SyncCamera()
     {
-        unload_gpu_storage();
-    }
-
-    Camera(Camera&&) = delete;
-
-    // GPU Storage functions.
-    RaycastStore& get_raycast_store()
-    {
-        if (ptr_raycast_store == nullptr) {
-            ptr_raycast_store = new_raycast_store();
-        }
-        return *ptr_raycast_store;
-    }
-
-    MeshStore& get_mesh_store()
-    {
-        if (ptr_mesh_store == nullptr) {
-            ptr_mesh_store = new_mesh_store();
-        }
-        return *ptr_mesh_store;
-    }
-
-    void unload_gpu_storage()
-    {
-        delete_raycast_store(ptr_raycast_store);
-        ptr_raycast_store = nullptr;
-        delete_mesh_store(ptr_mesh_store);
-        ptr_mesh_store = nullptr;
+        update_frenet_frame();
     }
 
     // Getters and setters for user-specified camera data.
     glm::dvec3 get_eye() const
     {
+        std::lock_guard guard(camera_mutex);
         return eye;
     }
 
     float get_near_plane() const
     {
+        std::lock_guard guard(camera_mutex);
         return near_plane;
     }
 
     void set_near_plane(float in)
     {
+        std::lock_guard guard(camera_mutex);
         near_plane = in;
-        dirty = true;
     }
 
     int get_far_plane() const
     {
+        std::lock_guard guard(camera_mutex);
         return far_plane;
     }
 
     void set_far_plane(int in)
     {
+        std::lock_guard guard(camera_mutex);
         far_plane = in;
-        dirty = true;
-    }
-
-    int get_raycast_threshold() const
-    {
-        return raycast_threshold;
-    }
-
-    void set_raycast_threshold(int in)
-    {
-        raycast_threshold = in;
-        dirty = true;
     }
 
     void set_eye(glm::dvec3 in)
     {
+        std::lock_guard guard(camera_mutex);
         assert(is_real(in));
-        dirty = true;
         eye = in;
     }
 
@@ -199,14 +161,16 @@ class Camera
 
     float get_theta() const
     {
+        std::lock_guard guard(camera_mutex);
         return theta;
     }
 
     void set_theta(float in)
     {
+        std::lock_guard guard(camera_mutex);
         assert(is_real(in));
-        dirty = true;
         theta = in;
+        update_frenet_frame();
     }
 
     void inc_theta(float dtheta)
@@ -216,14 +180,16 @@ class Camera
 
     float get_phi() const
     {
+        std::lock_guard guard(camera_mutex);
         return phi;
     }
 
     void set_phi(float in)
     {
+        std::lock_guard guard(camera_mutex);
         assert(is_real(in));
-        dirty = true;
         phi = glm::clamp(in, 0.01f, 3.14f);
+        update_frenet_frame();
     }
 
     void inc_phi(float dphi)
@@ -233,67 +199,77 @@ class Camera
 
     float get_fovy_radians() const
     {
+        std::lock_guard guard(camera_mutex);
         return fovy_radians;
     }
 
     void set_fovy_radians(float in)
     {
+        std::lock_guard guard(camera_mutex);
         assert(is_real(in));
         assert(in > 0);
-        dirty = true;
         fovy_radians = in;
     }
 
     void set_window_size(int x, int y)
     {
-        dirty = true;
+        std::lock_guard guard(camera_mutex);
         window_x = x;
         window_y = y;
     }
 
     void get_window_size(int* x=nullptr, int* y=nullptr)
     {
+        std::lock_guard guard(camera_mutex);
         if (x) *x = window_x;
         if (y) *y = window_y;
     }
 
     bool get_fog() const
     {
+        std::lock_guard guard(camera_mutex);
         return fog_enabled;
     }
 
     void set_fog(bool in)
     {
+        std::lock_guard guard(camera_mutex);
         fog_enabled = in;
     }
 
     bool use_black_fog() const
     {
+        std::lock_guard guard(camera_mutex);
         return black_fog;
     }
 
     bool use_black_fog(bool in)
     {
+        std::lock_guard guard(camera_mutex);
         return black_fog = in;
     }
 
     int get_max_frame_new_chunk_groups() const
     {
+        std::lock_guard guard(camera_mutex);
         return max_frame_new_chunk_groups;
     }
 
     void set_max_frame_new_chunk_groups(int in)
     {
+        std::lock_guard guard(camera_mutex);
         max_frame_new_chunk_groups = in;
     }
 
     int get_target_fragments() const
     {
+        std::lock_guard guard(camera_mutex);
         return target_fragments;
     }
 
     void set_target_fragments(int in)
     {
+        std::lock_guard guard(camera_mutex);
         target_fragments = in;
     }
 
@@ -301,55 +277,47 @@ class Camera
     // forward vectors respectively.
     void frenet_move(float right, float up, float forward)
     {
-        fix_dirty();
-        inc_eye(glm::dvec3(
-            right * right_vector
-          + up * up_vector
-          + forward * forward_normal_vector));
+        std::lock_guard guard(camera_mutex);
+        eye += glm::dvec3(
+                    right * right_vector
+                  + up * up_vector
+                  + forward * forward_normal_vector);
     }
 
-    // Getters for derived linear algebra data.
-    void get_eye(glm::ivec3* out_group, glm::vec3* out_residue = nullptr)
+    // Convert camera data to actual camera transforms needed.
+    explicit operator CameraTransforms() const
     {
-        fix_dirty();
-        if (out_group) *out_group = eye_group;
-        if (out_residue) *out_residue = eye_residue;
-    }
+        std::lock_guard guard(camera_mutex);
+        CameraTransforms t;
 
-    glm::vec3 get_forward_normal()
-    {
-        fix_dirty();
-        return forward_normal_vector;
-    }
+        t.eye = eye;
+        split_coordinate(eye, &t.eye_group, &t.eye_residue);
+        t.forward_normal_vector = forward_normal_vector;
+        t.right_vector = right_vector;
+        t.up_vector = up_vector;
 
-    glm::vec3 get_right_normal()
-    {
-        fix_dirty();
-        return right_vector;
-    }
+        t.residue_view_matrix = glm::lookAt(t.eye_residue,
+                                            t.eye_residue + forward_normal_vector,
+                                            glm::vec3(0, 1, 0));
 
-    glm::vec3 get_up_normal()
-    {
-        fix_dirty();
-        return up_vector;
-    }
+        t.projection_matrix = glm::perspective(
+            float(fovy_radians),
+            float(window_x) / window_y,
+            float(near_plane),
+            float(far_plane));
 
-    glm::mat4 get_residue_view()
-    {
-        fix_dirty();
-        return residue_view_matrix;
-    }
+        t.residue_vp_matrix = t.projection_matrix * t.residue_view_matrix;
 
-    glm::mat4 get_projection()
-    {
-        fix_dirty();
-        return projection_matrix;
-    }
+        t.near_plane = near_plane;
+        t.far_plane = far_plane;
+        t.use_fog = fog_enabled;
+        t.use_black_fog = black_fog;
+        t.max_frame_new_chunk_groups = max_frame_new_chunk_groups;
+        t.target_fragments = target_fragments;
+        t.screen_x = window_x;
+        t.screen_y = window_y;
 
-    glm::mat4 get_residue_vp()
-    {
-        fix_dirty();
-        return residue_vp_matrix;
+        return t;
     }
 };
 

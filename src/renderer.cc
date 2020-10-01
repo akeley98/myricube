@@ -33,6 +33,11 @@ bool chunk_debug = false;
 bool evict_stats_debug = false;
 bool disable_zcull_sort = false;
 
+// (roughly) minimum distance from the camera that a chunk needs
+// to be to switch from mesh to raycast graphics.
+// Keep as int to avoid rounding errors in distance culling.
+constexpr int raycast_threshold = 120;
+
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
 {
@@ -823,14 +828,24 @@ class RaycastStore : public BaseStore<RaycastEntry, 4, 12>
 // and use it once.
 class Renderer
 {
-    Camera& camera;
+    std::shared_ptr<SyncCamera> sync_camera_ptr;
     WorldHandle world_handle;
     ViewWorldCache world_cache;
     const BinChunkGroup* current_chunk_group = nullptr;
 
+    // Updated from SyncCamera per frame.
+    CameraTransforms tr;
+
+    // Device storage for mesh and raycast rendering respectively.
+    MeshStore mesh_store;
+    RaycastStore raycast_store;
+
   public:
-    Renderer(const WorldHandle& world_, Camera* camera_) :
-        camera(*camera_),
+    Renderer(
+        const WorldHandle& world_,
+        std::shared_ptr<SyncCamera> sync_camera_arg) :
+
+        sync_camera_ptr(std::move(sync_camera_arg)),
         world_handle(world_),
         world_cache(world_)
     {
@@ -870,10 +885,9 @@ class Renderer
     // nearest point in the group.
     bool cull_group(glm::ivec3 group_coord, float* squared_dist=nullptr)
     {
-        glm::mat4 vp = camera.get_residue_vp();
-        glm::ivec3 eye_group;
-        glm::vec3 eye_residue;
-        camera.get_eye(&eye_group, &eye_residue);
+        glm::mat4 vp = tr.residue_vp_matrix;
+        glm::ivec3 eye_group = tr.eye_group;
+        glm::vec3 eye_residue = tr.eye_residue;
 
         // Never cull the group the eye is in (this avoids
         // pathological cases e.g. 7 corners behind eye and 1 in front
@@ -961,11 +975,10 @@ class Renderer
         glm::ivec3 aabb_low(aabb.low_x(), aabb.low_y(), aabb.low_z());
         glm::ivec3 aabb_high(aabb.high_x(), aabb.high_y(), aabb.high_z());
 
-        glm::ivec3 eye_group;
-        glm::vec3 eye_residue;
-        camera.get_eye(&eye_group, &eye_residue);
-        auto far_plane = camera.get_far_plane();
-        auto raycast_thresh = camera.get_raycast_threshold();
+        glm::ivec3 eye_group = tr.eye_group;
+        glm::vec3 eye_residue = tr.eye_residue;
+        auto far_plane = tr.far_plane;
+        auto raycast_thresh = raycast_threshold;
 
         // Compute the displacement between the eye and the nearest point
         // of the chunk's AABB (to the eye).
@@ -1140,13 +1153,12 @@ class Renderer
     // hide the hidden faces.
     void render_world_mesh_step() noexcept
     {
-        MeshStore& store = camera.get_mesh_store();
+        MeshStore& store = mesh_store;
         store.stats_begin_frame();
 
-        glm::mat4 residue_vp_matrix = camera.get_residue_vp();
-        glm::vec3 eye_residue;
-        glm::ivec3 eye_group;
-        camera.get_eye(&eye_group, &eye_residue);
+        glm::mat4 residue_vp_matrix = tr.residue_vp_matrix;
+        glm::vec3 eye_residue = tr.eye_residue;
+        glm::ivec3 eye_group = tr.eye_group;
 
         static GLuint vao = 0;
         static GLuint program_id;
@@ -1185,10 +1197,10 @@ class Renderer
         glBindVertexArray(vao);
 
         glUseProgram(program_id);
-        auto far_plane = camera.get_far_plane();
+        auto far_plane = tr.far_plane;
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
-        glUniform1i(fog_enabled_id, camera.get_fog());
-        glUniform1i(black_fog_id, camera.use_black_fog());
+        glUniform1i(fog_enabled_id, tr.use_fog);
+        glUniform1i(black_fog_id, tr.use_black_fog);
         PANIC_IF_GL_ERROR;
         StoreRequest request;
         unsigned drawn_group_count = 0;
@@ -1269,13 +1281,12 @@ class Renderer
             PANIC_IF_GL_ERROR;
         };
 
-        float squared_thresh = camera.get_raycast_threshold();
-        squared_thresh *= squared_thresh;
+        float squared_thresh = raycast_threshold * raycast_threshold;
 
         glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(camera.get_far_plane());
-        split_coordinate(camera.get_eye() - disp, &group_coord_low);
-        split_coordinate(camera.get_eye() + disp, &group_coord_high);
+        glm::dvec3 disp(tr.far_plane);
+        split_coordinate(tr.eye - disp, &group_coord_low);
+        split_coordinate(tr.eye + disp, &group_coord_high);
 
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
@@ -1410,7 +1421,7 @@ class Renderer
     // Mark all write staging buffers as unused.
     void mark_write_staging_buffers_unused()
     {
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
         for (StagingBuffer& sb : store.write_staging_buffers) {
             sb.world_id = 0;
         }
@@ -1424,7 +1435,7 @@ class Renderer
     // successfully.
     bool try_upload_to_staging(glm::ivec3 group_coord)
     {
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
         StagingBuffer* p_sb = nullptr;
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) {
@@ -1486,7 +1497,7 @@ class Renderer
     // uploading to the write staging buffers.
     void queue_to_staging_buffers()
     {
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
 
         auto it = store.queue.begin();
 
@@ -1509,7 +1520,7 @@ class Renderer
     // needing a memory barrier.
     void swap_read_staging_buffers_into_RaycastStore()
     {
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
         for (StagingBuffer& sb : store.read_staging_buffers) {
             if (sb.world_id == 0) continue;
 
@@ -1551,7 +1562,7 @@ class Renderer
         PANIC_IF_GL_ERROR;
         // glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
 
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) continue;
             auto sz = group_size * group_size * group_size * sizeof(uint32_t);
@@ -1580,11 +1591,11 @@ class Renderer
     // not be re-drawn.
     void render_world_raycast_step() noexcept
     {
-        RaycastStore& store = camera.get_raycast_store();
+        RaycastStore& store = raycast_store;
         store.stats_begin_frame();
 
         // Resize the cache to a size suitable for the given render distance.
-        auto far_plane = camera.get_far_plane();
+        auto far_plane = tr.far_plane;
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
         store.set_modulus(modulus);
         store.resize_victim_cache(0);
@@ -1592,20 +1603,20 @@ class Renderer
         // Count and limit the number of new chunk groups added to the
         // RaycastStore this frame.
         int remaining_new_chunk_groups_allowed =
-            camera.get_max_frame_new_chunk_groups();
+            tr.max_frame_new_chunk_groups;
 
         // Collect all chunk groups needing to be raycast, and sort from
         // nearest to furthest (reverse painters). This fascilitates
         // the early depth test optimization.
-        float squared_thresh = camera.get_far_plane();
+        float squared_thresh = tr.far_plane;
         squared_thresh *= squared_thresh;
         std::vector<std::pair<float, glm::ivec3>> group_coord_by_depth;
 
         unsigned drawn_group_count = 0;
         glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(camera.get_far_plane());
-        split_coordinate(camera.get_eye() - disp, &group_coord_low);
-        split_coordinate(camera.get_eye() + disp, &group_coord_high);
+        glm::dvec3 disp(tr.far_plane);
+        split_coordinate(tr.eye - disp, &group_coord_low);
+        split_coordinate(tr.eye + disp, &group_coord_high);
 
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
@@ -1713,11 +1724,10 @@ class Renderer
         const std::vector<RaycastEntry*>& entries,
         bool should_have_memory_barrier_bit)
     {
-        glm::mat4 residue_vp_matrix = camera.get_residue_vp();
-        glm::vec3 eye_residue;
-        glm::ivec3 eye_group;
-        camera.get_eye(&eye_group, &eye_residue);
-        auto far_plane = camera.get_far_plane();
+        glm::mat4 residue_vp_matrix = tr.residue_vp_matrix;
+        glm::vec3 eye_residue = tr.eye_residue;
+        glm::ivec3 eye_group = tr.eye_group;
+        auto far_plane = tr.far_plane;
 
         static GLuint vao = 0;
         static GLuint program_id;
@@ -1769,10 +1779,10 @@ class Renderer
 
         // Set uniforms unchanged per-chunk-group.
         glUniform1i(chunk_debug_id, chunk_debug);
-        glUniform1i(fog_enabled_id, camera.get_fog());
-        glUniform1i(black_fog_id, camera.use_black_fog());
+        glUniform1i(fog_enabled_id, tr.use_fog);
+        glUniform1i(black_fog_id, tr.use_black_fog);
         glUniform1i(far_plane_squared_id, far_plane * far_plane);
-        auto raycast_thr = camera.get_raycast_threshold();
+        auto raycast_thr = raycast_threshold;
         glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
 
         // I'll use texture 0 for the chunk group texture.
@@ -1873,15 +1883,14 @@ class Renderer
             PANIC_IF_GL_ERROR;
         }
 
-        glm::vec3 eye_residue;
-        camera.get_eye(nullptr, &eye_residue);
-        glm::mat4 inverse_vp = glm::inverse(camera.get_residue_vp());
+        glm::vec3 eye_residue = tr.eye_residue;
+        glm::mat4 inverse_vp = glm::inverse(tr.residue_vp_matrix);
 
         glBindVertexArray(vao);
         glUseProgram(program_id);
         glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
         glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
-        glUniform1i(black_fog_id, camera.use_black_fog());
+        glUniform1i(black_fog_id, tr.use_black_fog);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
         PANIC_IF_GL_ERROR;
@@ -1890,27 +1899,29 @@ class Renderer
   public:
     void draw_frame()
     {
-        int x, y;
-        camera.get_window_size(&x, &y);
+        tr = CameraTransforms(*sync_camera_ptr);
+        int x = tr.screen_x, y = tr.screen_y;
+
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-        auto target_fragments = camera.get_target_fragments();
-        if (target_fragments > 0) {
-            bind_global_f32_depth_framebuffer(x, y, target_fragments);
+        if (tr.target_fragments > 0) {
+            bind_global_f32_depth_framebuffer(x, y, tr.target_fragments);
         }
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         render_world_mesh_step();
         render_world_raycast_step();
         render_background();
-        if (target_fragments > 0) {
+        if (tr.target_fragments > 0) {
             finish_global_f32_depth_framebuffer(x, y);
         }
     }
 };
 
-Renderer* new_renderer(const WorldHandle& world, Camera* camera)
+Renderer* new_renderer(
+    const WorldHandle& world,
+    std::shared_ptr<SyncCamera> camera)
 {
-    return new Renderer(world, camera);
+    return new Renderer(world, std::move(camera));
 }
 
 void delete_renderer(Renderer* renderer)

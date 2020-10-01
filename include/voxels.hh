@@ -7,7 +7,7 @@
 // representation stored on disk in a file of the directory labeled
 // with the group coordinate.
 //
-// Additionally, each chunk group is the "infinite" world (whether it
+// Additionally, each chunk group in the "infinite" world (whether it
 // actually exists or not) is assigned a bit in a group bitfield that
 // tells whether the chunk group actually exists on disk or not --
 // this is to save time on repeatedly looking up files for chunk

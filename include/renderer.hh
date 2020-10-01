@@ -6,22 +6,15 @@
 
 namespace myricube {
 
-class Renderer;
+#include <memory>
 
-class RaycastStore;
-class MeshStore;
-class Camera;
-class WorldHandle;
+class Renderer;
+class SyncCamera;
 
 // Not threadsafe for now; todo.
-Renderer* new_renderer(const WorldHandle&, Camera*);
+Renderer* new_renderer(const WorldHandle&, std::shared_ptr<SyncCamera>);
 void delete_renderer(Renderer*);
 void draw_frame(Renderer*);
-
-RaycastStore* new_raycast_store();
-MeshStore* new_mesh_store();
-void delete_raycast_store(RaycastStore*);
-void delete_mesh_store(MeshStore*);
 
 // Experimental: Trying out 32-bit float depth buffer. This requires
 // (in practice) rendering to an offscreen framebuffer.

@@ -103,8 +103,9 @@ bool ends_with_bin_or_exe(const std::string& in)
 
 bool paused = false;
 
-void add_key_targets(Window& window, Camera& camera)
+void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
 {
+    static std::shared_ptr<SyncCamera> camera = std::move(camera_arg);
     static float speed = 8.0f;
     static float sprint_mod = 1.0f;
 
@@ -119,12 +120,12 @@ void add_key_targets(Window& window, Camera& camera)
     static uint8_t old_idx = 0;
     static uint8_t future_idx = 0;
 
-    static auto get_camera_position = [&camera] () -> Position
+    static auto get_camera_position = [&] () -> Position
     {
         Position p;
-        p.eye = camera.get_eye();
-        p.theta = camera.get_theta();
-        p.phi = camera.get_phi();
+        p.eye = camera->get_eye();
+        p.theta = camera->get_theta();
+        p.phi = camera->get_phi();
         return p;
     };
 
@@ -146,9 +147,9 @@ void add_key_targets(Window& window, Camera& camera)
         future_positions_ring_buffer[--future_idx] =
             get_camera_position();
         Position p = old_positions_ring_buffer[old_idx++];
-        camera.set_eye(p.eye);
-        camera.set_theta(p.theta);
-        camera.set_phi(p.phi);
+        camera->set_eye(p.eye);
+        camera->set_theta(p.theta);
+        camera->set_phi(p.phi);
         return true;
     };
     pop_future_camera.down = [&] (KeyArg) -> bool
@@ -156,9 +157,9 @@ void add_key_targets(Window& window, Camera& camera)
         old_positions_ring_buffer[--old_idx] =
             get_camera_position();
         Position p = future_positions_ring_buffer[future_idx++];
-        camera.set_eye(p.eye);
-        camera.set_theta(p.theta);
-        camera.set_phi(p.phi);
+        camera->set_eye(p.eye);
+        camera->set_theta(p.theta);
+        camera->set_phi(p.phi);
         return true;
     };
     window.add_key_target("pop_old_camera", pop_old_camera);
@@ -168,37 +169,37 @@ void add_key_targets(Window& window, Camera& camera)
     forward.down = push_camera_position_callback;
     forward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(0, 0, +arg.dt * speed * sprint_mod);
+        camera->frenet_move(0, 0, +arg.dt * speed * sprint_mod);
         return true;
     };
     backward.down = push_camera_position_callback;
     backward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(0, 0, -arg.dt * speed * sprint_mod);
+        camera->frenet_move(0, 0, -arg.dt * speed * sprint_mod);
         return true;
     };
     leftward.down = push_camera_position_callback;
     leftward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(-arg.dt * speed * sprint_mod, 0, 0);
+        camera->frenet_move(-arg.dt * speed * sprint_mod, 0, 0);
         return true;
     };
     rightward.down = push_camera_position_callback;
     rightward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(+arg.dt * speed * sprint_mod, 0, 0);
+        camera->frenet_move(+arg.dt * speed * sprint_mod, 0, 0);
         return true;
     };
     upward.down = push_camera_position_callback;
     upward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(0, +arg.dt * speed * sprint_mod, 0);
+        camera->frenet_move(0, +arg.dt * speed * sprint_mod, 0);
         return true;
     };
     downward.down = push_camera_position_callback;
     downward.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.frenet_move(0, -arg.dt * speed * sprint_mod, 0);
+        camera->frenet_move(0, -arg.dt * speed * sprint_mod, 0);
         return true;
     };
     window.add_key_target("forward", forward);
@@ -237,18 +238,18 @@ void add_key_targets(Window& window, Camera& camera)
     look_around.down = push_camera_position_callback;
     look_around.per_frame = [&] (KeyArg arg) -> bool
     {
-        camera.inc_theta(arg.mouse_rel_x * arg.dt * 0.01f);
-        camera.inc_phi(arg.mouse_rel_y * arg.dt * 0.01f);
+        camera->inc_theta(arg.mouse_rel_x * arg.dt * 0.01f);
+        camera->inc_phi(arg.mouse_rel_y * arg.dt * 0.01f);
         return true;
     };
     vertical_scroll.down = [&] (KeyArg arg) -> bool
     {
-        camera.inc_phi(arg.amount * -0.05f);
+        camera->inc_phi(arg.amount * -0.05f);
         return true;
     };
     horizontal_scroll.down = [&] (KeyArg arg) -> bool
     {
-        camera.inc_theta(arg.amount * -0.05f);
+        camera->inc_theta(arg.amount * -0.05f);
         return true;
     };
     window.add_key_target("look_around", look_around);
@@ -264,17 +265,17 @@ void add_key_targets(Window& window, Camera& camera)
     window.add_key_target("pause", pause);
 
     KeyTarget toggle_fog;
-    toggle_fog.down = [&camera] (KeyArg) -> bool
+    toggle_fog.down = [&] (KeyArg) -> bool
     {
-        camera.set_fog(!camera.get_fog());
+        camera->set_fog(!camera->get_fog());
         return true;
     };
     window.add_key_target("toggle_fog", toggle_fog);
 
     KeyTarget toggle_black_fog;
-    toggle_black_fog.down = [&camera] (KeyArg) -> bool
+    toggle_black_fog.down = [&] (KeyArg) -> bool
     {
-        camera.use_black_fog(!camera.use_black_fog());
+        camera->use_black_fog(!camera->use_black_fog());
         return true;
     };
     window.add_key_target("toggle_black_fog", toggle_black_fog);
@@ -308,34 +309,13 @@ void add_key_targets(Window& window, Camera& camera)
     };
     window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
 
-    // Enable/disable mesh renderer by toggling raycast threshold from 0.
-    static int old_raycast_threshold = 0;
-    KeyTarget toggle_mesh_renderer;
-    toggle_mesh_renderer.down = [&] (KeyArg) -> bool
-    {
-        int tmp = camera.get_raycast_threshold();
-        camera.set_raycast_threshold(old_raycast_threshold);
-        old_raycast_threshold = tmp;
-        return true;
-    };
-    window.add_key_target("toggle_mesh_renderer", toggle_mesh_renderer);
-
-    KeyTarget unload;
-    unload.down = [&] (KeyArg) -> bool
-    {
-        camera.unload_gpu_storage();
-        evict_stats_debug = true;
-        return true;
-    };
-    window.add_key_target("unload_gpu_storage", unload);
-
     KeyTarget increase_far_plane, decrease_far_plane;
     increase_far_plane.down = [&] (KeyArg arg) -> bool
     {
-        auto new_far_plane = 64 + camera.get_far_plane();
+        auto new_far_plane = 64 + camera->get_far_plane();
 
         if (!arg.repeat) {
-            camera.set_far_plane(new_far_plane);
+            camera->set_far_plane(new_far_plane);
             fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
         }
         return !arg.repeat;
@@ -344,11 +324,11 @@ void add_key_targets(Window& window, Camera& camera)
 
     decrease_far_plane.down = [&] (KeyArg arg) -> bool
     {
-        auto new_far_plane = -64 + camera.get_far_plane();
+        auto new_far_plane = -64 + camera->get_far_plane();
         if (new_far_plane < 64) new_far_plane = 64;
 
         if (!arg.repeat) {
-            camera.set_far_plane(new_far_plane);
+            camera->set_far_plane(new_far_plane);
             fprintf(stderr, "Far plane: %i\n", int(new_far_plane));
         }
         return !arg.repeat;
@@ -360,25 +340,25 @@ void add_key_targets(Window& window, Camera& camera)
 
     increase_target_fragments.down = [&] (KeyArg) -> bool
     {
-        if (camera.get_target_fragments() <= 0) {
-            camera.set_target_fragments(min_nonzero_fragments);
+        if (camera->get_target_fragments() <= 0) {
+            camera->set_target_fragments(min_nonzero_fragments);
         }
-        else camera.set_target_fragments(camera.get_target_fragments() * 2);
+        else camera->set_target_fragments(camera->get_target_fragments() * 2);
 
-        fprintf(stderr, "%i target fragments.\n", camera.get_target_fragments());
+        fprintf(stderr, "%i target fragments.\n", camera->get_target_fragments());
         return true;
     };
     window.add_key_target(
         "increase_target_fragments", increase_target_fragments);
     decrease_target_fragments.down = [&] (KeyArg) -> bool
     {
-        if (camera.get_target_fragments() <= min_nonzero_fragments) {
-            camera.set_target_fragments(0);
+        if (camera->get_target_fragments() <= min_nonzero_fragments) {
+            camera->set_target_fragments(0);
             fprintf(stderr, "Unlimited fragments.\n");
         }
         else {
-            camera.set_target_fragments(camera.get_target_fragments() / 2);
-            fprintf(stderr, "%i target fragments.\n", camera.get_target_fragments());
+            camera->set_target_fragments(camera->get_target_fragments() / 2);
+            fprintf(stderr, "%i target fragments.\n", camera->get_target_fragments());
         }
         return true;
     };
@@ -586,21 +566,21 @@ int Main(std::vector<std::string> args)
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
 
-    // Instantiate the camera.
-    Camera camera;
+    // Instantiate the shared camera (shared with Renderer).
+    std::shared_ptr<SyncCamera> camera_ptr(new SyncCamera());
 
     // Create a window; callback ensures these window dimensions stay accurate.
     int screen_x = 0, screen_y = 0;
-    auto on_window_resize = [&camera, &screen_x, &screen_y] (int x, int y)
+    auto on_window_resize = [&camera_ptr, &screen_x, &screen_y] (int x, int y)
     {
-        camera.set_window_size(x, y);
+        camera_ptr->set_window_size(x, y);
         screen_x = x;
         screen_y = y;
     };
     Window window(on_window_resize);
 
     // Set up keyboard controls.
-    add_key_targets(window, camera);
+    add_key_targets(window, camera_ptr);
     bind_keys(window);
 
     // Instantiate the app (which owns the VoxelWorld to render) based
@@ -619,11 +599,10 @@ int Main(std::vector<std::string> args)
     VoxelWorld* world = &app->update(dt);
 
     // Render loop.
-    Renderer* renderer = new_renderer(world->handle, &camera);
+    Renderer* renderer = new_renderer(world->handle, camera_ptr);
 
     while (window.update_swap_buffers(&dt)) {
         if (!paused) world = &app->update(dt);
-        camera.fix_dirty();
 
         draw_frame(renderer);
         extern bool evict_stats_debug;
