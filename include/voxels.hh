@@ -462,7 +462,7 @@ class WorldCache
     };
     Entry cache[modulus][modulus][modulus];
 
-    WorldCache(WorldHandle world_) : world(std::move(world_)) { }
+    explicit WorldCache(WorldHandle world_) : world(std::move(world_)) { }
     ~WorldCache() = default;
     WorldCache(const WorldCache&) = delete;
 
@@ -566,8 +566,11 @@ class VoxelWorld
         filename_concat_c_str(in_memory_prefix, world_filename);
 
   public:
-    VoxelWorld(filename_string filename=in_memory_world_filename) :
-        world_cache(WorldHandle(std::move(filename))) { }
+    explicit VoxelWorld(WorldHandle handle) :
+        world_cache(handle) { }
+
+    explicit VoxelWorld(filename_string filename=in_memory_world_filename) :
+        VoxelWorld(WorldHandle(std::move(filename))) { }
 
     // Return voxel at the given coordinate.
     uint32_t operator() (glm::ivec3 c) const

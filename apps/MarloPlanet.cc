@@ -2,11 +2,15 @@
 #include "FastNoise.h"
 #include <string>
 #include <fstream>
+#include <thread>
 
 using namespace myricube;
 
-void marlo(int radius, VoxelWorld& world)
+// Mystery code translated from Marlon's Python code.
+static void marlo(int radius, WorldHandle world_handle)
 {
+    VoxelWorld world(world_handle);
+
     constexpr double box = 14.0;
     auto relu = [] (double n) -> double
     {
@@ -59,9 +63,9 @@ void marlo(int radius, VoxelWorld& world)
         return Voxel(255, 255, 255);
     };
 
-    for (int i = -radius; i <= +radius; ++i) {
+    for (int k = +radius; k >= -radius; --k) {
         for (int j = -radius; j <= +radius; ++j) {
-            for (int k = -radius; k <= +radius; ++k) {
+            for (int i = -radius; i <= +radius; ++i) {
                 auto pos = glm::dvec3(i, j, k) * double(box / radius);
                 auto norm = l2norm(pos);
                 auto shell1 = relu(-std::abs(norm - 8) + 0.5);
@@ -103,11 +107,12 @@ namespace myricube {
 class MarloPlanet : public App
 {
     VoxelWorld world;
+    std::thread my_thread;
 
   public:
-    MarloPlanet()
+    MarloPlanet() : my_thread(marlo, 300, world.get_handle())
     {
-        marlo(300, world);
+        my_thread.detach();
     }
 
     VoxelWorld& update(float) override
