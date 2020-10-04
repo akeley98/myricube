@@ -593,8 +593,9 @@ int Main(std::vector<std::string> args)
     }
     app->add_key_targets(window);
     float dt = 0;
-    // TODO get rid of this XXX (misleading VoxelWorld meaning changed)
     VoxelWorld* world = &app->update(dt);
+    WorldHandle handle = world->get_handle();
+    filename_string expected_world_dir = handle.get_directory_name();
 
     // Start renderer thread.
     UPtrRenderer renderer(
@@ -603,6 +604,11 @@ int Main(std::vector<std::string> args)
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {
         if (!paused) world = &app->update(dt);
+
+        if (world->get_handle().get_directory_name() != expected_world_dir) {
+            throw std::runtime_error("Not implemented: "
+                "App changing voxel world directory");
+        }
 
         extern bool evict_stats_debug;
         evict_stats_debug = false;

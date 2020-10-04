@@ -398,6 +398,11 @@ class WorldHandle
     {
         ptr = view_chunk_group(group_coord);
     }
+
+    const filename_string& get_directory_name() const
+    {
+        return directory_trailing_slash;
+    }
 };
 
 

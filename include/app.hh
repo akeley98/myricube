@@ -22,7 +22,10 @@ class App
   public:
     // Called every frame with (in theory) the frame time.  Returns a
     // reference to the current world to draw (this means the App is
-    // responsible for the lifetime of the worlds it creates.) XXX
+    // responsible for the lifetime of the worlds it creates.)
+    //
+    // NOTE: At the moment, I don't support changing the world that
+    // the VoxelWorld refers to -- it must be the same for every call.
     virtual VoxelWorld& update(float dt) = 0;
 
     // Optionally, override this function to provide more KeyTargets
