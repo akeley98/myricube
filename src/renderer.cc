@@ -1918,7 +1918,7 @@ class Renderer
 
     void draw_frame()
     {
-        tr = CameraTransforms(*sync_camera_ptr);
+        tr = sync_camera_ptr->get_transforms_gl();
         int x = tr.frame_x, y = tr.frame_y;
 
         glViewport(0, 0, x, y);

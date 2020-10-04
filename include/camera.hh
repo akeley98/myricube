@@ -284,8 +284,10 @@ class SyncCamera
                   + forward * forward_normal_vector);
     }
 
+  private:
     // Convert camera data to actual camera transforms needed.
-    explicit operator CameraTransforms() const
+    // Projection matrix differs based on graphical API.
+    CameraTransforms get_transforms(bool OpenGL) const
     {
         std::lock_guard guard(camera_mutex);
         CameraTransforms t;
@@ -300,11 +302,21 @@ class SyncCamera
                                             t.eye_residue + forward_normal_vector,
                                             glm::vec3(0, 1, 0));
 
-        t.projection_matrix = glm::perspective(
-            float(fovy_radians),
-            float(frame_x) / frame_y,
-            float(near_plane),
-            float(far_plane));
+        if (OpenGL) {
+            t.projection_matrix = glm::perspectiveRH_NO(
+                float(fovy_radians),
+                float(frame_x) / frame_y,
+                float(near_plane),
+                float(far_plane));
+        }
+        else {
+            t.projection_matrix = glm::perspectiveRH_ZO(
+                float(fovy_radians),
+                float(frame_x) / frame_y,
+                float(near_plane),
+                float(far_plane));
+            t.projection_matrix[1][1] *= -1.0f;
+        }
 
         t.residue_vp_matrix = t.projection_matrix * t.residue_view_matrix;
 
@@ -318,6 +330,17 @@ class SyncCamera
         t.frame_y = frame_y;
 
         return t;
+    }
+
+  public:
+    CameraTransforms get_transforms_gl() const
+    {
+        return get_transforms(true);
+    }
+
+    CameraTransforms get_transforms_vk() const
+    {
+        return get_transforms(false);
     }
 };
 
