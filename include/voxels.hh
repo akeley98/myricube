@@ -49,13 +49,10 @@ constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
 
 
 
-// in_memory_prefix includes a nul character, which is pretty much
-// guaranteed not to be an allowed real file name character on any
-// platform. I can change this easily if this ends up being too
-// clever.
-static const filename_string in_memory_prefix =
-    { filename_char('M'), filename_char('E'),
-      filename_char('M'), filename_char('\0'), filename_char('/') };
+// /MEM:/ is the in_memory_prefix. Invalid start for a file name on
+// Windows and almost certainly the start of an actual file name on
+// Unix.
+static const filename_string in_memory_prefix = "/MEM:/";
 
 inline bool starts_with_in_memory_prefix(const filename_string& arg)
 {
