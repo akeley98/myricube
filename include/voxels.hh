@@ -49,9 +49,9 @@ constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
 
 
 
-// /MEM:/ is the in_memory_prefix. Invalid start for a file name on
-// Windows and almost certainly the start of an actual file name on
-// Unix.
+// /MEM:/ is the in_memory_prefix. Colons are not allowed in file
+// names on Windows and almost certainly not in the name of a
+// top-level directory on Unix.
 static const filename_string in_memory_prefix = "/MEM:/";
 
 inline bool starts_with_in_memory_prefix(const filename_string& arg)
