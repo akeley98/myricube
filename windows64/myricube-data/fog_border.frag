@@ -35,6 +35,9 @@
 // #define BORDER_FADE  0.95
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
+#define DITHER_MASK 3
+#define DITHER_SCALAR (0.0035 / DITHER_MASK)
+
 uniform bool fog_enabled;
 uniform bool black_fog;
 uniform int far_plane_squared;
@@ -56,12 +59,17 @@ vec3 fog_color_from_world_direction(vec3 world_direction)
 
     const vec3 earth_color = vec3(50/255., 42/255., 77/255.);
     const vec3 sky_color = vec3(135/255., 211/255., 248/255.);
-    // const vec3 sunrise_color = vec3(254/255., 216/255., 177/255.);
     const vec3 sunrise_color = vec3(255/255., 173/255., 138/255.);
+
+    const ivec2 pixel = ivec2(gl_FragCoord.xy);
+    const vec3 dither = vec3(
+        float(pixel.x & DITHER_MASK) * DITHER_SCALAR,
+        float((pixel.x ^ pixel.y) & DITHER_MASK) * DITHER_SCALAR,
+        float(pixel.y & DITHER_MASK) * DITHER_SCALAR);
 
     return mix(
         mix(sunrise_color, sky_color, t_sunrise),
-        earth_color, t_horizon);
+        earth_color, t_horizon) + dither;
 }
 
 // Utility function for adding fog and border effects (and setting alpha=1).
