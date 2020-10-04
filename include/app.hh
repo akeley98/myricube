@@ -8,7 +8,7 @@
 
 #include "myricube.hh"
 
-#include "chunk.hh"
+#include "voxels.hh"
 #include "window.hh"
 
 namespace myricube {
@@ -22,7 +22,7 @@ class App
   public:
     // Called every frame with (in theory) the frame time.  Returns a
     // reference to the current world to draw (this means the App is
-    // responsible for the lifetime of the worlds it creates.)
+    // responsible for the lifetime of the worlds it creates.) XXX
     virtual VoxelWorld& update(float dt) = 0;
 
     // Optionally, override this function to provide more KeyTargets

@@ -7,7 +7,7 @@ namespace myricube {
 
 class RandomWalk : public App
 {
-    VoxelWorld world;
+    VoxelWorld world = { expand_filename("RandomWalk/world.myricube") };
     std::mt19937 rng{19980724};
 
     void add_random_walk()

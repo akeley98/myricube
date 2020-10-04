@@ -1,15 +1,18 @@
-// Implementation functions for WorldHandle.
-// Basically we just have to negotiate with the operating system to
-// get memory-mapped views of chunk groups on disk.
+// Implementation functions for WorldHandle.  Basically we just have
+// to negotiate with the operating system to get memory-mapped views
+// of chunk groups on disk (or of the in-memory filesystem).
 
 #include "voxels.hh"
 
 #include <errno.h>
+#include <mutex>
 #include <new>
 #include <stdexcept>
 #include <stdio.h>
 #include <string.h>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 
 #ifdef MYRICUBE_WINDOWS
 // todo
@@ -23,11 +26,36 @@
 
 namespace myricube {
 
-// Given the name of a file, mmap it and return the pointer. If the
-// file doesn't exist or has 0 size, either return nullptr or create
-// it depending on flags (defined below). If created, the T
-// constructor is run in-place on the file. THIS IS EXPECTED TO NOT
-// THROW AN EXCEPTION.
+// In memory file system entry.
+struct InMemoryFile
+{
+    void* ptr;
+    size_t size;
+};
+
+// Map from filenames to in-memory files. Nothing is removed from this.
+static std::unordered_map<filename_string, InMemoryFile> in_memory_filesystem;
+
+// Set of pointers corresponding to the (start of) in-memory
+// files. This is needed because real files need to be unmapped
+// (multiple views of the same file use different virtual addresses,
+// so this still works with multiple views) while in-memory files
+// shall not (this would discard the contents of the in-memory file,
+// which is not what I want!)
+//
+// TODO: Use lower-order pointer bit tricks to remove this???
+static std::unordered_set<uintptr_t> in_memory_file_ptrs;
+
+// Mutex protecting above two.
+static std::mutex in_memory_filesystem_mutex;
+
+
+
+// Given the name of a file (possibly an in-memory temp file), mmap it
+// and return the pointer. If the file doesn't exist or has 0 size,
+// either return nullptr or create it depending on flags (defined
+// below). If created, the T constructor is run in-place on the
+// file. THIS CONSTRUCTOR IS EXPECTED TO NOT THROW AN EXCEPTION.
 //
 // Throw an exception on failure to open for any reason other than
 // file not existing. An exception is also thrown if the file size is
@@ -51,40 +79,48 @@ constexpr int create_flag = 2;   // If set, create file if needed.
 constexpr int file_created_flag = 4; // Set by the map_file function iff
                                      // the file needed to be created.
 
-void* map_file_impl(const filename_string&, size_t sz, int* flags);
+void* map_disk_file_impl(const filename_string&, size_t sz, int* flags);
+void* map_mem_file_impl(const filename_string&, size_t sz, int* flags);
 
 template <typename T> T* map_file(const filename_string& filename, int* flags)
 {
     // if (std::is_const_v<T>) *flags |= readonly_flag;
-    auto ptr = static_cast<T*>(map_file_impl(filename, sizeof(T), flags));
+    void* ptr = starts_with_in_memory_prefix(filename)
+              ? map_mem_file_impl(filename, sizeof(T), flags)
+              : map_disk_file_impl(filename, sizeof(T), flags);
     if (*flags & file_created_flag) {
-        new((void*)ptr) T;
+        new(ptr) T;
     }
     // TODO think about potential race / interruption condition:
     // create file in separate location and move-in when ready?
-    return ptr;
+    return static_cast<T*>(ptr);
 }
 
-template <typename T> void unmap_file(const T* ptr)
+template <typename T> void unmap_if_disk_file(const T* ptr)
 {
     // fprintf(stderr, "unmap_file of size %ld\n", long(sizeof(T)));
+
+    // Only unmap actual on-disk files.
+    std::lock_guard guard(in_memory_filesystem_mutex);
+    if (in_memory_file_ptrs.count(uintptr_t(ptr))) return;
+
     auto code = munmap((void*)ptr, sizeof(T));
     assert(code == 0); // Seems like munmap only fails due to logic errors.
 }
 
 void unmap_mut_bin_chunk_group(BinChunkGroup* ptr)
 {
-    unmap_file(ptr);
+    unmap_if_disk_file(ptr);
 }
 
 void unmap_bin_chunk_group(const BinChunkGroup* ptr)
 {
-    unmap_file(ptr);
+    unmap_if_disk_file(ptr);
 }
 
 void unmap_bin_group_bitfield(BinGroupBitfield* ptr)
 {
-    unmap_file(ptr);
+    unmap_if_disk_file(ptr);
 }
 
 WorldHandle::WorldHandle(const filename_string& world_filename_arg)
@@ -125,7 +161,7 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
         directory_trailing_slash, world_filename);
     bin_world = std::shared_ptr<BinWorld>(
         map_file<BinWorld>(bin_world_filename, create_flag),
-        unmap_file<BinWorld>);
+        unmap_if_disk_file<BinWorld>);
 
     // Finally check the magic number.
     if (bin_world->magic_number != bin_world->expected_magic) {
@@ -204,11 +240,16 @@ WorldHandle::bitfield_for_chunk_group(glm::ivec3 group_coord) const
     return result;
 }
 
+
+
 #ifdef MYRICUBE_WINDOWS
 // todo
 #else
-void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
+// Map an actual on-disk file.
+void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
 {
+    assert(!starts_with_in_memory_prefix(filename));
+
     const char* doing = "";
     int code = 0;
     auto check_code = [&]
@@ -225,6 +266,7 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
 
     // Try to open the file if it exists.
     // int open_flags = *flags & readonly_flag ? O_RDONLY : O_RDWR;
+    doing = "Opening";
     int open_flags = O_RDWR;
     int fd = open(filename.c_str(), open_flags);
 
@@ -238,6 +280,12 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
     // Depending on create_flag, either return null or create the file
     // if it doesn't exist.
     if (fd < 0) {
+        // ...but first check that the failure was actually that the
+        // file didn't exist.
+        if (errno != ENOENT) {
+            code = fd;
+            check_code();
+        }
         doing = "Opening";
         if (errno != ENOENT) check_code();
         if (!(*flags & create_flag)) return nullptr;
@@ -286,6 +334,52 @@ void* map_file_impl(const filename_string& filename, size_t sz, int* flags)
         doing = "Memory mapping";
         code = -1;
         check_code();
+    }
+    return mapping;
+}
+
+// Map an ephemeral in-memory file.
+void* map_mem_file_impl(const filename_string& filename, size_t sz, int* flags)
+{
+    assert(starts_with_in_memory_prefix(filename));
+
+    std::lock_guard lock(in_memory_filesystem_mutex);
+
+    auto iter = in_memory_filesystem.find(filename);
+
+    // Such an in-memory file exists: check size and return.
+    if (iter != in_memory_filesystem.end()) {
+        InMemoryFile in_memory_file = iter->second;
+        if (in_memory_file.size != sz) {
+            throw std::runtime_error(filename + " (in memory) incorrect size");
+        }
+        assert(in_memory_file.ptr);
+        return in_memory_file.ptr;
+    }
+
+    // No such in-memory file exists: either create or return nullptr.
+    if ((*flags & create_flag) == 0) {
+        return nullptr;
+    }
+    void* mapping = nullptr;
+    try {
+        auto prot = PROT_READ | PROT_WRITE;
+        auto mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        mapping = mmap(nullptr, sz, prot, mmap_flags, -1, 0);
+        in_memory_file_ptrs.emplace(uintptr_t(mapping));
+
+        if (mapping == nullptr) throw std::bad_alloc();
+
+        InMemoryFile in_memory_file { mapping, sz };
+        in_memory_filesystem.emplace(filename, in_memory_file);
+        *flags |= file_created_flag;
+    }
+    catch (...) {
+        if (mapping) {
+            munmap(mapping, sz);
+            in_memory_file_ptrs.erase(uintptr_t(mapping));
+        }
+        throw;
     }
     return mapping;
 }

@@ -74,7 +74,6 @@
 
 #include "app.hh"
 #include "camera.hh"
-#include "chunk.hh"
 #include "renderer.hh"
 #include "window.hh"
 #include "voxels.hh"
@@ -594,11 +593,12 @@ int Main(std::vector<std::string> args)
     }
     app->add_key_targets(window);
     float dt = 0;
+    // TODO get rid of this XXX (misleading VoxelWorld meaning changed)
     VoxelWorld* world = &app->update(dt);
 
     // Start renderer thread.
     UPtrRenderer renderer(
-        new_renderer(window_ptr, world->handle, camera_ptr));
+        new_renderer(window_ptr, world->get_handle(), camera_ptr));
 
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {

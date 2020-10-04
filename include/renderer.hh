@@ -11,6 +11,7 @@ namespace myricube {
 class Renderer;
 class SyncCamera;
 class Window;
+class WorldHandle;
 
 // TODO: Multiple Renderers won't work correctly due to global state.
 

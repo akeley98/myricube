@@ -17,10 +17,10 @@
 #include <vector>
 
 #include "camera.hh"
-#include "chunk.hh"
 #include "glad/glad.h"
 #include "renderer.hh"
 #include "shaders.hh"
+#include "voxels.hh"
 #include "window.hh"
 
 namespace myricube {

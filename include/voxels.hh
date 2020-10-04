@@ -1,6 +1,8 @@
 // CPU-side implementations of voxel grid data structures: chunks,
-// chunk groups, and entire "infinite" voxel worlds stored on disk and
-// accessed via mmap.
+// chunk groups, and entire "infinite" voxel worlds stored on disk or
+// in-memory and accessed via mmap. All files are accessed by a
+// filename_string (8-bit on Unix, 16-bit on Windows); file names that
+// start with the in_memory_prefix are (temporary) in-memory files.
 //
 // My rough plan is to have voxel worlds be stored in a single
 // directory.  Each chunk group will be have its exact binary
@@ -32,6 +34,11 @@
 
 namespace myricube {
 
+// This is probably the data type you care about.
+class VoxelWorld;
+
+
+
 // File name of the BinWorld file, and filename format for chunk group files.
 const char world_filename[] = "world.myricube";
 
@@ -39,6 +46,35 @@ constexpr uint64_t chunk_group_base_magic_number = 587569177;
 
 constexpr uint64_t renderer_mesh_dirty_flag = uint64_t(1) << 63;
 constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
+
+
+
+// in_memory_prefix includes a nul character, which is pretty much
+// guaranteed not to be an allowed real file name character on any
+// platform. I can change this easily if this ends up being too
+// clever.
+static const filename_string in_memory_prefix =
+    { filename_char('M'), filename_char('E'),
+      filename_char('M'), filename_char('\0'), filename_char('/') };
+
+inline bool starts_with_in_memory_prefix(const filename_string& arg)
+{
+    if (arg.size() < in_memory_prefix.size()) return false;
+    size_t index = 0;
+    for (auto c : in_memory_prefix) {
+        if (arg[index++] != c) return false;
+    }
+    return true;
+}
+
+inline filename_string add_in_memory_prefix(const filename_string& arg)
+{
+    if (starts_with_in_memory_prefix(arg)) return arg;
+
+    filename_string result = in_memory_prefix;
+    result.append(arg);
+    return result;
+}
 
 
 
@@ -370,7 +406,7 @@ class WorldHandle
 // world. Holds a direct-mapped cache of pointers to memory-mapped
 // chunk groups, minimizing the need to interact with the file system.
 //
-// The object itself is not threadsafe, but multiple caches for the
+// The object itself is not synchronized, but multiple caches for the
 // same world may be used concurrently (assuming no OS bugs).  This is
 // still not exactly super efficient -- the cache itself is a huge 1
 // megabyte-ish structure.
@@ -414,12 +450,16 @@ class WorldCache
 
         // Helper for determining if this entry is for the group with
         // the given group coordinate.
-        bool is_for_group(glm::ivec3 group_coord_arg)
+        bool is_for_group(glm::ivec3 group_coord_arg) const
         {
             return group_coord == group_coord_arg and bitfield_index >= 0;
         }
     };
     Entry cache[modulus][modulus][modulus];
+
+    WorldCache(WorldHandle world_) : world(std::move(world_)) { }
+    ~WorldCache() = default;
+    WorldCache(const WorldCache&) = delete;
 
   private:
     // Return the location to store the Entry for the named chunk group.
@@ -434,7 +474,8 @@ class WorldCache
     // Get the Entry for the named chunk group, reading the named
     // chunk group and store it in the cache if needed.  The returned
     // reference is valid as long as this->get_entry is not called
-    // again with a different group coordinate.
+    // again with a different group coordinate. (This is the reason
+    // this is not a const member).
     const Entry& get_entry(glm::ivec3 group_coord)
     {
         Entry& entry = get_entry_location(group_coord);
@@ -493,9 +534,10 @@ class WorldCache
         return entry;
     }
 
-    WorldCache(WorldHandle world_) : world(std::move(world_)) { }
-    ~WorldCache() = default;
-    WorldCache(const WorldCache&) = delete;
+    WorldHandle get_handle() const
+    {
+        return world;
+    }
 };
 
 // Cache specialized for modifying voxel worlds: cache pointers to mutable,
@@ -505,6 +547,56 @@ using MutWorldCache = WorldCache<UPtrMutChunkGroup, false>;
 // Cache specialized for reading voxel worlds: cache pointers to const,
 // and check bitfields to lower overhead of accessing nonexistent groups.
 using ViewWorldCache = WorldCache<UPtrChunkGroup, true>;
+
+
+
+// Friendly interface to a voxel world. Feed in the file name of the
+// world file you want to open. By default, the "file name" is that of
+// the temporary shared in-memory voxel world (not saved after program
+// shutdown).
+class VoxelWorld
+{
+    mutable MutWorldCache world_cache;
+    static const inline filename_string in_memory_world_filename =
+        filename_concat_c_str(in_memory_prefix, world_filename);
+
+  public:
+    VoxelWorld(filename_string filename=in_memory_world_filename) :
+        world_cache(WorldHandle(std::move(filename))) { }
+
+    // Return voxel at the given coordinate.
+    uint32_t operator() (glm::ivec3 c) const
+    {
+        glm::ivec3 group_coord = to_group_coord(c);
+        BinChunkGroup* ptr =
+            world_cache.get_entry(group_coord).chunk_group_ptr.get();
+        return ptr ? (*ptr)(c) : 0;
+    }
+
+    // Set the voxel at the given coordinate.
+    void set(glm::ivec3 c, uint32_t voxel)
+    {
+        glm::ivec3 group_coord = to_group_coord(c);
+        BinChunkGroup* ptr =
+            world_cache.get_entry(group_coord).chunk_group_ptr.get();
+        ptr->dirty_flags.store(~uint64_t(0));
+        assert(ptr != nullptr);
+        ptr->set(c, voxel);
+    }
+
+    // These next two functions are potentially dangerous, but the
+    // costs of the friendly functions above are high enough that I
+    // don't want to force usage of them.
+    MutWorldCache& borrow_cache()
+    {
+        return world_cache;
+    }
+
+    WorldHandle get_handle()
+    {
+        return world_cache.get_handle();
+    }
+};
 
 } // end namespace myricube
 

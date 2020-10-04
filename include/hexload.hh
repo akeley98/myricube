@@ -1,3 +1,5 @@
+// This is abandoned for now. Sorry Marlon if you were actually using it.
+//
 // Storer/loader for a hexadecimal human-readable VoxelWorld format.
 //
 // The file should start with the line "myricube:hex" exactly; each
@@ -162,9 +164,9 @@ noexcept
         auto green = uint8_t(read_hex_digits(2));
         auto blue = uint8_t(read_hex_digits(2));
         read_expected_char('\n');
-        
+
         world.set(glm::ivec3(x, y, z), Voxel(red, green, blue), &hint);
-        
+
         ++voxels_set;
         if (voxels_set % (1 << 20) == 0 and success) {
             fprintf(stderr, "%iM voxels set\n", voxels_set >> 20);
