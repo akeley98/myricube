@@ -1924,15 +1924,15 @@ class Renderer
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         if (tr.target_fragments > 0) {
-            fprintf(stderr, "TODO thread safety.\n");
-            bind_global_f32_depth_framebuffer(x, y, tr.target_fragments);
+            fprintf(stderr, "Not implemented: target_fragments.\n");
+            // bind_global_f32_depth_framebuffer(x, y, tr.target_fragments);
         }
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         render_world_mesh_step();
         render_world_raycast_step();
         render_background();
         if (tr.target_fragments > 0) {
-            finish_global_f32_depth_framebuffer(x, y);
+            // finish_global_f32_depth_framebuffer(x, y);
         }
 
         window_ptr->swap_buffers();
@@ -2010,140 +2010,6 @@ double get_fps(const Renderer& renderer)
 double get_frame_time(const Renderer& renderer)
 {
     return renderer.frame_time.load();
-}
-
-static GLuint f32_depth_framebuffer = 0;
-static GLuint f32_depth_texture = 0;
-static GLuint f32_depth_renderbuffer = 0;
-static int f32_depth_framebuffer_x, f32_depth_framebuffer_y = 0;
-
-// Used to detect requested screen (framebuffer) size changes.
-static int prev_frame_x = 0, prev_frame_y = 0, prev_target_fragments = 0;
-
-// Ratio of screen size (length / width) to framebuffer size.
-static int framebuffer_divisor = 1;
-
-
-void bind_global_f32_depth_framebuffer(
-    int frame_x, int frame_y, int target_fragments)
-{
-    int want_framebuffer_x = f32_depth_framebuffer_x;
-    int want_framebuffer_y = f32_depth_framebuffer_y;
-
-    if (target_fragments <= 0) {
-        want_framebuffer_x = frame_x;
-        want_framebuffer_y = frame_y;
-        framebuffer_divisor = 1;
-    }
-
-    // Recalculate the actual framebuffer size if needed.
-    else if (frame_x != prev_frame_x
-         or frame_y != prev_frame_y
-         or prev_target_fragments != target_fragments) {
-
-        for (framebuffer_divisor = 1;
-             framebuffer_divisor <= 16;
-             ++framebuffer_divisor) {
-
-            want_framebuffer_x = frame_x / framebuffer_divisor;
-            want_framebuffer_y = frame_y / framebuffer_divisor;
-            if (want_framebuffer_x * want_framebuffer_y <= target_fragments) {
-                break;
-            }
-        }
-    }
-
-    prev_frame_x = frame_x;
-    prev_frame_y = frame_y;
-    prev_target_fragments = target_fragments;
-
-    // Destroy the framebuffer and its attachments if the screen size changed.
-    if (want_framebuffer_x != f32_depth_framebuffer_x
-    or want_framebuffer_y != f32_depth_framebuffer_y) {
-        if (f32_depth_framebuffer != 0) {
-            fprintf(stderr, "Destroying old %i x %i framebuffer.\n",
-                f32_depth_framebuffer_x, f32_depth_framebuffer_y);
-            glDeleteFramebuffers(1, &f32_depth_framebuffer);
-            glDeleteTextures(1, &f32_depth_texture);
-            glDeleteRenderbuffers(1, &f32_depth_renderbuffer);
-        }
-
-        f32_depth_framebuffer = 0;
-        f32_depth_framebuffer_x = want_framebuffer_x;
-        f32_depth_framebuffer_y = want_framebuffer_y;
-        PANIC_IF_GL_ERROR;
-    }
-
-    // (Re-) create the framebuffer if needed, and bind it.
-    if (f32_depth_framebuffer == 0) {
-        // Create framebuffer.
-        fprintf(stderr, "Creating %i x %i framebuffer.\n",
-                f32_depth_framebuffer_x, f32_depth_framebuffer_y);
-        fprintf(stderr, "Downsampling by %i x %i.\n",
-                framebuffer_divisor, framebuffer_divisor);
-
-        glCreateFramebuffers(1, &f32_depth_framebuffer);
-        glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
-        PANIC_IF_GL_ERROR;
-
-        // Add depth buffer.
-        glCreateRenderbuffers(1, &f32_depth_renderbuffer);
-        glNamedRenderbufferStorage(f32_depth_renderbuffer,
-                                   GL_DEPTH_COMPONENT32F,
-                                   f32_depth_framebuffer_x,
-                                   f32_depth_framebuffer_y);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER,
-                                  GL_DEPTH_ATTACHMENT,
-                                  GL_RENDERBUFFER,
-                                  f32_depth_renderbuffer);
-        PANIC_IF_GL_ERROR;
-
-        // Add color buffer.
-        glCreateTextures(GL_TEXTURE_2D, 1, &f32_depth_texture);
-        glTextureParameteri(f32_depth_texture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTextureParameteri(f32_depth_texture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTextureParameteri(f32_depth_texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(f32_depth_texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTextureStorage2D(f32_depth_texture, 1, GL_RGBA8,
-                           f32_depth_framebuffer_x, f32_depth_framebuffer_y);
-        glFramebufferTexture2D(GL_FRAMEBUFFER,
-                               GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D,
-                               f32_depth_texture,
-                               0);
-        PANIC_IF_GL_ERROR;
-
-        // Wire up the only color output.
-        GLenum tmp = GL_COLOR_ATTACHMENT0;
-        glDrawBuffers(1, &tmp);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        {
-            panic("Incomplete 32-bit depth framebuffer: "
-                 + std::to_string(glCheckFramebufferStatus(GL_FRAMEBUFFER)));
-        }
-    }
-    else {
-        glBindFramebuffer(GL_FRAMEBUFFER, f32_depth_framebuffer);
-    }
-    glViewport(0, 0, f32_depth_framebuffer_x, f32_depth_framebuffer_y);
-    PANIC_IF_GL_ERROR;
-}
-
-void finish_global_f32_depth_framebuffer(int frame_x, int frame_y)
-{
-    assert(f32_depth_framebuffer != 0);
-    glBlitNamedFramebuffer(
-        f32_depth_framebuffer,
-        0, // Write to window framebuffer
-        0, 0,
-        f32_depth_framebuffer_x, f32_depth_framebuffer_y,
-        0, 0,
-        frame_x, frame_y,
-        GL_COLOR_BUFFER_BIT,
-        GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    PANIC_IF_GL_ERROR;
 }
 
 } // end namespace

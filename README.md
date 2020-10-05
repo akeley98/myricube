@@ -40,9 +40,9 @@ left/right arrows or thumb buttons to go through camera history.
 `f9`/`f10` to change the render distance (be careful not to run out of memory),
 and `f`,`b` to toggle fog/fog color.
 
-`f3`/`f4` to change the maximum resolution. NOTE: Pressing `f4` a few
-times can work-around weird z-fighting artifacts (sometimes happens on
-Windows).
+`f3`/`f4` to change the maximum resolution (not implemented in current
+branch). NOTE: Pressing `f4` a few times can work-around weird
+z-fighting artifacts (sometimes happens on Windows).
 
 ## Playing with Myricube
 
