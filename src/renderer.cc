@@ -27,17 +27,9 @@
 
 namespace myricube {
 
-// "Temporary" I used to support the idea of changing the world being
-// rendered but not anymore, and they were distinguished with id's.
-// Since I stopped this, for now I just give the global world a bogus ID.
-//
-// Eventually I should rip this out, but world_id also has a side
-// effect of identifying valid/invalid cache entries.
-const uint64_t bogus_world_id = 1;
-
 // Hacky debug variables.
 bool chunk_debug = false;
-bool evict_stats_debug = false;
+bool evict_stats_debug = false; // Unused for now
 bool disable_zcull_sort = false;
 
 // (roughly) minimum distance from the camera that a chunk needs
@@ -207,15 +199,15 @@ struct MeshVoxelVertex
     // VBO vertex carrying this information.
     //
     // This constructor defines the packed layout.
-    MeshVoxelVertex(Voxel v, uint8_t x, uint8_t y, uint8_t z)
+    MeshVoxelVertex(uint32_t packed_color_arg, uint8_t x, uint8_t y, uint8_t z)
     {
         static_assert(group_size <= 255,
                       "group too big for 8-bit unsigned coordinates.");
         packed_residue_face_bits = uint32_t(x) << x_shift
                                  | uint32_t(y) << y_shift
                                  | uint32_t(z) << z_shift;
-        packed_color = to_packed_color(v);
-        assert(packed_color & visible_bit);
+        assert(packed_color_arg & visible_bit);
+        packed_color = packed_color_arg;
     }
 };
 
@@ -225,41 +217,120 @@ struct MeshVoxelVertex
 // I'm desperate for GPU memory).
 constexpr size_t chunk_max_verts = chunk_size * chunk_size * chunk_size;
 
-// CPU-side copy of the "mesh" (i.e. list of visible voxels) for a
-// single chunk. The AABB is also needed for now (decide_chunk needs
-// this info).
-struct ChunkMesh
+// Bytes on GPU for storing the mesh (list of visible voxels) of one
+// chunk.
+struct MappedChunkMesh
 {
     MeshVoxelVertex verts[chunk_max_verts];
-    size_t vert_count = 0;
-    PackedAABB aabb;
 };
 
-// Handle for GPU resources for the mesh of one chunk group.  The
-// CPU-side state of this MeshEntry should always accurately describe
-// the state of the copy of this data on the GPU and GL. (i.e. if you
-// modify the data within, it is your responsibility to update the GPU
-// state at the same time).
+// An entire chunk group of MappedChunkMesh, [z][y][x] order as typical.
+struct MappedGroupMesh
+{
+    MappedChunkMesh chunks[edge_chunks][edge_chunks][edge_chunks];
+};
+
+// Extra data needed to interpret MappedChunkMesh correctly for drawing.
+struct ChunkDrawData
+{
+    size_t vert_count = 0; // Vertex (visible voxel) count i.e. # instances
+    PackedAABB aabb;       // AABB, for decide_chunk's benefit.
+};
+
+// Function for filling the above structures given a chunk. Requires
+// in addition the residue coordinate of the chunk's lower-left corner
+// (needed for positioning the AABB and voxel positions in the
+// containing chunk group's coordinate system).
+void fill_chunk_mesh(
+    MappedChunkMesh* mesh_ptr,
+    ChunkDrawData* draw_data_ptr,
+    const BinChunk& chunk,
+    glm::ivec3 chunk_residue)
+{
+    draw_data_ptr->aabb = PackedAABB(chunk, chunk_residue);
+
+    // Look up whether the voxel at the given coordinate
+    // (relative to the lower-left of this chunk) is visible.
+    // Act as if voxels outside the chunk are always invisible.
+    auto visible_block = [&chunk] (glm::ivec3 coord) -> bool
+    {
+        if (coord.x < 0 or coord.x >= chunk_size
+         or coord.y < 0 or coord.y >= chunk_size
+         or coord.z < 0 or coord.z >= chunk_size) return false;
+        // Note: the masking in Chunk::operator () won't mess up
+        // this coord. (I'm kind of violating my own comment in
+        // Chunk::operator() because coord won't actually be in
+        // the chunk unless that chunk is at (0,0,0)).
+        return chunk(coord) & visible_bit;
+    };
+
+    auto visit_voxel = [
+        mesh_ptr, draw_data_ptr, &chunk, visible_block, chunk_residue]
+    (glm::ivec3 coord)
+    {
+        auto v = chunk(coord);
+        if (0 == (v & visible_bit)) return;
+
+        uint8_t x = uint8_t(coord.x) + chunk_residue.x;
+        uint8_t y = uint8_t(coord.y) + chunk_residue.y;
+        uint8_t z = uint8_t(coord.z) + chunk_residue.z;
+
+        MeshVoxelVertex vert(v, x, y, z);
+
+        // Check which of the six faces are visible.
+        if (!visible_block(coord + glm::ivec3(-1, 0, 0))) {
+            vert.packed_residue_face_bits |= neg_x_face_bit;
+        }
+        if (!visible_block(coord + glm::ivec3(1, 0, 0))) {
+            vert.packed_residue_face_bits |= pos_x_face_bit;
+        }
+        if (!visible_block(coord + glm::ivec3(0, -1, 0))) {
+            vert.packed_residue_face_bits |= neg_y_face_bit;
+        }
+        if (!visible_block(coord + glm::ivec3(0, 1, 0))) {
+            vert.packed_residue_face_bits |= pos_y_face_bit;
+        }
+        if (!visible_block(coord + glm::ivec3(0, 0, -1))) {
+            vert.packed_residue_face_bits |= neg_z_face_bit;
+        }
+        if (!visible_block(coord + glm::ivec3(0, 0, 1))) {
+            vert.packed_residue_face_bits |= pos_z_face_bit;
+        }
+
+        // Add this voxel only if it's visible.
+        if ((vert.packed_residue_face_bits & all_face_bits) != 0) {
+            assert(draw_data_ptr->vert_count < chunk_max_verts);
+            mesh_ptr->verts[draw_data_ptr->vert_count++] = vert;
+        }
+    };
+
+    draw_data_ptr->vert_count = 0;
+
+    for (int z = 0; z < chunk_size; ++z) {
+        for (int y = 0; y < chunk_size; ++y) {
+            for (int x = 0; x < chunk_size; ++x) {
+                visit_voxel(glm::ivec3(x, y, z));
+            }
+        }
+    }
+}
+
+// Handle for GPU resources for the mesh of one chunk group.
 struct MeshEntry
 {
-    // World ID and group coordinate of the chunk group this mesh is
-    // for. This can be used to tell if this entry is correct or needs
-    // to be replaced in MeshStore.
-    uint64_t world_id = 0;
-    glm::ivec3 group_coord;
-
-    // mesh_array[z][y][x] is the mesh for ChunkGroup::chunk_array[z][y][x].
-    // This is copied into the VBO.
-    ChunkMesh mesh_array[edge_chunks][edge_chunks][edge_chunks];
-
     // OpenGL name for the VBO used to store the meshes of this chunk group.
-    // 0 when not yet allocated.
     GLuint vbo_name = 0;
 
-    // Size in bytes of the vbo's data store on the GPU.
-    static constexpr GLsizeiptr vbo_bytes = sizeof mesh_array;
+    // Persistent coherent mapping of the VBO.
+    MappedGroupMesh* vbo_map;
 
-    // Return the offset (in number of MeshVoxelVertexes, not bytes)
+    // Data needed to draw each chunk [z][y][x].
+    ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
+
+    // Size in bytes of the vbo's data store on the GPU.
+    static constexpr GLsizeiptr vbo_bytes = sizeof(MappedGroupMesh);
+
+    // Return the offset (in number of MeshVoxelVertex's, not bytes)
     // into the VBO where the data from mesh_array[z][y][x] is copied
     // into.
     static unsigned vert_offset(unsigned x, unsigned y, unsigned z)
@@ -272,36 +343,46 @@ struct MeshEntry
     // Same as above, but return offset as count of bytes.
     static GLsizeiptr byte_offset(unsigned x, unsigned y, unsigned z)
     {
-        auto vert_sz = GLsizeiptr(sizeof(ChunkMesh::verts[0]));
+        auto vert_sz = GLsizeiptr(sizeof(MeshVoxelVertex));
         GLsizeiptr off = vert_offset(x, y, z) * vert_sz;
         assert(size_t(off) < vbo_bytes);
         return off;
     }
 
-    MeshEntry() = default;
+    MeshEntry()
+    {
+        auto storage_flags = GL_MAP_WRITE_BIT
+                           | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+
+        auto map_flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
+              | GL_MAP_COHERENT_BIT | GL_MAP_WRITE_BIT;
+
+
+        glCreateBuffers(1, &vbo_name);
+        glNamedBufferStorage(vbo_name, sizeof(MappedGroupMesh),
+            nullptr, storage_flags);
+        vbo_map = static_cast<MappedGroupMesh*>(glMapNamedBufferRange(
+                vbo_name, 0, sizeof(MappedGroupMesh), map_flags));
+        PANIC_IF_GL_ERROR;
+    }
 
     // Get some RAII going.
     ~MeshEntry()
     {
         glDeleteBuffers(1, &vbo_name);
         vbo_name = 0;
-        world_id = 0;
     }
 
-    MeshEntry(MeshEntry&& other)
-    {
-        swap(*this, other);
-    }
-
-    friend void swap(MeshEntry& left, MeshEntry& right)
-    {
-        using std::swap;
-        swap(left.world_id, right.world_id);
-        swap(left.group_coord, right.group_coord);
-        swap(left.mesh_array, right.mesh_array);
-        swap(left.vbo_name, right.vbo_name);
-    }
+    MeshEntry(MeshEntry&& other) = delete;
 };
+
+void swap(MeshEntry& left, MeshEntry& right) noexcept
+{
+    using std::swap;
+    swap(left.vbo_name, right.vbo_name);
+    swap(left.vbo_map, right.vbo_map);
+    swap(left.draw_data, right.draw_data);
+}
 
 // aabb_array[z][y][x] is the minimal AABB containing the visible
 // voxels of ChunkGroup::chunk_array[z][y][x].
@@ -382,361 +463,6 @@ struct RaycastEntry
     RaycastEntry(RaycastEntry&& other) = delete;
 };
 
-// Struct for requesting a chunk group's GPU data from a MeshStore /
-// RaycastStore entry. Some stats are also returned.
-struct StoreRequest
-{
-    // Input: allow the store to return a nullptr if servicing this
-    // request would be slow somehow.
-    bool may_fail = false;
-
-    // Input: allow the store to overwrite data in order to service
-    // this request. If set, may_fail must also be set.
-    bool read_only = false;
-
-    // Output: whether the requested chunk group was already in the
-    // store (not necessarily up-to-date).
-    bool was_in_store;
-};
-
-// Cache of MeshEntry/RaycastEntry objects. The idea is to store entry
-// structs for chunk groups near the camera. They are stored in a
-// wraparound fashion (i.e.  using modular arithmetic on group
-// coordinates) so that as the camera moves, the new groups being
-// rendered overwrites the old groups no longer being rendered.
-//
-// TODO: Replace completely
-template <class Entry, uint32_t DefaultModulus, uint32_t Assoc>
-class BaseStore
-{
-    struct CacheSet
-    {
-        uint64_t last_access[Assoc] = {0};
-        Entry slots[Assoc];
-    };
-    // Monotonic increasing counter for least-recently accessed cache
-    // eviction algorithm.
-    uint64_t access_counter = 0;
-
-    // Used for tracking how many cache entries were read for this frame.
-    uint64_t frame_begin_access_counter = 0;
-
-    // Cache is (modulus x modulus x modulus x Assoc) in size.
-    uint32_t modulus = DefaultModulus;
-
-    // Conceptually, a 3D (modulus x modulus x modulus) array of cache
-    // sets (CacheSet itself comprises the Assoc dimension).
-    //
-    // Declared after modulus defensively.
-    std::unique_ptr<CacheSet[]> cache_sets {
-        new CacheSet[DefaultModulus * DefaultModulus * DefaultModulus] };
-
-    // Fully-associative victim cache. Evicted Entry objects are
-    // swapped into here.
-    struct VictimCacheSlot
-    {
-        uint64_t last_access = 0;
-        Entry entry;
-    };
-    std::vector<VictimCacheSlot> victim_cache;
-
-    // Return a pointer to the location that the Entry for the chunk
-    // group with the given group coordinate and world id should be.
-    // The p_valid bool tells us whether the returned Entry matches
-    // the one being searched for.
-    Entry* cached_location(
-        bool* p_valid,
-        glm::ivec3 group_coord,
-        uint64_t world_id,
-        bool may_fail=false)
-    {
-        uint32_t x = uint32_t(group_coord.x ^ 0x8000'0000) % modulus;
-        uint32_t y = uint32_t(group_coord.y ^ 0x8000'0000) % modulus;
-        uint32_t z = uint32_t(group_coord.z ^ 0x8000'0000) % modulus;
-        CacheSet& cache_set = cache_sets[
-            z * modulus * modulus + y * modulus + x];
-
-        // Try to search for a valid Entry for the requested world &
-        // group coordinate. Mark it as accessed if so.
-        for (unsigned i = 0; i < Assoc; ++i) {
-            Entry* entry = &cache_set.slots[i];
-            if (entry->world_id == world_id
-            and entry->group_coord == group_coord) {
-                cache_set.last_access[i] = ++access_counter;
-                *p_valid = true;
-                return entry;
-            }
-        }
-
-        // Not found at this point; need to choose the least-recently
-        // used entry to evict. This is much colder code than above.
-        // However, skip all this if we don't actually need it
-        // (may_fail is true).
-        if (may_fail) {
-            *p_valid = false;
-            return nullptr;
-        }
-        uint64_t min_access = cache_set.last_access[0];
-        unsigned evict_idx = 0;
-        for (unsigned i = 1; i < Assoc; ++i) {
-            auto this_last_access = cache_set.last_access[i];
-            if (this_last_access < min_access) {
-                evict_idx = i;
-                min_access = this_last_access;
-            }
-            if (evict_stats_debug) {
-                fprintf(stderr, "%u %lu\n", i, this_last_access);
-            }
-        }
-        Entry* evict_entry = &cache_set.slots[evict_idx];
-        auto old_access_counter = cache_set.last_access[evict_idx];
-        cache_set.last_access[evict_idx] = ++access_counter;
-        if (evict_stats_debug) {
-            fprintf(stderr, "Evict [%u][%u][%u] %u\n\n", x, y, z, evict_idx);
-            if (old_access_counter > frame_begin_access_counter) {
-                fprintf(stderr, "\x1b[35m\x1b[1mCACHE THRASHING WARNING\n"
-                    "ChunkGroup (%i, %i, %i) and (%i, %i, %i) tried to use\n"
-                    "the same cache slot in one frame. If the victim cache\n"
-                    "is not big enough, this may lead to flickering\n"
-                    "(both will try to use the same memory in one frame, and\n"
-                    "this bypasses the per-frame synchronization.)\x1b[0m\n",
-                    evict_entry->group_coord.x,
-                    evict_entry->group_coord.y,
-                    evict_entry->group_coord.z,
-                    group_coord.x, group_coord.y, group_coord.z);
-            }
-        }
-
-        // Now we need to check the victim cache (if it exists),
-        // either for the Entry being searched for (which will be
-        // swapped back out of the victim cache), or for the oldest
-        // victim cache entry to overwrite.
-        bool found_in_victim_cache = false;
-        if (!victim_cache.empty()) {
-            VictimCacheSlot* victim_slot = &victim_cache[0];
-            min_access = victim_slot->last_access;
-
-            for (VictimCacheSlot& slot : victim_cache) {
-                if (slot.entry.world_id == world_id
-                and slot.entry.group_coord == group_coord) {
-                    victim_slot = &slot;
-                    found_in_victim_cache = true;
-                    break;
-                }
-                else if (slot.last_access < min_access) {
-                    victim_slot = &slot;
-                    min_access = slot.last_access;
-                }
-            }
-            using std::swap;
-            swap(victim_slot->entry, *evict_entry);
-            victim_slot->last_access = ++access_counter;
-        }
-
-        *p_valid = found_in_victim_cache;
-        return evict_entry;
-    }
-
-  public:
-    uint64_t eviction_count = 0;
-    // If possible, return a valid, updated Entry for the chunk group
-    // with the given group coordinate. See StoreRequest for control
-    // parameters.
-    //
-    // This requires a template parameter providing static functions:
-    //
-    // replace(glm::ivec3 group_coord, Entry*)
-    //
-    //     Fill the Entry with data for this new chunk group,
-    //     initializing OpenGL resources if needed.
-    //
-    // bool update(glm::ivec3 group_coord, Entry*, bool read_only)
-    //
-    //     Assuming replace was already called with identical
-    //     arguments, above, just re-upload any changed data, unless
-    //     read_only is true. Return true iff the Entry is
-    //     up-to-date (i.e. return false only when read_only was
-    //     true, but some changed data needed to be re-uploaded).
-    template <typename EntryFiller>
-    Entry* request(EntryFiller& filler,
-                   glm::ivec3 group_coord,
-                   StoreRequest* request)
-    {
-        assert(!request->read_only or request->may_fail);
-
-        bool valid;
-        Entry* entry =
-            cached_location(&valid,
-                            group_coord,
-                            bogus_world_id,
-                            request->may_fail);
-        request->was_in_store = valid;
-
-        // If the Entry in the array already corresponds to the given
-        // chunk group; just update it if we're allowed to (deal with
-        // dirty chunks) and return.
-        if (valid) {
-            bool success =
-                filler.update(group_coord, entry, request->read_only);
-            assert(success or request->read_only);
-            return success ? entry : nullptr;
-        }
-
-        // Otherwise, either fail if allowed, or evict and replace a
-        // cache entry with data for the new chunk group.
-        if (request->may_fail) return nullptr;
-
-        filler.replace(group_coord, entry);
-        assert(entry->world_id == bogus_world_id);
-        assert(entry->group_coord == group_coord);
-        ++eviction_count;
-        return entry;
-    }
-
-    // Thingie bolted-on after the fact to stretch my BaseStore class
-    // far past its original design goals. This is just returns a
-    // location for an entry with the given world/group_coord, but no
-    // update/initialization functions are run (except filling in the
-    // world_id and group_coord). StoreRequest handled as above.
-    //
-    // The raycast and mesh storage strategies are different enough
-    // now that I probably should stop trying to share the common code
-    // (or really factor out just the common LRU algorithm).
-    //
-    // (Actually, I'm now planning to fundamentally re-think my device
-    // management scheme to allow queueing work and having worker
-    // threads process the queue, in preparation for learning Vulkan).
-    Entry* request_no_update(glm::ivec3 group_coord,
-                             StoreRequest* request)
-    {
-        assert(!request->read_only or request->may_fail);
-
-        bool valid;
-        Entry* entry =
-            cached_location(&valid,
-                            group_coord,
-                            bogus_world_id,
-                            request->may_fail);
-        request->was_in_store = valid;
-
-        // If the Entry in the array already corresponds to the given
-        // chunk group; just update it if we're allowed to (deal with
-        // dirty chunks) and return.
-        if (valid) {
-            return entry;
-        }
-
-        // Otherwise, either fail if allowed, or evict and replace a
-        // cache entry with data for the new chunk group.
-        if (request->may_fail) return nullptr;
-
-        entry->world_id = bogus_world_id;
-        entry->group_coord = group_coord;
-        ++eviction_count;
-        return entry;
-    }
-
-    // Shrink/grow the cache, moving every cache entry (belonging to
-    // the specified world) to its correct location in the new cache.
-    // Entries for other worlds are skipped over.
-    //
-    // I put a noexcept because I don't really know how to properly
-    // handle exceptions in the middle of OpenGL code, not because
-    // this is guaranteed foolproof.
-    void set_modulus(uint32_t new_modulus) noexcept
-    {
-        uint64_t world_id = bogus_world_id;
-        if (new_modulus == modulus) return;
-        assert(int(new_modulus) > 0);
-
-        const uint32_t old_modulus = modulus;
-        modulus = new_modulus;
-
-        // Swap the new and old caches.
-        std::unique_ptr<CacheSet[]> old_cache_sets(
-            new CacheSet[new_modulus * new_modulus * new_modulus]);
-        using std::swap;
-        swap(old_cache_sets, cache_sets);
-
-        fprintf(stderr, "Set modulus to %i\n", int(modulus));
-
-        // Put the old entries in their correct place.
-        if (world_id != 0) {
-            const size_t end = old_modulus * old_modulus * old_modulus;
-            for (size_t i = 0; i < end; ++i) {
-                CacheSet& old_set = old_cache_sets[i];
-                for (size_t a = 0; a < Assoc; ++a) {
-                    Entry& old_entry = old_set.slots[a];
-                    if (old_entry.world_id != world_id) continue;
-
-                    bool valid;
-                    Entry* new_location = cached_location(
-                        &valid, old_entry.group_coord, world_id);
-                    swap(*new_location, old_entry);
-                    // Note: May want to preserve the old last_accessed time.
-                    // For now, each cached_location updates the access time,
-                    // so earlier repositioned cache entries are arbitrarily
-                    // considered lower priority later.
-                }
-            }
-        }
-    }
-
-    // Set the size of the victim cache. Same disclaimer about
-    // noexcept applies.
-    void resize_victim_cache(uint32_t cache_size) noexcept
-    {
-        // I've abandoned the victim cache for now (but for reasons
-        // I'll keep to myself I'm going to keep it here instead of
-        // relying on git history). Remove this assert and re-test if
-        // I want it again.
-        assert(cache_size == 0);
-        victim_cache.resize(cache_size);
-    }
-
-    // Performance debug code. Used to measure how many cache entries
-    // were read in this frame.
-    void stats_begin_frame()
-    {
-        eviction_count = 0;
-        frame_begin_access_counter = ++access_counter;
-    }
-
-    void print_stats_end_frame()
-    {
-        for (unsigned z = 0; z < modulus; ++z) {
-            for (unsigned y = 0; y < modulus; ++y) {
-                for (unsigned x = 0; x < modulus; ++x) {
-                    auto& sets =
-                        cache_sets[z * modulus * modulus + y * modulus + x];
-                    unsigned count = 0;
-                    for (size_t i = 0; i < Assoc; ++i) {
-                        auto access = sets.last_access[i];
-                        count += (access > frame_begin_access_counter);
-                    }
-                    if (count == Assoc) {
-                        fprintf(stderr, "\x1b[1m\x1b[31m");
-                    }
-                    fprintf(stderr, "[%u][%u][%u] %u/%u  ",
-                        z, y, x, count, Assoc);
-                    for (unsigned i = 0; i < count; ++i) fprintf(stderr, "*");
-                    fprintf(stderr, "\x1b[0m\n");
-                }
-            }
-        }
-        unsigned count = 0;
-        for (const VictimCacheSlot& slot : victim_cache) {
-            count += (slot.last_access > frame_begin_access_counter);
-        }
-        if (count == victim_cache.size()) {
-            fprintf(stderr, "\x1b[1m\x1b[31m");
-        }
-        fprintf(stderr, "Victim Cache %u/%u\x1b[0m\n",
-            count, unsigned(victim_cache.size()));
-        fprintf(stderr, "%i evictions\n", int(eviction_count));
-    }
-};
-
 // Staging buffer for the async cache of raycast chunk groups.
 struct RaycastStaging
 {
@@ -795,9 +521,6 @@ struct RaycastStaging
     }
 };
 
-// TODO base on AsyncCache.
-class MeshStore : public BaseStore<MeshEntry, 2, 8> { };
-
 // Renderer class. Stores state that is used by a voxel rendering
 // thread running for the lifetime of the Renderer.
 class Renderer
@@ -812,8 +535,13 @@ class Renderer
     CameraTransforms tr;
 
     // Device storage for mesh and raycast rendering respectively.
+    // These need to be unique_ptr both because of incomplete type
+    // errors and also since only the renderer thread (which is NOT
+    // the one calling the Renderer constructor) can intialize these
+    // properly.
+    class MeshStore;
     class RaycastStore;
-    MeshStore mesh_store;
+    std::unique_ptr<MeshStore> mesh_store;
     std::unique_ptr<RaycastStore> raycast_store;
 
     // Used for communicating with the render thread.
@@ -983,158 +711,68 @@ class Renderer
         return draw_raycast;
     }
 
-    // Given a chunk, fill in the mesh needed to render it. I also
-    // need the residue coordinate of the lower-left of the chunk
-    // (i.e.  the position of the chunk relative to the chunk group it
-    // is in) because the mesh is defined to be in residue
-    // coordinates.
-    static void fill_mesh_verts(ChunkMesh& mesh,
-                                const BinChunk& chunk,
-                                glm::ivec3 chunk_residue)
+    // Storage class for chunk group meshes.
+    class MeshStore : public AsyncCache<MeshEntry, MeshEntry>
     {
-        mesh.aabb = PackedAABB(chunk, chunk_residue);
+        // Back pointer to the Renderer.
+        Renderer* owner;
 
-        // Look up whether the voxel at the given coordinate
-        // (relative to the lower-left of this chunk) is visible.
-        // Act as if voxels outside the chunk are always invisible.
-        auto visible_block = [&chunk] (glm::ivec3 coord) -> bool
-        {
-            if (coord.x < 0 or coord.x >= chunk_size
-             or coord.y < 0 or coord.y >= chunk_size
-             or coord.z < 0 or coord.z >= chunk_size) return false;
-            // Note: the masking in Chunk::operator () won't mess up
-            // this coord. (I'm kind of violating my own comment in
-            // Chunk::operator() because coord won't actually be in
-            // the chunk unless that chunk is at (0,0,0)).
-            return chunk(coord) & visible_bit;
+        static constexpr AsyncCacheArgs args = {
+            2,          // modulus
+            8,          // associativity
+            32,         // staging buffers
+            1,          // worker threads
+            10,         // condvar timeout in milliseconds
         };
 
-        auto visit_voxel = [&mesh, &chunk, visible_block, chunk_residue]
-        (glm::ivec3 coord)
+      public:
+        MeshStore(Renderer* owner_) :
+            AsyncCache(args), owner(owner_)
         {
-            Voxel v = chunk(coord);
-            if (!v.visible) return;
 
-            uint8_t x = uint8_t(coord.x) + chunk_residue.x;
-            uint8_t y = uint8_t(coord.y) + chunk_residue.y;
-            uint8_t z = uint8_t(coord.z) + chunk_residue.z;
-
-            MeshVoxelVertex vert(v, x, y, z);
-
-            // Check which of the six faces are visible.
-            if (!visible_block(coord + glm::ivec3(-1, 0, 0))) {
-                vert.packed_residue_face_bits |= neg_x_face_bit;
-            }
-            if (!visible_block(coord + glm::ivec3(1, 0, 0))) {
-                vert.packed_residue_face_bits |= pos_x_face_bit;
-            }
-            if (!visible_block(coord + glm::ivec3(0, -1, 0))) {
-                vert.packed_residue_face_bits |= neg_y_face_bit;
-            }
-            if (!visible_block(coord + glm::ivec3(0, 1, 0))) {
-                vert.packed_residue_face_bits |= pos_y_face_bit;
-            }
-            if (!visible_block(coord + glm::ivec3(0, 0, -1))) {
-                vert.packed_residue_face_bits |= neg_z_face_bit;
-            }
-            if (!visible_block(coord + glm::ivec3(0, 0, 1))) {
-                vert.packed_residue_face_bits |= pos_z_face_bit;
-            }
-
-            // Add this voxel only if it's visible.
-            if ((vert.packed_residue_face_bits & all_face_bits) != 0) {
-                assert(mesh.vert_count < chunk_max_verts);
-                mesh.verts[mesh.vert_count++] = vert;
-            }
-        };
-
-        mesh.vert_count = 0;
-
-        for (int z = 0; z < chunk_size; ++z) {
-            for (int y = 0; y < chunk_size; ++y) {
-                for (int x = 0; x < chunk_size; ++x) {
-                    visit_voxel(glm::ivec3(x, y, z));
-                }
-            }
         }
-    }
+
+        // Read from disk/memory data for the given chunk group and
+        // fill in the mesh.
+        bool stage(MeshEntry* staging, glm::ivec3 group_coord) override
+        {
+            thread_local std::unique_ptr<ViewWorldCache> world_cache_ptr;
+
+            if (world_cache_ptr == nullptr) {
+                world_cache_ptr.reset(new ViewWorldCache(owner->world_handle));
+            }
+
+            auto& entry = world_cache_ptr->get_entry(group_coord);
+            const BinChunkGroup* group_ptr = entry.chunk_group_ptr.get();
+            if (group_ptr == nullptr) return false;
+
+            for (int zL = 0; zL < edge_chunks; ++zL) {
+            for (int yL = 0; yL < edge_chunks; ++yL) {
+            for (int xL = 0; xL < edge_chunks; ++xL) {
+                fill_chunk_mesh(&staging->vbo_map->chunks[zL][yL][xL],
+                                &staging->draw_data[zL][yL][xL],
+                                group_ptr->chunk_array[zL][yL][xL],
+                                glm::ivec3(xL, yL, zL) * chunk_size);
+            }
+            }
+            }
+            return true;
+        }
+
+        // Swap from staging buffer into the cache. Since they're both
+        // the same type, I just use the swap function. NOTE: I need
+        // to figure out a way to prevent still-in-use entries from
+        // being swapped out.
+        void swap_in(MeshEntry* staging,
+                     std::unique_ptr<MeshEntry>* p_uptr_entry) override
+        {
+            if (*p_uptr_entry == nullptr) p_uptr_entry->reset(new MeshEntry);
+
+            swap(**p_uptr_entry, *staging);
+        }
+    };
 
   public:
-    // Fill the given MeshEntry with mesh data for the given chunk
-    // group from the given world.
-    void replace(glm::ivec3 group_coord, MeshEntry* entry)
-    {
-        entry->world_id = bogus_world_id;
-        entry->group_coord = group_coord;
-
-        if (entry->vbo_name == 0) {
-            glGenBuffers(1, &entry->vbo_name);
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
-            glBufferStorage(GL_ARRAY_BUFFER,
-                            MeshEntry::vbo_bytes,
-                            nullptr,
-                            GL_DYNAMIC_STORAGE_BIT);
-            PANIC_IF_GL_ERROR;
-        }
-
-        // Parasitically depend on the update, using the AlwaysDirty
-        // parameter to get every chunk's mesh copied onto the new (or
-        // reused) VBO even if not marked dirty.
-        update<true>(group_coord, entry, false);
-    }
-
-    // Update the given mesh entry with new data from dirty chunks in
-    // the named chunk group, except report failure (return false) if
-    // read_only is true but dirty data needed to be re-uploaded
-    // anyway.
-    //
-    // Requires that the MeshEntry corresponds to the given chunk
-    // group of the given world.
-    template <bool AlwaysDirty=false>
-    bool update(glm::ivec3 group_coord,
-                       MeshEntry* entry,
-                       bool read_only)
-    {
-        assert(entry->world_id == bogus_world_id);
-        assert(entry->group_coord == group_coord);
-
-        auto vbo_name = entry->vbo_name;
-        assert(vbo_name != 0);
-
-        // Load in the needed chunk group.
-        set_current_chunk_group(group_coord);
-        assert(current_chunk_group != nullptr);
-
-        bool dirty = AlwaysDirty ||
-            current_chunk_group->dirty_flags & renderer_mesh_dirty_flag;
-
-        if (!dirty) return true;
-        if (read_only) return false;
-
-        // Recompute and reupload the mesh for every chunk and reset
-        // the dirty flag BEFORE reading (handles data races better).
-        current_chunk_group->dirty_flags &= ~renderer_mesh_dirty_flag;
-        for (int z = 0; z < edge_chunks; ++z) {
-            for (int y = 0; y < edge_chunks; ++y) {
-                for (int x = 0; x < edge_chunks; ++x) {
-                    const BinChunk& chunk = current_chunk_group
-                                          ->chunk_array[z][y][x];
-                    ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                    glm::ivec3 residue = glm::ivec3(x,y,z) * chunk_size;
-                    fill_mesh_verts(mesh, chunk, residue);
-                    glNamedBufferSubData(vbo_name,
-                                         entry->byte_offset(x, y, z),
-                                         sizeof mesh.verts[0] * mesh.vert_count,
-                                         mesh.verts);
-                }
-            }
-        }
-
-        PANIC_IF_GL_ERROR;
-        return true;
-    }
-
-  private:
     // Render, to the current framebuffer, chunks near the camera
     // using the conventional mesh-based algorithm.
     //
@@ -1145,8 +783,7 @@ class Renderer
     // hide the hidden faces.
     void render_world_mesh_step() noexcept
     {
-        MeshStore& store = mesh_store;
-        store.stats_begin_frame();
+        MeshStore& store = *mesh_store;
 
         glm::mat4 residue_vp_matrix = tr.residue_vp_matrix;
         glm::vec3 eye_residue = tr.eye_residue;
@@ -1194,19 +831,15 @@ class Renderer
         glUniform1i(fog_enabled_id, tr.use_fog);
         glUniform1i(black_fog_id, tr.use_black_fog);
         PANIC_IF_GL_ERROR;
-        StoreRequest request;
         unsigned drawn_group_count = 0;
         unsigned drawn_chunk_count = 0;
 
-        auto draw_group = [&] (glm::ivec3 group_coord)
+        auto draw_group = [&] (glm::ivec3 group_coord, const MeshEntry& entry)
         {
-            MeshEntry* entry = store.request(*this, group_coord, &request);
-
-            assert(entry->vbo_name != 0);
-            glBindBuffer(GL_ARRAY_BUFFER, entry->vbo_name);
+            assert(entry.vbo_name != 0);
+            glBindBuffer(GL_ARRAY_BUFFER, entry.vbo_name);
 
             // Bind instanced (per-voxel) attributes.
-            // TODO: Maybe make one VAO per MeshEntry?
             glVertexAttribIPointer(
                 packed_vertex_idx,
                 1,
@@ -1244,13 +877,13 @@ class Renderer
             for (int z = 0; z < edge_chunks; ++z) {
                 for (int y = 0; y < edge_chunks; ++y) {
                     for (int x = 0; x < edge_chunks; ++x) {
-                        PackedAABB aabb = entry->mesh_array[z][y][x].aabb;
+                        auto draw_data = entry.draw_data[z][y][x];
+                        PackedAABB aabb = draw_data.aabb;
                         if (decide_chunk(group_coord, aabb) != draw_mesh) {
                             continue;
                         }
 
-                        const ChunkMesh& mesh = entry->mesh_array[z][y][x];
-                        if (mesh.vert_count == 0) continue;
+                        if (draw_data.vert_count == 0) continue;
 
                         // Need to choose the base instance because
                         // every chunk's data is at a different offset
@@ -1262,8 +895,8 @@ class Renderer
                         glDrawArraysInstancedBaseInstance(
                             GL_TRIANGLES,
                             0, 36,
-                            mesh.vert_count,
-                            entry->vert_offset(x, y, z));
+                            draw_data.vert_count,
+                            entry.vert_offset(x, y, z));
                             // ^^^ Instance offset, depends on chunk.
                         ++drawn_chunk_count;
                     }
@@ -1276,7 +909,7 @@ class Renderer
         float squared_thresh = raycast_threshold * raycast_threshold;
 
         glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(tr.far_plane);
+        glm::dvec3 disp(raycast_threshold);
         split_coordinate(tr.eye - disp, &group_coord_low);
         split_coordinate(tr.eye + disp, &group_coord_high);
 
@@ -1294,20 +927,33 @@ class Renderer
             // cannot possibly contain chunks near enough to be drawn
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
-            draw_group(group_coord);
+
+            // Lookup the needed entry; scheduling if missing or dirty.
+            // Draw the group if an entry for it is found.
+            MeshEntry* entry = store.request_entry(group_coord);
+
+            if (entry == nullptr) {
+                store.enqueue(group_coord);
+            }
+            else {
+                auto bit = renderer_mesh_dirty_flag;
+                if (current_chunk_group->dirty_flags.load() & bit) {
+                    store.enqueue(group_coord);
+                    current_chunk_group->dirty_flags &= ~bit;
+                }
+                draw_group(group_coord, *entry);
+            }
         }
         }
         }
+
+        // Handle requests for new chunk groups.
+        store.stage_from_queue(8);
+        store.swap_in_from_staging(8);
 
         glBindVertexArray(0);
-
-        if (evict_stats_debug) {
-            fprintf(stderr, "\x1b[36mMeshStore stats:\x1b[0m\n");
-            store.print_stats_end_frame();
-            fprintf(stderr, "Mesh-drawn chunks: %u    groups: %u\n",
-                drawn_chunk_count, drawn_group_count);
-        }
     }
+  private:
 
     // Now time to write the AABB-raycasting renderer. Here goes...
 
@@ -1455,6 +1101,7 @@ class Renderer
         }
     };
 
+  public:
     // Render, to the current framebuffer, chunks around the camera
     // using the AABB-raycast algorithm. Chunks that are near
     // enough to have been drawn using the mesh algorithm will
@@ -1535,7 +1182,7 @@ class Renderer
                 set_current_chunk_group(group_coord);
                 assert(current_chunk_group != nullptr);
                 auto bit = renderer_raycast_dirty_flag;
-                if ((current_chunk_group->dirty_flags & bit)) {
+                if ((current_chunk_group->dirty_flags.load() & bit)) {
                     store.enqueue(group_coord);
                     current_chunk_group->dirty_flags &= ~bit;
                 }
@@ -1552,6 +1199,7 @@ class Renderer
         raycast_store->stage_from_queue(80);
     }
 
+  private:
     // Draw the given list of RaycastEntry/group coordinate pairs.
     void draw_raycast_entries(
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>& entries)
@@ -1751,6 +1399,7 @@ class Renderer
     {
         renderer->window_ptr->gl_make_current();
 
+        renderer->mesh_store.reset(new MeshStore(renderer));
         renderer->raycast_store.reset(new RaycastStore(renderer));
 
         glEnable(GL_DEPTH_TEST);
