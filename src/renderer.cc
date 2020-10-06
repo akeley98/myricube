@@ -803,10 +803,11 @@ struct StagingBuffer
         if (ssbo_name == 0) {
             glCreateBuffers(1, &ssbo_name);
             auto sz = sizeof(uint32_t) * group_size * group_size * group_size;
-            auto flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
+            auto flags = GL_MAP_WRITE_BIT
+                       | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
             glNamedBufferStorage(ssbo_name, sz, nullptr, flags);
             flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
-                  | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_WRITE_BIT;
+                  | GL_MAP_COHERENT_BIT | GL_MAP_WRITE_BIT;
             mapped_ssbo = static_cast<ChunkGroupVoxels*>(glMapNamedBufferRange(
                 ssbo_name, 0, sz, flags));
             PANIC_IF_GL_ERROR;
@@ -1373,7 +1374,7 @@ class Renderer
     //    This is also when we mark the chunks as non-dirty, as at this
     //    point we're committed to updating the GPU storage.
     //
-    // 3. Flush SSBO and dispatch compute.
+    // 3. Dispatch compute.
     //
     // 4. Swap the write_staging_buffers and read_staging_buffers. Wait a frame.
     //
@@ -1586,13 +1587,12 @@ class Renderer
         RaycastStore& store = raycast_store;
         for (StagingBuffer& sb : store.write_staging_buffers) {
             if (sb.world_id == 0) continue;
-            auto sz = group_size * group_size * group_size * sizeof(uint32_t);
             assert(sb.ssbo_name != 0);
-            glFlushMappedNamedBufferRange(sb.ssbo_name, 0, sz);
             PANIC_IF_GL_ERROR;
 
-            // Now that the buffer is flushed, we can bind the source buffer
-            // and output image and dispatch the compute shader.
+            // Now that the coherent buffer is filled, we can bind the
+            // source buffer and output image and dispatch the compute
+            // shader.
             glBindBufferBase(
                 GL_SHADER_STORAGE_BUFFER,
                 chunk_group_voxels_binding_index,
