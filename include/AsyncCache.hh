@@ -219,8 +219,9 @@ class AsyncCache
                 if (buffer->state == staging_unprocessed) {
                     if (thread_exit_flag) return;
 
-                    stage(&buffer->data, buffer->coord);
-                    buffer->state = staging_ready_to_swap;
+                    bool success = stage(&buffer->data, buffer->coord);
+                    buffer->state = success
+                                  ? staging_ready_to_swap : staging_unused;
                     ++processed_count;
                 }
             }
@@ -309,6 +310,10 @@ class AsyncCache
     // Push a coordinate onto the FIFO of entries to load/update.
     // This push is not done if the coordinate is already in the
     // queue.
+    //
+    // TODO: I think this queue could use some improvement: make the
+    // linear search better, and find a way to cancel staging
+    // something if it doesn't seem to really matter anymore.
     void enqueue(glm::ivec3 coord)
     {
         for (glm::ivec3 queue_coord : queue) {

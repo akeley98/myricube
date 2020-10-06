@@ -81,7 +81,7 @@ class SyncCamera
     int frame_x = 1, frame_y = 1;
 
     // Maximum number of new chunk groups added to GPU memory per frame.
-    int max_frame_new_chunk_groups = 10;
+    int max_frame_new_chunk_groups = 5;
 
     // Fog setting.
     bool fog_enabled = true;
