@@ -279,7 +279,7 @@ class AsyncCache
     // they don't fit).
     void set_modulus(size_t new_modulus)
     {
-        if (new_modulus = modulus) return;
+        if (new_modulus == modulus) return;
         assert(new_modulus > 0);
 
         std::vector<CacheSlot> new_cache_slots(
