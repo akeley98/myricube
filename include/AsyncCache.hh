@@ -20,7 +20,7 @@
 //    AsyncCacheArgs::associativity-many slots; the least-recently
 //    used one is evicted.
 //
-// NOTE: This "management" is really just a high-level scheduler: this
+// NOTE: This "management" is really just a high-level scheduler. This
 // class never directly interacts with the graphics API; this is
 // handled by the actual data types passed in as template parameters
 // (which hopefully have useful destructors).
@@ -279,14 +279,19 @@ class AsyncCache
     // they don't fit).
     void set_modulus(size_t new_modulus)
     {
+        if (new_modulus = modulus) return;
+        assert(new_modulus > 0);
+
         std::vector<CacheSlot> new_cache_slots(
             new_modulus * new_modulus * new_modulus * associativity);
-        
+
+        // Just put every valid entry in the correct location in the
+        // new cache.
         for (CacheSlot& slot : cache_slots) {
             CacheSlot* set_begin;
             CacheSlot* set_end;
             if (slot.nonzero_last_access == 0) continue;
-            
+
             get_cache_set(
                 &new_cache_slots,
                 new_modulus,
@@ -295,7 +300,8 @@ class AsyncCache
             CacheSlot* to_evict = evict_slot(set_begin, set_end);
             *to_evict = std::move(slot);
         }
-        
+
+        // Only modify the class state when we're guaranteed to succeed.
         cache_slots = std::move(new_cache_slots);
         modulus = new_modulus;
     };
