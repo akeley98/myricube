@@ -61,11 +61,6 @@ Window::Window(OnWindowResize on_window_resize_)
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetScrollCallback(window, scroll_callback);
-
-    gl_make_current();
-    if (!gladLoadGL()) {
-        panic("gladLoadGL failure");
-    }
     glfwGetFramebufferSize(window, &frame_x, &frame_y);
     on_window_resize(frame_x, frame_y);
 }
@@ -86,9 +81,15 @@ void Window::set_title(const char* title)
     glfwSetWindowTitle(window, title);
 }
 
-void Window::gl_make_current() const
+void Window::gl_make_current()
 {
     glfwMakeContextCurrent(window);
+    if (!glad_loaded) {
+        if (!gladLoadGL()) {
+            panic("gladLoadGL failed");
+        }
+        glad_loaded = true;
+    }
 }
 
 bool Window::update_events(float* out_dt)

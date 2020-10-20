@@ -239,6 +239,7 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
             panic(f + std::string(" should end in .frag or .geom or .vert or .comp"));
         }
         glShaderSource(id, 1, &source_c_str, nullptr);
+        fprintf(stderr, "shader id=%i\n", int(id));
 
         PANIC_IF_GL_ERROR;
 

@@ -72,6 +72,8 @@ class Window
     // Current size of the window framebuffer.
     int frame_x = 1920, frame_y = 1080;
 
+    bool glad_loaded = false;
+
     // Mapping from names of key targets to the actual key target structures.
     std::unordered_map<std::string, KeyTarget> key_target_map;
 
@@ -117,7 +119,7 @@ class Window
     }
 
     // Make the OpenGL context of this window current.
-    void gl_make_current() const;
+    void gl_make_current();
 
     // Provide a name for the given key target. Physical keys can then
     // be bound to this name.

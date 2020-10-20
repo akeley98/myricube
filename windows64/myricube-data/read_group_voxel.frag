@@ -46,6 +46,5 @@ vec4 read_group_voxel(ivec3 residue)
     if (clamp(residue, ivec3(0), ivec3(GROUP_SIZE - 1)) != residue) {
         return vec4(1, 1, 0, 1);
     }
-    vec3 tex_coord = (1.0 / GROUP_SIZE) * (vec3(residue) + vec3(0.5));
-    return texture3DLod(chunk_group_texture, tex_coord, 0);
+    return texelFetch(chunk_group_texture, residue, 0);
 }
