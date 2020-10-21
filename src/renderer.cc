@@ -988,6 +988,8 @@ class Renderer
     //    compute shaders (swap_in_from_staging) and stage_from_queue.
     //    HONESTLY, pretty fragile, but again: Vulkan.
     //
+    //    THIS IS VERY LIKELY NOT TRUE + THE REASON IT'S NOT WORKING
+    //
     // TODO: Handle texture being written-to while a drawing command
     // is still reading from it!!!
     class RaycastStore : public AsyncCache<RaycastStaging, RaycastEntry>
@@ -1194,7 +1196,9 @@ class Renderer
 
         // Now start filling the new staging buffers once the compute
         // shaders from earlier are done.
-        glClientWaitSync(compute_sync, GL_SYNC_FLUSH_COMMANDS_BIT, 2e7);
+        glClientWaitSync(compute_sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
+        glWaitSync(compute_sync, 0, GL_TIMEOUT_IGNORED);
+        glDeleteSync(compute_sync);
         PANIC_IF_GL_ERROR;
         raycast_store->stage_from_queue(80);
     }
