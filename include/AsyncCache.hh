@@ -52,8 +52,6 @@
 
 namespace myricube {
 
-constexpr uint64_t safety_frame_count = 3;
-
 struct AsyncCacheArgs
 {
     size_t modulus = 4;
@@ -61,6 +59,7 @@ struct AsyncCacheArgs
     size_t staging_buffers = 64;
     size_t worker_threads = 2;
     size_t condvar_timeout_ms = 10;
+    uint64_t safety_frame_count = 3;
 };
 
 // Template class that implements the essay in the header comment.
@@ -140,6 +139,7 @@ class AsyncCache
     size_t modulus = 0;
     size_t associativity = 0;
     uint64_t frame_counter = 0;
+    uint64_t safety_frame_count = 0;
     std::vector<CacheSlot> cache_slots;
     CacheSlot extra_slot;
 
@@ -279,6 +279,8 @@ class AsyncCache
         condvar_timeout_ms = args.condvar_timeout_ms;
         worker_thread_count = args.worker_threads;
         assert(args.worker_threads > 0);
+
+        safety_frame_count = args.safety_frame_count;
 
         // Now that everything is set up, we can go ahead and launch
         // the worker threads with pointers back to this object.

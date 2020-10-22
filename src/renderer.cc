@@ -388,32 +388,14 @@ struct RaycastEntry
     GLuint vbo_name = 0;
 
     // Memory-map view of VBO.
-    AABBs* vbo_mapping = nullptr;
+    AABBs* mapped_aabb = nullptr;
 
     // OpenGL name for the 3D voxels texture. 0 when not yet allocated.
-    // Access through wait_ready_bind_texture.
     GLuint texture_name_ = 0;
 
-    // If non-null, need to wait on this before binding the texture.
-    // This is to give the compute shader time to finish writing to
-    // the texture.
-    GLsync sync = nullptr;
-
-    void wait_ready()
-    {
-        if (sync != nullptr) {
-            glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(sync);
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT
-                          | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-            sync = nullptr;
-        }
-    }
-
-    void wait_ready_bind_texture()
+    void bind_texture()
     {
         assert(texture_name_ != 0);
-        wait_ready();
         glBindTexture(GL_TEXTURE_3D, texture_name_);
     }
 
@@ -431,6 +413,18 @@ struct RaycastEntry
         glTexStorage3D(
             GL_TEXTURE_3D, 1, GL_RGBA8, group_size, group_size, group_size);
         PANIC_IF_GL_ERROR;
+
+        auto storage_flags = GL_MAP_WRITE_BIT
+                           | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        auto map_flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
+              | GL_MAP_COHERENT_BIT | GL_MAP_WRITE_BIT;
+
+        glCreateBuffers(1, &vbo_name);
+        glNamedBufferStorage(vbo_name, sizeof(AABBs),
+            nullptr, storage_flags);
+        mapped_aabb = static_cast<AABBs*>(glMapNamedBufferRange(
+            vbo_name, 0, sizeof(AABBs), map_flags));
+        PANIC_IF_GL_ERROR;
     }
 
     ~RaycastEntry()
@@ -438,6 +432,7 @@ struct RaycastEntry
         GLuint buffers[1] = { vbo_name };
         glDeleteBuffers(1, buffers);
         vbo_name = 0;
+        mapped_aabb = nullptr;
         glDeleteTextures(1, &texture_name_);
         texture_name_ = 0;
     }
@@ -448,18 +443,17 @@ struct RaycastEntry
 // Staging buffer for the async cache of raycast chunk groups.
 struct RaycastStaging
 {
-    // OpenGL name of the instanced VBO storing the aabb_array. 0 when
-    // not yet allocated.
-    GLuint vbo_name = 0;
-
-    // Persistent mapped AABB VBO pointer.
-    AABBs* mapped_aabb = nullptr;
-
-    // OpenGL name of the staging SSBO.
+   // OpenGL name of the staging SSBO.
     GLuint ssbo_name = 0;
 
     // Persistent mapped SSBO pointer.
     ChunkGroupVoxels* mapped_ssbo = nullptr;
+
+    // Set to non-null once the compute shader is dispatched.
+    GLsync sync = nullptr;
+
+    // RaycastEntry to be created.
+    std::unique_ptr<RaycastEntry> entry;
 
     // Since this will be filled by worker threads (not owning a GL
     // context), we need to make sure the buffer is 100% ready to go
@@ -477,12 +471,8 @@ struct RaycastStaging
         auto map_flags = GL_MAP_PERSISTENT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
               | GL_MAP_COHERENT_BIT | GL_MAP_WRITE_BIT;
 
-        if (vbo_name == 0) {
-            glCreateBuffers(1, &vbo_name);
-            glNamedBufferStorage(vbo_name, sizeof(AABBs),
-                nullptr, storage_flags);
-            mapped_aabb = static_cast<AABBs*>(glMapNamedBufferRange(
-                vbo_name, 0, sizeof(AABBs), map_flags));
+        if (entry == nullptr) {
+            entry.reset(new RaycastEntry);
         }
         if (ssbo_name == 0) {
             glCreateBuffers(1, &ssbo_name);
@@ -498,7 +488,6 @@ struct RaycastStaging
 
     ~RaycastStaging()
     {
-        glDeleteBuffers(1, &vbo_name);
         glDeleteBuffers(1, &ssbo_name);
     }
 };
@@ -951,31 +940,11 @@ class Renderer
     //
     // Once the worker thread marks a staging buffer as fully loaded,
     // it can be swapped into the main cache. This is done with a GL
-    // compute shader using imageStore to transfer the data from
-    // the SSBO to the texture. The main thread dispatches the shader.
-    //
-    // This unfortunately is a source of ugliness -- I'm really designing
-    // this new cache with Vulkan in mind, where every step can be done
-    // on the worker thread and a fully-ready texture can be swapped in.
-    // So, for now, I have to externally synchronize a few of things:
-    //
-    // 1. Prevent binding the texture until the compute shader is
-    //    fully finished (and a memory barrier issued). This is taken
-    //    care of by issuing a glFenceSync with glDispatchCompute and
-    //    by wait_ready_bind_texture.
-    //
-    // 2. I have to make sure the staging buffer isn't re-used before
-    //    the compute shader reading from it is done. Fortunately, I
-    //    know the AsyncCache implementation and nothing will be
-    //    assigned to a staging buffer except through
-    //    stage_from_queue. So just stick a fence sync between the
-    //    compute shaders (swap_in_from_staging) and stage_from_queue.
-    //    HONESTLY, pretty fragile, but again: Vulkan.
-    //
-    //    THIS IS VERY LIKELY NOT TRUE + THE REASON IT'S NOT WORKING
-    //
-    // TODO: Handle texture being written-to while a drawing command
-    // is still reading from it!!!
+    // compute shader using imageStore to transfer the data from the
+    // SSBO to the texture. The main thread dispatches the shader.
+    // NOTE: This is really done in two steps (two calls of
+    // swap_in_from_staging) to give the compute shader time to
+    // finish. See RaycastStaging::sync at time of writing.
     class RaycastStore : public AsyncCache<RaycastStaging, RaycastEntry>
     {
         // Back-pointer to the Renderer owning this RaycastStore.
@@ -1035,56 +1004,75 @@ class Renderer
                 // Also load the AABB for this chunk.
                 auto chunk_residue = glm::ivec3(xL, yL, zL) * chunk_size;
                 PackedAABB aabb(bin_chunk, chunk_residue);
-                stage->mapped_aabb->aabb_array[zL][yL][xL] = aabb;
+                stage->entry->mapped_aabb->aabb_array[zL][yL][xL] = aabb;
             }
             }
             }
             return true;
         }
 
-        // Dispatch the compute shader to transfer data from SSBO in
+        // Swapping into the cache is done in two steps:
+        //
+        // 1. Dispatch the compute shader to transfer data from SSBO in
         // the staging buffer to the texture in the cache entry.
-        // Also swap the AABB VBO with that of the staging buffer
-        // (re-initializing the staging buffer if needed).
+        //
+        // 2. Wait for that compute shader to finish, then swap into
+        // the cache.
         bool swap_in(
             RaycastStaging* staging,
             std::unique_ptr<RaycastEntry>* p_uptr_entry) override
         {
-            glUseProgram(program_id);
-            // Hook up the SSBO binding to the SSBO index that will
-            // be used to deliver voxel data.
-            glShaderStorageBlockBinding(program_id,
-                chunk_group_voxels_program_index,
-                chunk_group_voxels_binding_index);
-            // Hook up the out_image to the correct image unit.
-            glUniform1i(staging_image_program_index, staging_image_unit);
+            // Step 1
+            if (staging->sync == nullptr) {
+                glUseProgram(program_id);
+                // Hook up the SSBO binding to the SSBO index that will
+                // be used to deliver voxel data.
+                glShaderStorageBlockBinding(program_id,
+                    chunk_group_voxels_program_index,
+                    chunk_group_voxels_binding_index);
+                // Hook up the out_image to the correct image unit.
+                glUniform1i(staging_image_program_index, staging_image_unit);
 
-            // Bind the correct texture image.
-            if (*p_uptr_entry == nullptr) {
-                p_uptr_entry->reset(new RaycastEntry);
+                // Bind the correct texture image.
+                if (*p_uptr_entry == nullptr) {
+                    p_uptr_entry->reset(new RaycastEntry);
+                }
+                RaycastEntry& entry = *staging->entry;
+
+                glBindBufferBase(
+                    GL_SHADER_STORAGE_BUFFER,
+                    chunk_group_voxels_binding_index,
+                    staging->ssbo_name);
+                glBindImageTexture(
+                    staging_image_unit,
+                    entry.texture_name_,
+                    0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
+
+                glDispatchCompute(1, 2, 2);
+                staging->sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                assert(staging->sync != nullptr);
+                return false; // Not yet done.
             }
-            RaycastEntry& entry = **p_uptr_entry;
+            // Step 2
+            else {
+                RaycastEntry& entry = *staging->entry;
 
-            glBindBufferBase(
-                GL_SHADER_STORAGE_BUFFER,
-                chunk_group_voxels_binding_index,
-                staging->ssbo_name);
-            glBindImageTexture(
-                staging_image_unit,
-                entry.texture_name_,
-                0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
+                // Wait for compute shader to finish.
+                // I *think* I need the client wait too because the client
+                // writes to the staging SSBO.
+                glWaitSync(staging->sync, 0, GL_TIMEOUT_IGNORED);
+                glClientWaitSync(staging->sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
+                glDeleteSync(staging->sync);
+                glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT
+                              | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                staging->sync = nullptr;
 
-            // Dispatch compute, adding the sync as specified in the
-            // "big picture" comment.
-            glDispatchCompute(1, 2, 2);
-            glDeleteSync(entry.sync);
-            entry.sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-
-            // Swap AABB buffer.
-            std::swap(staging->vbo_name, entry.vbo_name);
-            std::swap(staging->mapped_aabb, entry.vbo_mapping);
-            staging->re_init();
-            return true;
+                // Ready. Swap into the cache.
+                std::swap(staging->entry, *p_uptr_entry);
+                staging->re_init();
+                return true;
+            }
+            assert(0);
         }
     };
 
@@ -1147,10 +1135,8 @@ class Renderer
                       lt_depth);
         }
 
-        // Dispatch compute shaders mentioned earlier, with a fence
-        // sync as explained.
+        // Dispatch compute shaders mentioned earlier.
         raycast_store->swap_in_from_staging(80);
-        GLsync compute_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
         // Now collect all the RaycastEntry objects we will draw,
         // scheduling loading new/dirty entries as we go along.
@@ -1180,11 +1166,7 @@ class Renderer
         // Draw all the raycast entries.
         draw_raycast_entries(entries);
 
-        // Now start filling the new staging buffers once the compute
-        // shaders from earlier are done.
-        glClientWaitSync(compute_sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
-        glWaitSync(compute_sync, 0, GL_TIMEOUT_IGNORED);
-        glDeleteSync(compute_sync);
+        // Now start filling the new staging buffers.
         PANIC_IF_GL_ERROR;
         raycast_store->stage_from_queue(80);
     }
@@ -1309,7 +1291,7 @@ class Renderer
             PANIC_IF_GL_ERROR;
 
             // Bind the relevant chunk group texture.
-            entry->wait_ready_bind_texture();
+            entry->bind_texture();
 
             // Draw all edge_chunks^3 chunks in the chunk group.
             // As specified in raycast.vert, need 14 triangle strip drawn.
