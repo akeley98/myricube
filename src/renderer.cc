@@ -42,15 +42,6 @@ constexpr int raycast_threshold = 170;
 // MeshStore has some latency in loading meshes).
 constexpr int mesh_load_threshold = 10 + raycast_threshold;
 
-// Extract color from voxel and pack as 32-bit integer.
-inline uint32_t to_packed_color(Voxel v)
-{
-    return uint32_t(v.blue) << blue_shift
-         | uint32_t(v.green) << green_shift
-         | uint32_t(v.red) << red_shift
-         | (v.visible ? visible_bit : 0);
-}
-
 // For memory efficiency, the AABB of a chunk is stored in packed
 // format on the GPU.
 struct PackedAABB
@@ -525,8 +516,6 @@ class Renderer
     std::atomic<double> fps { 0 };
     std::atomic<double> frame_time { 0 };
 
-    // Declare thread LAST so that thread starts with Renderer fully
-    // initialized.
     std::thread thread;
   public:
     Renderer(
@@ -538,7 +527,10 @@ class Renderer
         sync_camera_ptr(std::move(sync_camera_)),
         world_handle(world_),
         world_cache(world_),
-        thread(render_loop, this) { }
+        thread()
+    {
+        thread = std::thread(render_loop, this);
+    }
 
     ~Renderer()
     {
@@ -1368,7 +1360,7 @@ class Renderer
 
     void draw_frame()
     {
-        tr = sync_camera_ptr->get_transforms_gl();
+        tr = sync_camera_ptr->get_transforms_vk(); // See glClipControl
         int x = tr.frame_x, y = tr.frame_y;
 
         glViewport(0, 0, x, y);
@@ -1400,6 +1392,8 @@ class Renderer
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
+        glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
+        glFrontFace(GL_CW);
 
         // In principle we just have to draw frames in a loop now, but
         // this function is bigger than you expect since I want to

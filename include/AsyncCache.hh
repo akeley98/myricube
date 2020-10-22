@@ -199,7 +199,6 @@ class AsyncCache
         bool can_evict =
             to_evict->last_access_frame == 0 or
             to_evict->last_access_frame + safety_frame_count <= frame_counter;
-        if (!can_evict) fprintf(stderr, "\"Temporary\": !can_evict\n");
         return can_evict ? to_evict : nullptr;
     }
 
