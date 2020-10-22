@@ -517,6 +517,7 @@ class Renderer
     std::atomic<double> frame_time { 0 };
 
     std::thread thread;
+
   public:
     Renderer(
         std::shared_ptr<Window> window_,
@@ -741,10 +742,74 @@ class Renderer
         }
     };
 
-  public:
     // GL objects needed for mesh rendering.
     GLuint mesh_vao = 0;
     GLuint mesh_program = 0;
+
+    // Render, to the current framebuffer, chunks near the camera
+    // using the conventional mesh-based algorithm.
+    //
+    // Each MeshEntry contains a list of visible voxels: their residue
+    // coordinates, colors, and which of their 6 faces are visible.
+    // My plan is to use instanced rendering to draw a bunch of unit
+    // cubes in the correct locations, using degenerate triangles to
+    // hide the hidden faces.
+    //
+    // Here we just collect a list of MeshEntries near the camera to
+    // draw.  We shunt off the real work to draw_mesh_entries.
+    void render_world_mesh_step() noexcept
+    {
+        std::vector<std::pair<MeshEntry*, glm::ivec3>> entries;
+        MeshStore& store = *mesh_store;
+        store.begin_frame();
+
+        float squared_thresh = mesh_load_threshold * mesh_load_threshold;
+
+        glm::ivec3 group_coord_low, group_coord_high;
+        glm::dvec3 disp(mesh_load_threshold);
+        split_coordinate(tr.eye - disp, &group_coord_low);
+        split_coordinate(tr.eye + disp, &group_coord_high);
+
+        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
+        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
+        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
+            auto group_coord = glm::ivec3(xH, yH, zH);
+
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
+
+            float min_squared_dist;
+            bool cull = cull_group(group_coord, &min_squared_dist);
+            // Skip culled chunk groups or those so far away that they
+            // cannot possibly contain chunks near enough to be drawn
+            // using the mesh renderer.
+            if (cull or min_squared_dist >= squared_thresh) continue;
+
+            // Lookup the needed entry; scheduling if missing or dirty.
+            // Draw the group if an entry for it is found.
+            MeshEntry* entry = store.request_entry(group_coord);
+
+            if (entry == nullptr) {
+                store.enqueue(group_coord);
+            }
+            else {
+                auto bit = renderer_mesh_dirty_flag;
+                if (current_chunk_group->dirty_flags.load() & bit) {
+                    store.enqueue(group_coord);
+                    current_chunk_group->dirty_flags &= ~bit;
+                }
+                entries.emplace_back(entry, group_coord);
+            }
+        }
+        }
+        }
+
+        draw_mesh_entries(entries);
+
+        // Handle requests for new chunk groups.
+        store.stage_from_queue(8);
+        store.swap_in_from_staging(8);
+    }
 
     struct MeshUniformIDs {
         GLint mvp_matrix;
@@ -758,20 +823,10 @@ class Renderer
         GLint black_fog;
     } mesh_uniform_ids;
 
-    // Render, to the current framebuffer, chunks near the camera
-    // using the conventional mesh-based algorithm.
-    //
-    // Each MeshEntry contains a list of visible voxels: their residue
-    // coordinates, colors, and which of their 6 faces are visible.
-    // My plan is to use instanced rendering to draw a bunch of unit
-    // cubes in the correct locations, using degenerate triangles to
-    // hide the hidden faces.
-    void render_world_mesh_step() noexcept
+    void draw_mesh_entries(
+        const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries)
     {
         auto& u = mesh_uniform_ids;
-        MeshStore& store = *mesh_store;
-        store.begin_frame();
-
         glm::mat4 residue_vp_matrix = tr.residue_vp_matrix;
         glm::vec3 eye_residue = tr.eye_residue;
         glm::ivec3 eye_group = tr.eye_group;
@@ -809,7 +864,7 @@ class Renderer
         unsigned drawn_group_count = 0;
         unsigned drawn_chunk_count = 0;
 
-        auto draw_group = [&] (glm::ivec3 group_coord, const MeshEntry& entry)
+        auto draw_group = [&] (const MeshEntry& entry, glm::ivec3 group_coord)
         {
             assert(entry.vbo_name != 0);
             glBindBuffer(GL_ARRAY_BUFFER, entry.vbo_name);
@@ -881,54 +936,12 @@ class Renderer
             PANIC_IF_GL_ERROR;
         };
 
-        float squared_thresh = mesh_load_threshold * mesh_load_threshold;
-
-        glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(mesh_load_threshold);
-        split_coordinate(tr.eye - disp, &group_coord_low);
-        split_coordinate(tr.eye + disp, &group_coord_high);
-
-        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
-        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
-        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
-            auto group_coord = glm::ivec3(xH, yH, zH);
-
-            set_current_chunk_group(group_coord);
-            if (current_chunk_group == nullptr) continue;
-
-            float min_squared_dist;
-            bool cull = cull_group(group_coord, &min_squared_dist);
-            // Skip culled chunk groups or those so far away that they
-            // cannot possibly contain chunks near enough to be drawn
-            // using the mesh renderer.
-            if (cull or min_squared_dist >= squared_thresh) continue;
-
-            // Lookup the needed entry; scheduling if missing or dirty.
-            // Draw the group if an entry for it is found.
-            MeshEntry* entry = store.request_entry(group_coord);
-
-            if (entry == nullptr) {
-                store.enqueue(group_coord);
-            }
-            else {
-                auto bit = renderer_mesh_dirty_flag;
-                if (current_chunk_group->dirty_flags.load() & bit) {
-                    store.enqueue(group_coord);
-                    current_chunk_group->dirty_flags &= ~bit;
-                }
-                draw_group(group_coord, *entry);
-            }
+        for (auto pair : entries) {
+            draw_group(*pair.first, pair.second);
         }
-        }
-        }
-
-        // Handle requests for new chunk groups.
-        store.stage_from_queue(8);
-        store.swap_in_from_staging(8);
 
         glBindVertexArray(0);
     }
-  private:
 
     // Now time to write the AABB-raycasting renderer. Here goes...
 
@@ -1076,7 +1089,6 @@ class Renderer
         }
     };
 
-  public:
     // Render, to the current framebuffer, chunks around the camera
     // using the AABB-raycast algorithm. Chunks that are near
     // enough to have been drawn using the mesh algorithm will
@@ -1171,7 +1183,6 @@ class Renderer
         raycast_store->stage_from_queue(80);
     }
 
-  private:
     GLuint raycast_program = 0;
     GLuint raycast_vao = 0;
 
