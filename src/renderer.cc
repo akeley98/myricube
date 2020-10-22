@@ -1,9 +1,8 @@
 // Implementation of the hybrid voxel renderer. I don't see how I can
 // make much of this exception safe, so I wrap everything in a
-// noexcept at the end. As usual with OpenGL, none of this is
-// thread-safe either (but this could change later now that I'm
-// factoring everything into threads and may get rid of all the darn
-// static variables).
+// noexcept at the end. In theory this is threadsafe (i.e. multiple
+// Renderers drawing different voxel worlds using multiple GL
+// contexts) but I haven't tested it so it almost certainly is not.
 
 #include "myricube.hh"
 
@@ -35,7 +34,13 @@ bool disable_zcull_sort = false;
 // (roughly) minimum distance from the camera that a chunk needs
 // to be to switch from mesh to raycast graphics.
 // Keep as int to avoid rounding errors in distance culling.
-constexpr int raycast_threshold = 120;
+constexpr int raycast_threshold = 170;
+
+// Slightly higher threshold than raycast_threshold. Chunk groups
+// within this distance to the camera have their meshes loaded even
+// if no part is actually drawn as a mesh (this is needed now that
+// MeshStore has some latency in loading meshes).
+constexpr int mesh_load_threshold = 10 + raycast_threshold;
 
 // Extract color from voxel and pack as 32-bit integer.
 inline uint32_t to_packed_color(Voxel v)
@@ -689,7 +694,7 @@ class Renderer
         Renderer* owner;
 
         static constexpr AsyncCacheArgs args = {
-            2,          // modulus
+            3,          // modulus
             8,          // associativity
             32,         // staging buffers
             1,          // worker threads
@@ -745,6 +750,22 @@ class Renderer
     };
 
   public:
+    // GL objects needed for mesh rendering.
+    GLuint mesh_vao = 0;
+    GLuint mesh_program = 0;
+
+    struct MeshUniformIDs {
+        GLint mvp_matrix;
+
+        // Position of camera eye relative to the origin of the group
+        // (origin == group_size times the group coordinate).
+        GLint eye_relative_group_origin;
+
+        GLint far_plane_squared;
+        GLint fog_enabled;
+        GLint black_fog;
+    } mesh_uniform_ids;
+
     // Render, to the current framebuffer, chunks near the camera
     // using the conventional mesh-based algorithm.
     //
@@ -755,6 +776,7 @@ class Renderer
     // hide the hidden faces.
     void render_world_mesh_step() noexcept
     {
+        auto& u = mesh_uniform_ids;
         MeshStore& store = *mesh_store;
         store.begin_frame();
 
@@ -762,47 +784,35 @@ class Renderer
         glm::vec3 eye_residue = tr.eye_residue;
         glm::ivec3 eye_group = tr.eye_group;
 
-        static GLuint vao = 0;
-        static GLuint program_id;
-        static GLint mvp_matrix_idx;
-
-        // Position of camera eye relative to the origin of the group
-        // (origin == group_size times the group coordinate).
-        static GLint eye_relative_group_origin_id;
-
-        static GLint far_plane_squared_id;
-        static GLint fog_enabled_id;
-        static GLint black_fog_id;
-
-        if (vao == 0) {
-            program_id = make_program({
+        if (mesh_vao == 0) {
+            mesh_program = make_program({
                 "mesh.vert", "mesh.frag", "fog_border.frag" });
-            mvp_matrix_idx = glGetUniformLocation(program_id, "mvp_matrix");
-            assert(mvp_matrix_idx >= 0);
-            eye_relative_group_origin_id = glGetUniformLocation(program_id,
+            u.mvp_matrix = glGetUniformLocation(mesh_program, "mvp_matrix");
+            assert(u.mvp_matrix >= 0);
+            u.eye_relative_group_origin = glGetUniformLocation(mesh_program,
                 "eye_relative_group_origin");
-            assert(eye_relative_group_origin_id >= 0);
-            far_plane_squared_id = glGetUniformLocation(program_id,
+            assert(u.eye_relative_group_origin >= 0);
+            u.far_plane_squared = glGetUniformLocation(mesh_program,
                 "far_plane_squared");
-            assert(far_plane_squared_id >= 0);
-            fog_enabled_id = glGetUniformLocation(program_id,
+            assert(u.far_plane_squared >= 0);
+            u.fog_enabled = glGetUniformLocation(mesh_program,
                 "fog_enabled");
-            assert(fog_enabled_id >= 0);
-            black_fog_id = glGetUniformLocation(program_id, "black_fog");
-            assert(black_fog_id >= 0);
+            assert(u.fog_enabled >= 0);
+            u.black_fog = glGetUniformLocation(mesh_program, "black_fog");
+            assert(u.black_fog >= 0);
 
-            glGenVertexArrays(1, &vao);
-            glBindVertexArray(vao);
+            glGenVertexArrays(1, &mesh_vao);
+            glBindVertexArray(mesh_vao);
             PANIC_IF_GL_ERROR;
         }
 
-        glBindVertexArray(vao);
+        glBindVertexArray(mesh_vao);
 
-        glUseProgram(program_id);
+        glUseProgram(mesh_program);
         auto far_plane = tr.far_plane;
-        glUniform1i(far_plane_squared_id, far_plane * far_plane);
-        glUniform1i(fog_enabled_id, tr.use_fog);
-        glUniform1i(black_fog_id, tr.use_black_fog);
+        glUniform1i(u.far_plane_squared, far_plane * far_plane);
+        glUniform1i(u.fog_enabled, tr.use_fog);
+        glUniform1i(u.black_fog, tr.use_black_fog);
         PANIC_IF_GL_ERROR;
         unsigned drawn_group_count = 0;
         unsigned drawn_chunk_count = 0;
@@ -839,12 +849,12 @@ class Renderer
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
-            glUniformMatrix4fv(mvp_matrix_idx, 1, 0, &mvp[0][0]);
+            glUniformMatrix4fv(u.mvp_matrix, 1, 0, &mvp[0][0]);
 
             // Similarly, the eye residue needs to be shifted by the
             // group's position.
             glm::vec3 eye_relative_group_origin = eye_residue - model_offset;
-            glUniform3fv(eye_relative_group_origin_id, 1,
+            glUniform3fv(u.eye_relative_group_origin, 1,
                 &eye_relative_group_origin[0]);
 
             for (int z = 0; z < edge_chunks; ++z) {
@@ -879,10 +889,10 @@ class Renderer
             PANIC_IF_GL_ERROR;
         };
 
-        float squared_thresh = raycast_threshold * raycast_threshold;
+        float squared_thresh = mesh_load_threshold * mesh_load_threshold;
 
         glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(raycast_threshold);
+        glm::dvec3 disp(mesh_load_threshold);
         split_coordinate(tr.eye - disp, &group_coord_low);
         split_coordinate(tr.eye + disp, &group_coord_high);
 
@@ -1055,8 +1065,6 @@ class Renderer
             }
             // Step 2
             else {
-                RaycastEntry& entry = *staging->entry;
-
                 // Wait for compute shader to finish.
                 // I *think* I need the client wait too because the client
                 // writes to the staging SSBO.
@@ -1172,6 +1180,23 @@ class Renderer
     }
 
   private:
+    GLuint raycast_program = 0;
+    GLuint raycast_vao = 0;
+
+    struct RaycastUniformIDs
+    {
+        GLint mvp_matrix;
+        // Position of camera eye relative to the origin of the group
+        // (origin == group_size times the group coordinate).
+        GLint eye_relative_group_origin;
+        GLint far_plane_squared;
+        GLint raycast_thresh_squared;
+        GLint fog_enabled;
+        GLint black_fog;
+        GLint chunk_debug;
+        GLint chunk_group_texture;
+    } raycast_uniform_ids;
+
     // Draw the given list of RaycastEntry/group coordinate pairs.
     void draw_raycast_entries(
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>& entries)
@@ -1180,66 +1205,56 @@ class Renderer
         glm::vec3 eye_residue = tr.eye_residue;
         glm::ivec3 eye_group = tr.eye_group;
         auto far_plane = tr.far_plane;
+        auto& u = raycast_uniform_ids;
 
-        static GLuint vao = 0;
-        static GLuint program_id;
-        static GLint mvp_matrix_id;
-        // Position of camera eye relative to the origin of the group
-        // (origin == group_size times the group coordinate).
-        static GLint eye_relative_group_origin_id;
-        static GLint far_plane_squared_id;
-        static GLint raycast_thresh_squared_id;
-        static GLint fog_enabled_id;
-        static GLint black_fog_id;
-        static GLint chunk_debug_id;
-        static GLint chunk_group_texture_id;
-
-        if (vao == 0) {
+        if (raycast_vao == 0) {
             PANIC_IF_GL_ERROR;
-            program_id = make_program({
+            auto program = make_program({
                 "raycast.vert", "raycast.frag",
                 "fog_border.frag", "read_group_voxel.frag" });
-            mvp_matrix_id = glGetUniformLocation(program_id, "mvp_matrix");
-            assert(mvp_matrix_id >= 0);
-            eye_relative_group_origin_id = glGetUniformLocation(program_id,
+            raycast_program = program;
+
+            u.mvp_matrix = glGetUniformLocation(program, "mvp_matrix");
+            assert(u.mvp_matrix >= 0);
+            u.eye_relative_group_origin = glGetUniformLocation(program,
                 "eye_relative_group_origin");
-            assert(eye_relative_group_origin_id >= 0);
-            chunk_debug_id = glGetUniformLocation(program_id, "chunk_debug");
-            assert(chunk_debug_id >= 0);
+            assert(u.eye_relative_group_origin >= 0);
+            u.chunk_debug = glGetUniformLocation(program, "chunk_debug");
+            assert(u.chunk_debug >= 0);
 
-            far_plane_squared_id = glGetUniformLocation(program_id,
+            u.far_plane_squared = glGetUniformLocation(program,
                 "far_plane_squared");
-            assert(far_plane_squared_id >= 0);
-            raycast_thresh_squared_id = glGetUniformLocation(program_id,
+            assert(u.far_plane_squared >= 0);
+            u.raycast_thresh_squared = glGetUniformLocation(program,
                 "raycast_thresh_squared");
-            assert(raycast_thresh_squared_id >= 0);
-            fog_enabled_id = glGetUniformLocation(program_id,
+            assert(u.raycast_thresh_squared >= 0);
+            u.fog_enabled = glGetUniformLocation(program,
                 "fog_enabled");
-            assert(fog_enabled_id >= 0);
-            black_fog_id = glGetUniformLocation(program_id, "black_fog");
-            assert(black_fog_id >= 0);
-            chunk_group_texture_id =
-                glGetUniformLocation(program_id, "chunk_group_texture");
-            assert(chunk_group_texture_id >= 0);
+            assert(u.fog_enabled >= 0);
+            u.black_fog = glGetUniformLocation(program, "black_fog");
+            assert(u.black_fog >= 0);
+            u.chunk_group_texture =
+                glGetUniformLocation(program, "chunk_group_texture");
+            assert(u.chunk_group_texture >= 0);
 
-            glGenVertexArrays(1, &vao);
-            glBindVertexArray(vao);
+            glGenVertexArrays(1, &raycast_vao);
+            glBindVertexArray(raycast_vao);
         }
 
-        glBindVertexArray(vao);
-        glUseProgram(program_id);
+        glBindVertexArray(raycast_vao);
+        glUseProgram(raycast_program);
 
         // Set uniforms unchanged per-chunk-group.
-        glUniform1i(chunk_debug_id, chunk_debug);
-        glUniform1i(fog_enabled_id, tr.use_fog);
-        glUniform1i(black_fog_id, tr.use_black_fog);
-        glUniform1i(far_plane_squared_id, far_plane * far_plane);
+        glUniform1i(u.chunk_debug, chunk_debug);
+        glUniform1i(u.fog_enabled, tr.use_fog);
+        glUniform1i(u.black_fog, tr.use_black_fog);
+        glUniform1i(u.far_plane_squared, far_plane * far_plane);
         auto raycast_thr = raycast_threshold;
-        glUniform1i(raycast_thresh_squared_id, raycast_thr * raycast_thr);
+        glUniform1i(u.raycast_thresh_squared, raycast_thr * raycast_thr);
 
         // I'll use texture 0 for the chunk group texture.
         glActiveTexture(GL_TEXTURE0);
-        glUniform1i(chunk_group_texture_id, 0);
+        glUniform1i(u.chunk_group_texture, 0);
 
         PANIC_IF_GL_ERROR;
 
@@ -1259,13 +1274,13 @@ class Renderer
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             glm::mat4 mvp = residue_vp_matrix * m;
-            glUniformMatrix4fv(mvp_matrix_id, 1, 0, &mvp[0][0]);
+            glUniformMatrix4fv(u.mvp_matrix, 1, 0, &mvp[0][0]);
             PANIC_IF_GL_ERROR;
 
             // Similarly, the eye residue needs to be shifted by the
             // group's position.
             glm::vec3 eye_relative_group_origin = eye_residue - model_offset;
-            glUniform3fv(eye_relative_group_origin_id, 1,
+            glUniform3fv(u.eye_relative_group_origin, 1,
                 &eye_relative_group_origin[0]);
 
             // Get the instanced vertex attribs going (i.e. bind the
@@ -1305,41 +1320,47 @@ class Renderer
         glBindVertexArray(0);
     }
 
+    GLuint background_vao = 0;
+    GLuint background_program = 0;
+
+    struct BackgroundUniformIDs
+    {
+        GLint inverse_vp;
+        GLint eye_world_position;
+        GLint black_fog;
+    } background_uniform_ids;
+
     // Render the background. This uses a shader hard-wired to draw a
     // full-screen rectangle.
     void render_background()
     {
-        static GLuint vao = 0;
-        static GLuint program_id;
-        static GLint inverse_vp_id;
-        static GLint eye_world_position_id;
-        static GLint black_fog_id;
+        auto& u = background_uniform_ids;
 
-        if (vao == 0) {
-            glGenVertexArrays(1, &vao);
-            program_id = make_program(
+        if (background_vao == 0) {
+            glGenVertexArrays(1, &background_vao);
+            background_program = make_program(
                 { "background.vert", "background.frag", "fog_border.frag" } );
 
-            inverse_vp_id = glGetUniformLocation(program_id,
+            u.inverse_vp = glGetUniformLocation(background_program,
                 "inverse_vp");
-            assert(inverse_vp_id >= 0);
-            eye_world_position_id = glGetUniformLocation(program_id,
+            assert(u.inverse_vp >= 0);
+            u.eye_world_position = glGetUniformLocation(background_program,
                 "eye_world_position");
-            assert(eye_world_position_id >= 0);
-            black_fog_id = glGetUniformLocation(program_id,
+            assert(u.eye_world_position >= 0);
+            u.black_fog = glGetUniformLocation(background_program,
                 "black_fog");
-            assert(black_fog_id >= 0);
+            assert(u.black_fog >= 0);
             PANIC_IF_GL_ERROR;
         }
 
         glm::vec3 eye_residue = tr.eye_residue;
         glm::mat4 inverse_vp = glm::inverse(tr.residue_vp_matrix);
 
-        glBindVertexArray(vao);
-        glUseProgram(program_id);
-        glUniformMatrix4fv(inverse_vp_id, 1, 0, &inverse_vp[0][0]);
-        glUniform3fv(eye_world_position_id, 1, &eye_residue[0]);
-        glUniform1i(black_fog_id, tr.use_black_fog);
+        glBindVertexArray(background_vao);
+        glUseProgram(background_program);
+        glUniformMatrix4fv(u.inverse_vp, 1, 0, &inverse_vp[0][0]);
+        glUniform3fv(u.eye_world_position, 1, &eye_residue[0]);
+        glUniform1i(u.black_fog, tr.use_black_fog);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
         PANIC_IF_GL_ERROR;
