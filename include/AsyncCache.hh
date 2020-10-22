@@ -13,12 +13,21 @@
 //    threads.  This requires "staging buffers" separate from the
 //    main cache, so that partially-loaded entries are not visible.
 //
-// 4. Evicting least-recently-used entries when a new (fully-loaded)
+// 4. Tracking the number of frames elapsed, and recording the last
+//    frame in which an entry was used.
+//
+// 5. Evicting least-recently-used entries when a new (fully-loaded)
 //    entry gets swapped-in from a staging buffer. Entries are
 //    assigned to a cache set (entry in 3D cache array) by taking the
 //    entry's coordinate modulo the modulus. Each cache set contains
 //    AsyncCacheArgs::associativity-many slots; the least-recently
 //    used one is evicted.
+//
+// 6. Preventing entries from being evicted until the frame number is
+//    at least safety_frame_count greater than the frame number in
+//    which the entry was last used; this is needed to prevent
+//    still-in-use resources from being deleted, or concurrently read
+//    and written.
 //
 // NOTE: This "management" is really just a high-level scheduler. This
 // class never directly interacts with the graphics API; this is
@@ -43,6 +52,8 @@
 
 namespace myricube {
 
+constexpr uint64_t safety_frame_count = 3;
+
 struct AsyncCacheArgs
 {
     size_t modulus = 4;
@@ -63,11 +74,14 @@ struct AsyncCacheArgs
 //    said coordinate. Returns a success flag; the entry is silently
 //    discarded if failure is reported.
 //
-// void swap_in(StagingT*, std::unique_ptr<EntryT>*)
+// bool swap_in(StagingT*, std::unique_ptr<EntryT>*)
 //
 //    Fill the EntryT with data from the given staging buffer
 //    (StagingT). Runs on the "main" thread (i.e. the one calling
 //    public member functions of AsyncCache).
+//
+//    Also returns a success flag, however, instead of ignoring
+//    failures, failures are retried later.
 template <typename StagingT, typename EntryT>
 class AsyncCache
 {
@@ -87,8 +101,10 @@ class AsyncCache
     };
     std::unique_ptr<StagingBuffer[]> staging_buffers;
     size_t staging_buffer_count;
+
     // Used to search quickly for a staging buffer.
-    size_t staging_buffer_finger = 0;
+    size_t staging_buffer_queue_finger = 0;
+    size_t staging_buffer_swap_finger = 0;
 
     // Queue of coordinates whose entries to load. Push at the end,
     // pop from the front.
@@ -100,29 +116,32 @@ class AsyncCache
     // dimension for the cache associativity).
     struct CacheSlot
     {
-        // Access time is never set to 0 -- allows me to use 0 as
-        // a sentinel value for not-yet-used cache slots. NOTE:
-        // entry_ptr need not be non-null for in-use slots!
-        uint64_t nonzero_last_access = 0;
+        // frame_counter when this entry was last accessed.
+        // 0 if never used.
+        uint64_t last_access_frame = 0;
+
+        // Whether this slot corresponds to an entry for an actual
+        // chunk group. NOTE: It is still not safe to evict an invalid
+        // entry if it is labeled as recently used!
+        bool valid = false;
+
+        // Group coordinate of the chunk group whose data is stored here.
         glm::ivec3 coord;
+
         // Consider exception safety before replacing unique_ptr.
         std::unique_ptr<EntryT> entry_ptr = nullptr;
 
         bool matches_coord(glm::ivec3 coord_arg) const
         {
-            return nonzero_last_access != 0 and coord == coord_arg;
+            return valid and coord == coord_arg;
         };
-
-        void update_access_time(uint64_t* counter)
-        {
-            nonzero_last_access = (*counter)++;
-        }
     };
 
     size_t modulus = 0;
     size_t associativity = 0;
-    uint64_t counter = 1;
+    uint64_t frame_counter = 0;
     std::vector<CacheSlot> cache_slots;
+    CacheSlot extra_slot;
 
     // Worker threads and stuff to communicate with them: a flag to
     // order them to exit, and a mutex+condvar for waking them up when
@@ -168,37 +187,41 @@ class AsyncCache
 
     // Return the youngest (to evict) cache slot in a cache set.  If
     // any not-in-use cache slots are in the cache set, return one of
-    // them.
-    static CacheSlot* evict_slot(CacheSlot* set_begin, CacheSlot* set_end)
+    // them. If none of them can be evicted due to safety_frame_count,
+    // return nullptr.
+    CacheSlot* evict_slot(CacheSlot* set_begin, CacheSlot* set_end)
     {
         auto cmp = [](const CacheSlot& left, const CacheSlot& right)
         {
-            return left.nonzero_last_access < right.nonzero_last_access;
+            return left.last_access_frame < right.last_access_frame;
         };
-        return &*std::min_element(set_begin, set_end, cmp);
+        CacheSlot* to_evict = &*std::min_element(set_begin, set_end, cmp);
+        bool can_evict =
+            to_evict->last_access_frame == 0 or
+            to_evict->last_access_frame + safety_frame_count <= frame_counter;
+        if (!can_evict) fprintf(stderr, "\"Temporary\": !can_evict\n");
+        return can_evict ? to_evict : nullptr;
     }
 
     // Search for the cache slot corresponding to the entry with the
-    // given coordinate. Return whether the entry was found in the
-    // cache or not: if so, *out_slot points to that entry, and said
-    // entry's access counter is updated; if not, *out_slot points to
-    // the entry that may be evicted to make way.
-    bool find_access_slot(glm::ivec3 coord, CacheSlot** out_slot)
+    // given coordinate. If found, mark it as recently-accessed (with
+    // the current frame number). Otherwise, return nullptr.
+    CacheSlot* read_access_slot(glm::ivec3 coord)
     {
+        // call begin_frame() before populating the cache.
+        assert(frame_counter != 0);
+
         CacheSlot* begin;
         CacheSlot* end;
         get_cache_set(coord, &begin, &end);
 
         for (CacheSlot* slot = begin; slot != end; ++slot) {
             if (slot->matches_coord(coord)) {
-                slot->update_access_time(&counter);
-                *out_slot = slot;
-                return true;
+                slot->last_access_frame = frame_counter;
+                return slot;
             }
         }
-
-        *out_slot = evict_slot(begin, end);
-        return false;
+        return nullptr;
     }
 
     // Main loop for worker threads. Search for staging buffer entries
@@ -275,12 +298,25 @@ class AsyncCache
 
     AsyncCache(AsyncCache&&) = delete;
 
+    // Update the frame counter; must be the first member function
+    // called on the AsyncCache (aside from constructor).
+    void begin_frame()
+    {
+        ++frame_counter;
+    }
+
     // Resize the cache (if new_modulus differs from the current
     // modulus), and move all the entries over (discarding some if
     // they don't fit).
-    void set_modulus(size_t new_modulus)
+    //
+    // We don't honor the safety_frame_count here. To avoid invalid
+    // memory troubles, you need to pass a callback that stalls the
+    // pipeline (glFinish or vkDeviceWaitIdle).
+    template <typename GLFinish>
+    void set_modulus(size_t new_modulus, GLFinish finish)
     {
         if (new_modulus == modulus) return;
+        finish();
         assert(new_modulus > 0);
 
         std::vector<CacheSlot> new_cache_slots(
@@ -291,7 +327,7 @@ class AsyncCache
         for (CacheSlot& slot : cache_slots) {
             CacheSlot* set_begin;
             CacheSlot* set_end;
-            if (slot.nonzero_last_access == 0) continue;
+            if (!slot.valid) continue;
 
             get_cache_set(
                 &new_cache_slots,
@@ -299,6 +335,7 @@ class AsyncCache
                 associativity,
                 slot.coord, &set_begin, &set_end);
             CacheSlot* to_evict = evict_slot(set_begin, set_end);
+            if (to_evict == nullptr) continue;
             *to_evict = std::move(slot);
         }
 
@@ -336,12 +373,12 @@ class AsyncCache
             // Look for an available staging buffer.
             StagingBuffer* p_buffer = nullptr;
             for (size_t j = 0; j < staging_buffer_count; ++j) {
-                p_buffer = &staging_buffers[staging_buffer_finger];
+                p_buffer = &staging_buffers[staging_buffer_queue_finger];
                 if (p_buffer->state == staging_unused) goto found;
 
-                staging_buffer_finger =
-                    staging_buffer_finger == 0 ?
-                    staging_buffer_count - 1 : staging_buffer_finger - 1;
+                staging_buffer_queue_finger =
+                    staging_buffer_queue_finger == 0 ?
+                    staging_buffer_count - 1 : staging_buffer_queue_finger - 1;
             }
             // Failure case.
             break;
@@ -356,33 +393,87 @@ class AsyncCache
         return pop_count;
     }
 
-    // Step 2/2 of populating the cache: Move at most max_swap
-    // fully-loaded entries from the staging buffers to the main
-    // cache, evicting old stuff if needed. Return the actual number
-    // of entries swapped-in.
-    size_t swap_in_from_staging(size_t max_swap=1)
+    // Step 2/2 of populating the cache: Make at most max_swap
+    // attempts to move fully-loaded entries from the staging buffers
+    // to the main cache, evicting old stuff if needed. Return the
+    // actual number of entries swapped-in.
+    size_t swap_in_from_staging(size_t max_attempts=1)
     {
-        size_t return_count = 0;
+        size_t attempts = 0;
+        size_t swapped_count = 0;
+
+        // This is a little weird, basically, I want to use the finger
+        // to make sure all parts of the staging buffers array are
+        // visited at some point, even if max_attempts is small, but I
+        // also want to revisit staging buffer entries whose swap_in
+        // failed ASAP.
+        //
+        // So, I store the index (in staging_buffers) where the first
+        // failed swap_in occured, and reset it to here if it happens.
+        size_t finger_to_store = size_t(-1);
+
         for (size_t i = 0; i < staging_buffer_count; ++i) {
-            if (return_count >= max_swap) break;
+            if (attempts >= max_attempts) break;
+            StagingBuffer& buffer = staging_buffers[staging_buffer_swap_finger];
 
-            StagingBuffer& buffer = staging_buffers[i];
             if (buffer.state == staging_ready_to_swap) {
-                CacheSlot* slot;
-                find_access_slot(buffer.coord, &slot);
+                attempts++;
 
-                // Exception safety: mark incompletely-initialized
-                // slots as not used.
-                slot->nonzero_last_access = 0;
-                swap_in(&buffer.data, &slot->entry_ptr);
-                slot->coord = buffer.coord;
-                slot->update_access_time(&counter);
+                // First, find the correct cache set and an entry to evict.
+                CacheSlot* set_begin;
+                CacheSlot* set_end;
+                get_cache_set(buffer.coord, &set_begin, &set_end);
+                CacheSlot* to_evict = evict_slot(set_begin, set_end);
+
+                // Short circuit evaluation needed here.
+                // Try to swap in only if we actually have room to store
+                // the newly swapped-in entry. Use the extra cache slot.
+                // Avoid modifying main cache state until success is certain.
+                bool success =
+                    to_evict != nullptr and
+                    swap_in(&buffer.data, &extra_slot.entry_ptr);
+
+
+                if (!success) {
+                    // Try again soon later: reset the finger to here
+                    // if this was the first failure.
+                    if (finger_to_store != size_t(-1)) {
+                        finger_to_store = staging_buffer_swap_finger;
+                        // TODO
+                    }
+                    continue;
+                }
 
                 buffer.state = staging_unused;
-                ++return_count;
+
+                // This shouldn't emit any exceptions.
+                // Mark the slot with the coordinate and frame number,
+                // then swap it into the evicted cache slot, BUT, first
+                // invalidate any existing cache slot for this chunk
+                // group, so that the most up-to-date entry is used.
+                for (CacheSlot* s = set_begin; s != set_end; ++s) {
+                    if (s->matches_coord(buffer.coord)) {
+                        s->valid = false;
+                    }
+                }
+                extra_slot.coord = buffer.coord;
+                extra_slot.last_access_frame = frame_counter;
+                extra_slot.valid = true;
+                std::swap(extra_slot, *to_evict);
+
+                ++swapped_count;
             }
+
+            staging_buffer_swap_finger =
+                staging_buffer_swap_finger == 0 ?
+                staging_buffer_count - 1 : staging_buffer_swap_finger - 1;
         }
-        return return_count;
+
+        if (finger_to_store != size_t(-1)) {
+            staging_buffer_swap_finger = finger_to_store;
+        }
+
+        return swapped_count;
     };
 
     // Search for the cache entry with the given 3D
@@ -390,9 +481,8 @@ class AsyncCache
     // stores a null pointer.
     EntryT* request_entry(glm::ivec3 coord)
     {
-        CacheSlot* cache_slot;
-        bool found = find_access_slot(coord, &cache_slot);
-        return found ? cache_slot->entry_ptr.get() : nullptr;
+        CacheSlot* cache_slot = read_access_slot(coord);
+        return cache_slot ? cache_slot->entry_ptr.get() : nullptr;
     };
 
     void debug_dump()
@@ -416,9 +506,9 @@ class AsyncCache
                 fprintf(stderr, "---------------\n");
             }
             fprintf(stderr, "%s (%i %i %i) %li %p\x1b[0m\n",
-                slot.nonzero_last_access == 0 ? "" : "\x1b[32m",
+                slot.valid ? "" : "\x1b[32m",
                 slot.coord.x, slot.coord.y, slot.coord.z,
-                long(slot.nonzero_last_access),
+                long(slot.last_access_frame),
                 slot.entry_ptr.get());
         }
         fprintf(stderr, "---------------\n");
@@ -426,7 +516,7 @@ class AsyncCache
 
   protected:
     virtual bool stage(StagingT*, glm::ivec3) = 0;
-    virtual void swap_in(StagingT*, std::unique_ptr<EntryT>*) = 0;
+    virtual bool swap_in(StagingT*, std::unique_ptr<EntryT>*) = 0;
 };
 
 } // end namespace myricube

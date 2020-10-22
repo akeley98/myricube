@@ -46,24 +46,6 @@ inline uint32_t to_packed_color(Voxel v)
          | (v.visible ? visible_bit : 0);
 }
 
-// Write out the voxel as a texel in the given GL format and type (if
-// supported).
-template <GLenum Format, GLenum Type>
-inline void write_voxel_texel(Voxel, void*)
-{
-    static_assert(Format != Format, "Add support for format.");
-}
-
-template<> inline void write_voxel_texel<GL_RGBA, GL_UNSIGNED_INT_8_8_8_8>
-    (Voxel v, void* texel)
-{
-    *static_cast<uint32_t*>(texel) =
-        uint32_t(v.red) << 24 |
-        uint32_t(v.green) << 16 |
-        uint32_t(v.blue) << 8 |
-        uint32_t(v.visible ? 255 : 0);
-}
-
 // For memory efficiency, the AABB of a chunk is stored in packed
 // format on the GPU.
 struct PackedAABB
@@ -763,12 +745,13 @@ class Renderer
         // the same type, I just use the swap function. NOTE: I need
         // to figure out a way to prevent still-in-use entries from
         // being swapped out.
-        void swap_in(MeshEntry* staging,
+        bool swap_in(MeshEntry* staging,
                      std::unique_ptr<MeshEntry>* p_uptr_entry) override
         {
             if (*p_uptr_entry == nullptr) p_uptr_entry->reset(new MeshEntry);
 
             swap(**p_uptr_entry, *staging);
+            return true;
         }
     };
 
@@ -784,6 +767,7 @@ class Renderer
     void render_world_mesh_step() noexcept
     {
         MeshStore& store = *mesh_store;
+        store.begin_frame();
 
         glm::mat4 residue_vp_matrix = tr.residue_vp_matrix;
         glm::vec3 eye_residue = tr.eye_residue;
@@ -1062,7 +1046,7 @@ class Renderer
         // the staging buffer to the texture in the cache entry.
         // Also swap the AABB VBO with that of the staging buffer
         // (re-initializing the staging buffer if needed).
-        void swap_in(
+        bool swap_in(
             RaycastStaging* staging,
             std::unique_ptr<RaycastEntry>* p_uptr_entry) override
         {
@@ -1100,6 +1084,7 @@ class Renderer
             std::swap(staging->vbo_name, entry.vbo_name);
             std::swap(staging->mapped_aabb, entry.vbo_mapping);
             staging->re_init();
+            return true;
         }
     };
 
@@ -1111,11 +1096,12 @@ class Renderer
     void render_world_raycast_step() noexcept
     {
         RaycastStore& store = *raycast_store;
+        store.begin_frame();
 
         // Resize the cache to a size suitable for the given render distance.
         auto far_plane = tr.far_plane;
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
-        store.set_modulus(modulus);
+        store.set_modulus(modulus, glFinish);
 
         // Count and limit the number of new chunk groups added to the
         // RaycastStore this frame.
