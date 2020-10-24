@@ -329,7 +329,8 @@ class WorldHandle
   public:
     // Construct world handle for world stored in the given directory.
     // The actual filename passed is the path of the BinWorld file
-    // within the world's directory.
+    // within the world's directory, OR the name of the world
+    // directory with a trailing slash.
     WorldHandle(const filename_string& world_filename);
 
     ~WorldHandle() = default;

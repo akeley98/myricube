@@ -17,7 +17,18 @@ glfw-build/src/libglfw3.a: glfw-cmake
 myricube-windows:
 	cd windows64 && $(MAKE)
 
+LIBOBJS=cckiss/src/cvoxel.cc.o cckiss/src/voxels.cc.o
+libmyricube-cvoxel.so: $(LIBOBJS)
+	$(CXX) $(LIBOBJS) -shared -o libmyricube-cvoxel.so
+
 all: myricube-bin myricube-windows
 
 myricube-bin: $(OBJS)
 	$(CXX) $(OBJS) -ldl -lpthread -o myricube-bin
+
+py: libmyricube-cvoxel.so myricube-bin
+	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"
+	python3 -i iMyricube.py myricube-data/PyWorld/
+
+py-demo: libmyricube-cvoxel.so myricube-bin
+	myricube_py_demo=1 python3 iMyricube.py myricube-data/PyDemoWorld/

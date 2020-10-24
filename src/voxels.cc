@@ -123,14 +123,14 @@ void unmap_bin_group_bitfield(BinGroupBitfield* ptr)
     unmap_if_disk_file(ptr);
 }
 
-WorldHandle::WorldHandle(const filename_string& world_filename_arg)
+WorldHandle::WorldHandle(const filename_string& arg)
 {
-    auto on_bad_filename = [&world_filename_arg]
+    auto on_bad_filename = [&arg]
     {
         throw std::runtime_error("Expected world file name to be "
-            + std::string(world_filename)
+            + std::string(world_filename) + " or end in /"
 #ifndef MYRICUBE_WINDOWS
-            + "\nGot " + world_filename_arg
+            + "\nGot " + arg
 #endif
         );
     };
@@ -138,7 +138,7 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
     // First we need to recover the directory name for the world.
     // Remove until we get to a trailing forward slash, or, on
     // Windows only, a backwards slash.
-    directory_trailing_slash = world_filename_arg;
+    directory_trailing_slash = arg;
     while (1) {
         if (directory_trailing_slash.empty()) {
             on_bad_filename();
@@ -150,15 +150,17 @@ WorldHandle::WorldHandle(const filename_string& world_filename_arg)
         directory_trailing_slash.pop_back();
     }
 
-    // Check that the file name was as expected (world.myricube at the moment).
-    filename_string check_string =
-        filename_concat_c_str(directory_trailing_slash, world_filename);
-    if (check_string != world_filename_arg) on_bad_filename();
+    auto bin_world_filename = filename_concat_c_str(
+        directory_trailing_slash, world_filename);
+
+    // Check that the file name was as expected (world.myricube at the moment),
+    // or the argument was a directory with a trailing slash.
+    if (bin_world_filename != arg and arg != directory_trailing_slash) {
+        on_bad_filename();
+    }
 
     // Now I need to memory-map the BinWorld file, and get the shared_ptr
     // to unmap it when finished.
-    auto bin_world_filename = filename_concat_c_str(
-        directory_trailing_slash, world_filename);
     bin_world = std::shared_ptr<BinWorld>(
         map_file<BinWorld>(bin_world_filename, create_flag),
         unmap_if_disk_file<BinWorld>);

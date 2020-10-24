@@ -18,6 +18,7 @@ OBJS=cckiss/src/myricube.cc.o \
      cckiss/apps/MarloPlanet.cc.o \
      cckiss/apps/RandomWalk.cc.o \
      cckiss/apps/Skygrid.cc.o \
+     cckiss/apps/ViewWorld.cc.o \
      cckiss/apps/FastNoise.cpp.o \
      cckiss/glad/src/glad.c.o \
      glfw-build/src/libglfw3.a \

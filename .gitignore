@@ -2,6 +2,7 @@
 *\#
 myricube-*-bin
 myricube-bin
+libmyricube-cvoxel.so
 cckiss/cckiss_EXAMPLE
 cckiss/git
 apps/FastNoise.o
