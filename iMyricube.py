@@ -35,6 +35,16 @@ operation."""
 def get(x, y, z):
     return lib.myricube_get(int(x), int(y), int(z))
 
+"""Fill the box with corners (x0, y0, z0) and (x1, y1, z1) (inclusive)
+with the given voxel value."""
+def fill(x0, y0, z0, x1, y1, z1, voxel32):
+    return lib.myricube_fill(
+        int(x0), int(y0), int(z0), int(x1), int(y1), int(z1), int(voxel32))
+
+def zholes(x0, y0, z0, x1, y1, z1, voxel32_0, voxel32_1):
+    return lib.myricube_zholes(
+        int(x0), int(y0), int(z0), int(x1), int(y1), int(z1), int(voxel32_0), int(voxel32_1))
+
 # Launch myricube to view the current world.
 os.environ["myricube_app"] = "ViewWorld"
 os.environ["myricube_world"] = world_filename
@@ -55,7 +65,7 @@ if do_demo:
     from random import randrange
     from random import choice
     from time import sleep
-    radius = 88
+    radius = 133
 
     up = 0
     down = 1
@@ -65,6 +75,9 @@ if do_demo:
     back = 5
 
     while 1:
+        # Clear the world periodically.
+        fill(-radius, -radius, -radius, radius, radius, radius, 0)
+
         # One pipe per iteration
         for pipes in range(18):
             low = -radius // 2
@@ -127,9 +140,3 @@ if do_demo:
                     # myricube window is closed.
                     pid, status = os.waitpid(pid, os.WNOHANG)
                     if pid != 0: sys.exit(0)
-
-        # Clear the world periodically.
-        for y in range(-radius, 1+radius):
-            for x in range(-radius, 1+radius):
-                for z in range(-radius, 1+radius):
-                    Set(x, y, z, 0)

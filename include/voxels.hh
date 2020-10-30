@@ -155,13 +155,18 @@ struct BinChunkGroupT
     const uint64_t magic_number = expected_magic;
     uint64_t reserved[510] = { 0 };
 
-    // Set to ~uint64_t(0) _after_ making modifications.  You can also
-    // set it periodically while doing modifications to speed-up the
-    // renderer's view of it.
+    // Set to ~uint64_t(0) _after_ making modifications, or call
+    // mark_dirty(). You can also set it periodically while doing
+    // modifications to speed-up the renderer's view of it.
     //
     // If this chunk group is newly created on disk, remember to set
     // the corresponding BinGroupBitfield bit as well.
     mutable std::atomic<uint64_t> dirty_flags = { 0 };
+
+    void mark_dirty() const
+    {
+        dirty_flags.store(~uint64_t(0));
+    }
 
     // Chunks within this chunk group, in [z][y][x] order.
     BinChunkT<ChunkSize> chunk_array[EdgeChunks][EdgeChunks][EdgeChunks];
@@ -209,9 +214,10 @@ struct BinGroupBitfield
     // Read next function for format.
     std::atomic<uint64_t> x_bitfield_zy[modulus][modulus] = {};
 
-    // Given the GROUP COORDINATE of a group within the section of chunk
-    // groups (i.e. upper bits masked away), return whether this bitfield
-    // records said chunk group as existing on disk.
+    // Given the GROUP COORDINATE of a group within the section of
+    // chunk groups (i.e. this function masks the upper bits away for
+    // you), return whether this bitfield records said chunk group as
+    // existing on disk.
     bool chunk_group_on_disk(glm::ivec3 group_coord)
     {
         auto x = group_coord.x & (modulus - 1);
@@ -245,7 +251,9 @@ struct BinGroupBitfield
 
 // File on-disk for representing the whole voxel world.
 //
-// Note that there's no actual link to chunk groups here; they
+// Note that there's no actual link to chunk groups here; they are
+// associated with this world file by being stored in the same
+// directory.
 template <size_t EdgeChunks, size_t ChunkSize>
 struct BinWorldT
 {
@@ -280,7 +288,7 @@ void unmap_bin_chunk_group(const BinChunkGroup*);
 struct MutChunkGroupDeleter {
     void operator () (BinChunkGroup* arg)
     {
-        arg->dirty_flags.store(~uint64_t(0));
+        arg->mark_dirty();
         unmap_mut_bin_chunk_group(arg);
     }
 };
@@ -314,7 +322,10 @@ using UPtrGroupBitfield =
 
 // Handle for a voxel world (directory storing chunk groups).
 // Multiple handles to the same world may exist; we rely on the OS
-// file system for (somewhat) handling synchronization problems.
+// file system for (somewhat) handling synchronization problems.  The
+// main purpose of this class is to open chunk group files on disk (or
+// in the in-memory file system) and return memory mappings of them as
+// smart pointers.
 class WorldHandle
 {
     // Directory that the world is stored in, with trailing slash
@@ -585,9 +596,81 @@ class VoxelWorld
         glm::ivec3 group_coord = to_group_coord(c);
         BinChunkGroup* ptr =
             world_cache.get_entry(group_coord).chunk_group_ptr.get();
-        ptr->dirty_flags.store(~uint64_t(0));
+        ptr->mark_dirty();
         assert(ptr != nullptr);
         ptr->set(c, voxel);
+    }
+
+    // For every voxel in the axis-aligned box with corners corner0
+    // and corner1 (inclusive bounds), run the given callback on it.
+    // Callback takes 2 args: a pointer to uint32_t (the voxel value)
+    // and the coordinate of the voxel. The dirty flags for every
+    // chunk group thus visited is set automatically.
+    template <typename F>
+    void map(glm::ivec3 corner0, glm::ivec3 corner1, F& f)
+    {
+        glm::ivec3 global_low = glm::min(corner0, corner1);
+        glm::ivec3 global_high = glm::max(corner0, corner1);
+
+        // Run f for every voxel in the given chunk that overlaps with
+        // the caller-defined box. chunk_lower_left is the world
+        // coordinate of the lower-left-most voxel in the chunk.
+        auto map_chunk = [&] (BinChunk& chunk, glm::ivec3 chunk_lower_left)
+        {
+            glm::ivec3 local_low = glm::max(
+                glm::ivec3(0), global_low - chunk_lower_left);
+            glm::ivec3 local_high = glm::min(
+                glm::ivec3(chunk_size-1), global_high - chunk_lower_left);
+
+            for (int32_t z = local_low.z; z <= local_high.z; ++z) {
+                for (int32_t y = local_low.y; y <= local_high.y; ++y) {
+                    for (int32_t x = local_low.x; x <= local_high.x; ++x) {
+                        glm::ivec3 coord = chunk_lower_left + glm::ivec3(x,y,z);
+                        f(&chunk.voxel_array[z][y][x], coord);
+                    }
+                }
+            }
+        };
+
+        // Given the group coordinate of a chunk group, map that chunk
+        // and run f on the voxels within that chunk that overlap with
+        // the caller-specified box. Also mark as dirty.
+        auto map_group = [&] (glm::ivec3 group_coord)
+        {
+            BinChunkGroup* group =
+                world_cache.get_entry(group_coord).chunk_group_ptr.get();
+
+            for (int z = 0; z < edge_chunks; ++z) {
+                for (int y = 0; y < edge_chunks; ++y) {
+                    for (int x = 0; x < edge_chunks; ++x) {
+                        BinChunk& chunk = group->chunk_array[z][y][x];
+                        glm::ivec3 chunk_lower_left = group_coord * group_size
+                                              + glm::ivec3(x,y,z) * chunk_size;
+                        map_chunk(chunk, chunk_lower_left);
+                    }
+                }
+            }
+
+            group->mark_dirty();
+        };
+
+        // Map over the chunk groups that overlap with the caller's box.
+        // Floor divide to get lower bound.
+        int32_t xL = global_low.x >> group_shift;
+        int32_t yL = global_low.y >> group_shift;
+        int32_t zL = global_low.z >> group_shift;
+        // Ceil divide to get upper bound.
+        int32_t xH = (global_high.x + group_size - 1) >> group_shift;
+        int32_t yH = (global_high.y + group_size - 1) >> group_shift;
+        int32_t zH = (global_high.z + group_size - 1) >> group_shift;
+
+        for (int32_t x = xL; x <= xH; ++x) {
+            for (int32_t y = yL; y <= yH; ++y) {
+                for (int32_t z = zL; z <= zH; ++z) {
+                    map_group(glm::ivec3(x, y, z));
+                }
+            }
+        }
     }
 
     // These next two functions are potentially dangerous, but the
