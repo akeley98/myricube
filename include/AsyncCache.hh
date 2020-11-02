@@ -2,19 +2,23 @@
 // groups' data on the graphics device. Take a page out of the book of
 // CPU caches. This system supports:
 //
-// 1. Identifying and retrieving entries by a unique ivec3 name.
+// 1. Identifying and retrieving entries by a unique ivec3
+//    name. [request_entry, which returns EntryT*]
 //
 // 2. Reporting failure to retrieve entries (due to not being in the
 //    cache) and supporting a FIFO (queue) of entries to be added to
 //    the cache (or updated). The queue prevents starvation if there
-//    is heavy pressure to add new entries.
+//    is heavy pressure to add new entries. [enqueue]
 //
 // 3. Loading new requested entries in the background using worker
 //    threads.  This requires "staging buffers" separate from the
 //    main cache, so that partially-loaded entries are not visible.
+//    [StagingT]
 //
 // 4. Tracking the number of frames elapsed, and recording the last
-//    frame in which an entry was used.
+//    frame in which an entry was used. [Call begin_frame at the start
+//    of each frame. request_entry records frame number when an EntryT
+//    is accessed].
 //
 // 5. Evicting least-recently-used entries when a new (fully-loaded)
 //    entry gets swapped-in from a staging buffer. Entries are
