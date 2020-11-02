@@ -7,9 +7,11 @@ A technical essay on my goals in this project is in `src/myricube.cc`.
 
 ## Windows 64-bit
 
-You need OpenGL 4.5 graphics drivers for this to work. Download the
+Not supported on Windows at the moment.
+
+<!--You need OpenGL 4.5 graphics drivers for this to work. Download the
 project as a zip, unzip it, and run the precompiled exe at
-`myricube-master/myricube-master/windows64/myricube.exe`.
+`myricube-master/myricube-master/windows64/myricube.exe`.-->
 
 I have basically zero experience with Windows programming, so if the
 exe doesn't work and you feel nice, file an issue giving a description

@@ -14,6 +14,9 @@ class Window;
 class WorldHandle;
 
 // TODO: Multiple Renderers won't work correctly due to global state.
+// Un-Todo: I think this is fixed (mostly removing static member
+// variables, etc.), but I have not tested it. Ergo, it's not really
+// fixed.
 
 // Start up a thread drawing the given voxel world. The OpenGL context
 // of the given Window is used, and the camera can be controlled from
