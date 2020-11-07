@@ -20,6 +20,8 @@ namespace myricube {
 
 class RendererLogic;
 
+void render_loop(RendererLogic&);
+
 // Passed to the renderer thread.
 struct RenderArgs
 {
@@ -59,7 +61,7 @@ class RenderThread
         auto thread_loop = [self=this, factory=factory, args=std::move(args)]
         {
             std::shared_ptr<RendererLogic> ptr = factory(self, std::move(args));
-            ptr->render_loop(); // TODO: forward declare.
+            render_loop(*ptr);
         };
         render_thread = std::thread(std::move(thread_loop));
     }

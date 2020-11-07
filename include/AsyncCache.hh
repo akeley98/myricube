@@ -18,7 +18,7 @@
 // 4. Tracking the number of frames elapsed, and recording the last
 //    frame in which an entry was used. [Call begin_frame at the start
 //    of each frame. request_entry records frame number when an EntryT
-//    is accessed].
+//    is accessed.]
 //
 // 5. Evicting least-recently-used entries when a new (fully-loaded)
 //    entry gets swapped-in from a staging buffer. Entries are
