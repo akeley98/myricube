@@ -47,6 +47,8 @@ class RenderThread
     // The renderer thread.
     std::thread render_thread;
 
+    friend class RendererLogic;
+
   public:
     // Start the renderer thread: this thread runs the given
     // RendererLogic factory function and runs the resulting

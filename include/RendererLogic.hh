@@ -21,7 +21,8 @@
 // render them.
 //
 // By "manage", I mean "delegate all actual API work to the subclass's
-// functions". Also, when I say "lists of chunk group", what I really
+// functions" (look for the protected section to see their
+// specifics). Also, when I say "lists of chunk group", what I really
 // mean is lists of the MeshEntry/RaycastEntry template parameters,
 // which should hold the 3D-textures or whatever needed to actually
 // render a chunk group.
@@ -37,22 +38,54 @@
 
 #include "AsyncCache.hh"
 #include "camera.hh"
+#include "mesh.hh"
+#include "PackedAABB.hh"
 #include "RenderThread.hh"
 #include "voxels.hh"
 
-// Need AABB and Mesh header files aabb.hh and mesh.hh.
-
 namespace myricube {
 
-// MeshEntry and MeshShading are the EntryT and StagingT type
-// parameters for the AsyncCache used for mesh rendering
+// (roughly) minimum distance from the camera that a chunk needs
+// to be to switch from mesh to raycast graphics.
+// Keep as int to avoid rounding errors in distance culling.
+// Might make this configurable some day.
+constexpr int raycast_threshold = 170;
+
+// Slightly higher threshold than raycast_threshold. Chunk groups
+// within this distance to the camera have their meshes loaded even
+// if no part is actually drawn as a mesh (this is needed now that
+// MeshStore has some latency in loading meshes).
+constexpr int mesh_load_threshold = 10 + raycast_threshold;
+
+// See the protected virtual section to see the functions you have to
+// implement.
+//
+// MeshEntry: a single chunk group's data that is passed to the mesh
+// rendering function (e.g. this could be a list of triangles)
+//
+// RaycastEntry: a single chunk group's data that is passed to the
+// raycast rendering function (e.g. this could be a 3D texture).
+//
+// Both are stored in a 3D cache, which could be read by rendering
+// functions. To avoid modifying them while they're used for
+// rendering, there's also "staging" versions of the two above types.
+// Data flows from a CPU-side chunk group to a staging buffer on a
+// worker thread (see worker_stage), then from a staging buffer to the
+// main cache on the main thread (see swap_in). It is up to you how to
+// divide work between the workers and main thread.
+//
+// More specifically, MeshEntry and MeshShading are the EntryT and
+// StagingT type parameters for the AsyncCache used for mesh rendering
 // (i.e. MeshEntry should be the API data needed to actually render a
 // chunk group with the implemented mesh renderer). RaycastEntry and
 // RaycastStaging are EntryT and StagingT for raycast rendering.
 //
 // Throughout, "main thread" refers to the thread that created this
 // RendererLogic and is running its render_loop.
-template <MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
+template <typename MeshEntry,
+          typename MeshStaging,
+          typename RaycastEntry,
+          typename RaycastStaging>
 class RendererLogic
 {
     // Back pointer to the RenderThread that instantiated this
@@ -110,7 +143,7 @@ class RendererLogic
 
     // Called by the main thread. Given a vector of chunk groups
     // (represented as pairs of their MeshEntry and group coordinate),
-    // draw them using the mesh rendering strategy.
+    // draw them using the mesh rendering method.
     virtual void
     draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>&) = 0;
@@ -119,7 +152,11 @@ class RendererLogic
     //
     // Given a vector of chunk groups (represented as pairs of their
     // RaycastEntry and group coordinate), draw them using the raycast
-    // rendering strategy.
+    // rendering method.
+    //
+    // NOTE: For things to look right, you'll have to use decide_chunk
+    // to only draw chunks within the given chunk groups that are
+    // within raycasting range.
     virtual void
     draw_raycast_entries(
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>&) = 0;
@@ -272,7 +309,8 @@ class RendererLogic
     //
     // This function may be duplicated on the GPU, hence the
     // floor(eye) -- this prevents subtle disagreements due to
-    // different FP representations.
+    // different FP representations. Also, think twice before changing
+    // this function's implementation.
     int decide_chunk(glm::ivec3 group_coord,
                      PackedAABB aabb)
     {
@@ -296,6 +334,233 @@ class RendererLogic
         if (squared_dist > far_plane * far_plane) return cull;
         if (squared_dist < raycast_thresh * raycast_thresh) return draw_mesh;
         return draw_raycast;
+    }
+
+    // 3D cache of mesh/raycast entries (one entry per chunk group).
+    // Really all this is just to dispatch the real work to the
+    // abstract functions: see AsyncCache for actual implementation details.
+    template <typename EntryT, typename StagingT>
+    struct StoreT : public AsyncCache<EntryT, StagingT>
+    {
+        // Back pointer to RendererLogic.
+        RendererLogic* owner;
+
+      public:
+        StoreT(RendererLogic* owner_, const AsyncCacheArgs& args) :
+            AsyncCache(args),
+            owner(owner_)
+        {
+
+        }
+
+        // Read from disk/memory data for the given chunk group and
+        // pass it to the function filling a staging buffer.
+        // We promised to fix the dirty flag.
+        bool stage(StagingT* staging, glm::ivec3 group_coord) override
+        {
+            thread_local std::unique_ptr<ViewWorldCache> world_cache_ptr;
+            if (world_cache_ptr == nullptr) {
+                world_cache_ptr.reset(new ViewWorldCache(owner->world_handle));
+            }
+
+            auto& entry = world_cache_ptr->get_entry(group_coord);
+            const BinChunkGroup* group_ptr = entry.chunk_group_ptr.get();
+            if (group_ptr == nullptr) return false;
+
+            owner->worker_stage(staging, group_ptr);
+            return true;
+        }
+
+        // Swap from staging buffer to the cache (if ready).
+        bool swap_in(StagingT* staging,
+                     std::unique_ptr<EntryT>* p_uptr_entry) override
+        {
+            return owner->swap_in(staging, p_uptr_entry);
+        }
+    };
+
+    class MeshStore : public StoreT<MeshEntry, MeshStaging>
+    {
+      public:
+        MeshStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
+        StoreT(owner_, args) { }
+    };
+
+    class RaycastStore : StoreT<RaycastEntry, RaycastStaging>
+    {
+      public:
+        RaycastStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
+        StoreT(owner_, args) { }
+    };
+
+    // Collect a list of chunk groups (MeshEntry) that are within the
+    // view frustum, and close enough for mesh rendering, and send
+    // them to the mesh rendering implementation.
+    void render_world_mesh_step()
+    {
+        if (mesh_store == nullptr) {
+            static constexpr AsyncCacheArgs args = {
+                3,    // modulus
+                8,    // associativity
+                32,   // staging buffers
+                1,    // worker threads
+                10,   // condvar timeout in milliseconds
+                2,    // Frames elapsed since entry use before eviction allowed
+            };
+            mesh_store.reset(new MeshStore(this, args));
+        }
+        std::vector<std::pair<MeshEntry*, glm::ivec3>> entries;
+        MeshStore& store = *mesh_store;
+        store.begin_frame();
+
+        float squared_thresh = mesh_load_threshold * mesh_load_threshold;
+
+        glm::ivec3 group_coord_low, group_coord_high;
+        glm::dvec3 disp(mesh_load_threshold);
+        split_coordinate(tr.eye - disp, &group_coord_low);
+        split_coordinate(tr.eye + disp, &group_coord_high);
+
+        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
+        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
+        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
+            auto group_coord = glm::ivec3(xH, yH, zH);
+
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
+
+            float min_squared_dist;
+            bool cull = cull_group(group_coord, &min_squared_dist);
+            // Skip culled chunk groups or those so far away that they
+            // cannot possibly contain chunks near enough to be drawn
+            // using the mesh renderer.
+            if (cull or min_squared_dist >= squared_thresh) continue;
+
+            // Lookup the needed entry; scheduling if missing or dirty.
+            // Draw the group if an entry for it is found.
+            MeshEntry* entry = store.request_entry(group_coord);
+
+            if (entry == nullptr) {
+                store.enqueue(group_coord);
+            }
+            else {
+                auto bit = renderer_mesh_dirty_flag;
+                if (current_chunk_group->dirty_flags.load() & bit) {
+                    store.enqueue(group_coord);
+                    current_chunk_group->dirty_flags &= ~bit;
+                }
+                entries.emplace_back(entry, group_coord);
+            }
+        }
+        }
+        }
+
+        draw_mesh_entries(entries);
+
+        // Handle requests for new chunk groups.
+        store.stage_from_queue(8);
+        store.swap_in_from_staging(8);
+    }
+
+    // Collect a list of chunk groups (RaycastEntry) that are within
+    // the view frustum and send them to the raycast renderer
+    // implementation.
+    void render_world_raycast_step()
+    {
+        if (raycast_store == nullptr) {
+            static constexpr AsyncCacheArgs args = {
+                4,   // modulus
+                12,  // associativity (CHECK THIS IF THERE's FLICKERING)
+                128, // staging buffers
+                2,   // worker threads
+                10,  // condvar timeout in milliseconds
+                2,   // Frames elapsed since entry use before eviction allowed
+            };
+            raycast_store.reset(new RaycastStore(this, args));
+        }
+        RaycastStore& store = *raycast_store;
+        store.begin_frame();
+
+        // Resize the cache to a size suitable for the given render distance.
+        auto far_plane = tr.far_plane;
+        uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
+        store.set_modulus(modulus, glFinish);
+
+        // Count and limit the number of new chunk groups added to the
+        // RaycastStore this frame.
+        int remaining_new_chunk_groups_allowed =
+            tr.max_frame_new_chunk_groups;
+
+        // Collect all chunk groups needing to be raycast, and sort from
+        // nearest to furthest (reverse painters). This fascilitates
+        // the early depth test optimization.
+        float squared_thresh = tr.far_plane;
+        squared_thresh *= squared_thresh;
+        std::vector<std::pair<float, glm::ivec3>> group_coord_by_depth;
+
+        unsigned drawn_group_count = 0;
+        glm::ivec3 group_coord_low, group_coord_high;
+        glm::dvec3 disp(tr.far_plane);
+        split_coordinate(tr.eye - disp, &group_coord_low);
+        split_coordinate(tr.eye + disp, &group_coord_high);
+
+        for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
+        for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
+        for (int32_t xH = group_coord_low.x; xH <= group_coord_high.x; ++xH) {
+            auto group_coord = glm::ivec3(xH, yH, zH);
+            set_current_chunk_group(group_coord);
+            if (current_chunk_group == nullptr) continue;
+
+            float min_squared_dist;
+            bool cull = cull_group(group_coord, &min_squared_dist);
+            if (cull or min_squared_dist >= squared_thresh) continue;
+            group_coord_by_depth.emplace_back(min_squared_dist, group_coord);
+            ++drawn_group_count;
+        }
+        }
+        }
+
+        if (!disable_zcull_sort) {
+            auto lt_depth = [] (const auto& left, const auto& right)
+            {
+                return left.first < right.first;
+            };
+            std::sort(group_coord_by_depth.begin(),
+                      group_coord_by_depth.end(),
+                      lt_depth);
+        }
+
+        raycast_store->swap_in_from_staging(80);
+
+        // Now collect all the RaycastEntry objects we will draw,
+        // scheduling loading new/dirty entries as we go along.
+        std::vector<std::pair<RaycastEntry*, glm::ivec3>> entries;
+        for (auto pair : group_coord_by_depth) {
+            glm::ivec3 group_coord = pair.second;
+            RaycastEntry* entry = raycast_store->request_entry(group_coord);
+
+            if (entry == nullptr) {
+                if (remaining_new_chunk_groups_allowed-- > 0) {
+                    raycast_store->enqueue(group_coord);
+                }
+            }
+            else {
+                entries.emplace_back(entry, group_coord);
+
+                set_current_chunk_group(group_coord);
+                assert(current_chunk_group != nullptr);
+                auto bit = renderer_raycast_dirty_flag;
+                if ((current_chunk_group->dirty_flags.load() & bit)) {
+                    store.enqueue(group_coord);
+                    current_chunk_group->dirty_flags &= ~bit;
+                }
+            }
+        }
+
+        // Draw all the raycast entries.
+        draw_raycast_entries(entries);
+
+        // Now start filling the new staging buffers.
+        raycast_store->stage_from_queue(80);
     }
 };
 

@@ -18,6 +18,8 @@
 #include <vector>
 
 #include "glad/glad.h"
+#include "MeshVoxelVertex.hh"
+#include "PackedAABB.hh"
 
 namespace myricube {
 
@@ -26,23 +28,6 @@ constexpr int packed_color_idx = 0;
 constexpr int packed_vertex_idx = 1;
 constexpr int packed_aabb_low_idx = 0;
 constexpr int packed_aabb_high_idx = 1;
-
-// bit assignments for packed verts.
-constexpr uint32_t x_shift = 0;
-constexpr uint32_t y_shift = 8;
-constexpr uint32_t z_shift = 16;
-constexpr uint32_t pos_x_face_bit = (1 << 24);
-constexpr uint32_t neg_x_face_bit = (1 << 25);
-constexpr uint32_t pos_y_face_bit = (1 << 26);
-constexpr uint32_t neg_y_face_bit = (1 << 27);
-constexpr uint32_t pos_z_face_bit = (1 << 28);
-constexpr uint32_t neg_z_face_bit = (1 << 29);
-constexpr uint32_t all_face_bits = pos_x_face_bit
-                            | neg_x_face_bit
-                            | pos_y_face_bit
-                            | neg_y_face_bit
-                            | pos_z_face_bit
-                            | neg_z_face_bit;
 
 // Book-keeping for my plan to deliver arrays of voxel data to the GPU
 // using shader storage buffer objects.
