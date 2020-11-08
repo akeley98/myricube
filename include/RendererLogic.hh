@@ -207,8 +207,9 @@ class RendererLogic : RendererBase
     // the workers are not affected).
     virtual void main_thread_wait_idle() { wait_idle(); }
 
-    // Like the above, but called before destroying the cache. This
-    // affects the staging buffers as well.
+    // Like the above, but called after the worker threads are stopped
+    // but before destroying the cache. (Difference from above is
+    // destruction affects the staging buffers as well).
     virtual void wait_idle() = 0;
 
   private:
@@ -592,6 +593,8 @@ class RendererLogic : RendererBase
 
     void destroy_stores() override final
     {
+        mesh_store->stop_threads();
+        raycast_store->stop_threads();
         wait_idle();
         mesh_store.reset(nullptr);
         raycast_store.reset(nullptr);

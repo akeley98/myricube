@@ -295,6 +295,11 @@ class AsyncCache
 
     virtual ~AsyncCache()
     {
+        stop_threads();
+    }
+
+    void stop_threads()
+    {
         thread_exit_flag.store(true);
         for (size_t i = 0; i < worker_thread_count; ++i) {
             worker_threads[i].join();
