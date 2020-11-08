@@ -224,8 +224,7 @@ struct RendererGL :
 
         glClearColor(0, 0, 0, 1);
 
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
+        glDepthFunc(GL_LESS);
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
@@ -239,6 +238,10 @@ struct RendererGL :
         p_window->get_framebuffer_size(&x, &y);
         glViewport(0, 0, x, y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glDisable(GL_DEPTH_TEST);
+        render_background();
+        glEnable(GL_DEPTH_TEST);
     }
 
 
@@ -725,7 +728,6 @@ struct RendererGL :
 
     void end_frame() override
     {
-        render_background();
         p_window->swap_buffers();
     }
 
