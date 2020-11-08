@@ -503,7 +503,7 @@ struct RendererGL :
         glUseProgram(raycast_program);
 
         // Set uniforms unchanged per-chunk-group.
-        glUniform1i(u.chunk_debug, false);
+        glUniform1i(u.chunk_debug, tr.chunk_debug);
         glUniform1i(u.fog_enabled, tr.use_fog);
         glUniform1i(u.black_fog, tr.use_black_fog);
         glUniform1i(u.far_plane_squared, far_plane * far_plane);

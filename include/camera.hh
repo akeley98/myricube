@@ -46,6 +46,7 @@ struct CameraTransforms
     // Fog flags
     bool use_fog;
     bool use_black_fog;
+    bool chunk_debug;
 
     // Maximum number of new chunk groups added to GPU memory per frame.
     int max_frame_new_chunk_groups;
@@ -86,6 +87,7 @@ class SyncCamera
     // Fog setting.
     bool fog_enabled = true;
     bool black_fog = false;
+    bool chunk_debug = false;
 
     // Maximum number of fragments for the screen (integer
     // downsampling is done to meet this limit). Non-positive value
@@ -249,6 +251,18 @@ class SyncCamera
         return black_fog = in;
     }
 
+    bool is_chunk_debug() const
+    {
+        std::lock_guard guard(camera_mutex);
+        return chunk_debug;
+    }
+
+    void set_chunk_debug(bool in)
+    {
+        std::lock_guard guard(camera_mutex);
+        chunk_debug = in;
+    }
+
     int get_max_frame_new_chunk_groups() const
     {
         std::lock_guard guard(camera_mutex);
@@ -324,6 +338,7 @@ class SyncCamera
         t.far_plane = far_plane;
         t.use_fog = fog_enabled;
         t.use_black_fog = black_fog;
+        t.chunk_debug = chunk_debug;
         t.max_frame_new_chunk_groups = max_frame_new_chunk_groups;
         t.target_fragments = target_fragments;
         t.frame_x = frame_x;

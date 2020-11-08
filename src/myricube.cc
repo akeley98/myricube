@@ -280,34 +280,13 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
     };
     window.add_key_target("toggle_black_fog", toggle_black_fog);
 
-    // Maybe I should dehackify this variable one day.
-    extern bool chunk_debug;
     KeyTarget toggle_chunk_debug;
     toggle_chunk_debug.down = [&] (KeyArg) -> bool
     {
-        chunk_debug = !chunk_debug;
+        camera->set_chunk_debug(!camera->is_chunk_debug());
         return true;
     };
     window.add_key_target("toggle_chunk_debug", toggle_chunk_debug);
-
-    // And these ones.
-    extern bool evict_stats_debug;
-    KeyTarget toggle_evict_stats_debug;
-    toggle_evict_stats_debug.down = [&] (KeyArg) -> bool
-    {
-        evict_stats_debug = !evict_stats_debug;
-        return true;
-    };
-    window.add_key_target("toggle_evict_stats_debug", toggle_evict_stats_debug);
-
-    extern bool disable_zcull_sort;
-    KeyTarget toggle_zcull_sort;
-    toggle_zcull_sort.down = [&] (KeyArg) -> bool
-    {
-        disable_zcull_sort = !disable_zcull_sort;
-        return true;
-    };
-    window.add_key_target("toggle_zcull_sort", toggle_zcull_sort);
 
     KeyTarget increase_far_plane, decrease_far_plane;
     increase_far_plane.down = [&] (KeyArg arg) -> bool
@@ -612,8 +591,6 @@ int Main(std::vector<std::string> args)
                 "App changing voxel world directory");
         }
 
-        extern bool evict_stats_debug;
-        evict_stats_debug = false;
         set_window_title(window, renderer);
     }
 

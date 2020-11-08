@@ -11,7 +11,6 @@
 OBJS=cckiss/src/myricube.cc.o \
      cckiss/src/window.cc.o \
      cckiss/src/app.cc.o \
-     cckiss/src/renderer.cc.o \
      cckiss/src/RendererGL.cc.o \
      cckiss/src/voxels.cc.o \
      cckiss/apps/AxisTest.cc.o \
