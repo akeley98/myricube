@@ -301,6 +301,7 @@ class AsyncCache
     void stop_wait_threads()
     {
         thread_exit_flag.store(true);
+        condvar.notify_all();
         for (size_t i = 0; i < worker_thread_count; ++i) {
             std::thread& thr = worker_threads[i];
             if (thr.joinable()) thr.join();
@@ -377,11 +378,28 @@ class AsyncCache
     // buffers. The worker threads will eventually get to loading the
     // relevant data in. Return the number actually sent to staging
     // buffers.
+    //
+    // Optional Acceptor is run on every glm::ivec3 coordinate popped
+    // from the queue: if Acceptor returns false, the coordinate is
+    // silently discarded without being staged.
     size_t stage_from_queue(size_t max_stage=1) noexcept
     {
+        auto always_accept = [] (glm::ivec3) { return true; };
+        return stage_from_queue(max_stage, always_accept);
+    }
+
+    template <typename Acceptor>
+    size_t stage_from_queue(size_t max_stage, Acceptor&& acceptor) noexcept
+    {
         size_t pop_count = 0;
-        for (size_t i = 0; i < max_stage; ++i, ++pop_count) {
+        size_t staged_count = 0;
+        for (; staged_count < max_stage; ++pop_count) {
             if (pop_count >= queue.size()) break;
+
+            // Check the next group coordinate in the queue; skip if
+            // acceptor doesn't like it.
+            glm::ivec3 coord = queue[pop_count];
+            if (!acceptor(coord)) continue;
 
             // Look for an available staging buffer.
             StagingBuffer* p_buffer = nullptr;
@@ -398,12 +416,13 @@ class AsyncCache
 
             // Success -- assign coordinate to available staging buffer.
           found:
-            p_buffer->coord = queue[pop_count];
+            p_buffer->coord = coord;
             p_buffer->state = staging_unprocessed;
+            ++staged_count;
         }
-        if (pop_count > 0) condvar.notify_all();
+        if (staged_count > 0) condvar.notify_all();
         queue.erase(queue.begin(), queue.begin() + pop_count);
-        return pop_count;
+        return staged_count;
     }
 
     // Step 2/2 of populating the cache: Make at most max_swap

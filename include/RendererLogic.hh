@@ -51,13 +51,13 @@ namespace myricube {
 // to be to switch from mesh to raycast graphics.
 // Keep as int to avoid rounding errors in distance culling.
 // Might make this configurable some day.
-constexpr int raycast_threshold = 170;
+constexpr int raycast_threshold = 160;
 
 // Slightly higher threshold than raycast_threshold. Chunk groups
 // within this distance to the camera have their meshes loaded even
 // if no part is actually drawn as a mesh (this is needed now that
 // MeshStore has some latency in loading meshes).
-constexpr int mesh_load_threshold = 10 + raycast_threshold;
+constexpr int mesh_load_threshold = 20 + raycast_threshold;
 
 // See the protected virtual section to see the functions you have to
 // implement.
@@ -244,7 +244,7 @@ class RendererLogic : public RendererBase
     // Should this group be culled? If not, return through
     // *squared_dist the squared distance between the eye and the
     // nearest point in the group.
-    bool cull_group(glm::ivec3 group_coord, float* squared_dist=nullptr)
+    bool cull_group(glm::ivec3 group_coord, float* squared_dist=nullptr) const
     {
         auto& tr = transforms;
         glm::mat4 vp = tr.residue_vp_matrix;
@@ -322,6 +322,15 @@ class RendererLogic : public RendererBase
         return false;
     }
 
+    // Return a lambda form of cull_group (passed to the
+    // MeshStore/RaycastStore to avoid spending time loading groups
+    // that are outside the view frustum).
+    auto get_cull_acceptor() const
+    {
+        auto& self = *this;
+        return [&self] (glm::ivec3 coord) { return !self.cull_group(coord); };
+    }
+
     static constexpr int cull = 1, draw_mesh = 2, draw_raycast = 3;
     // Distance culling step. Given the group coordinate and AABB of a
     // chunk, decide which of the above things we should do: cull it,
@@ -333,7 +342,7 @@ class RendererLogic : public RendererBase
     // different FP representations. Also, think twice before changing
     // this function's implementation.
     int decide_chunk(glm::ivec3 group_coord,
-                     PackedAABB aabb)
+                     PackedAABB aabb) const
     {
         auto& tr = transforms;
         glm::ivec3 aabb_low(aabb.low_x(), aabb.low_y(), aabb.low_z());
@@ -479,7 +488,7 @@ class RendererLogic : public RendererBase
         draw_mesh_entries(entries);
 
         // Handle requests for new chunk groups.
-        store.stage_from_queue(8);
+        store.stage_from_queue(8, get_cull_acceptor());
         store.swap_in_from_staging(8);
     }
 
@@ -583,7 +592,7 @@ class RendererLogic : public RendererBase
         draw_raycast_entries(entries);
 
         // Now start filling the new staging buffers.
-        raycast_store->stage_from_queue(80);
+        raycast_store->stage_from_queue(80, get_cull_acceptor());
     }
 
   protected:
