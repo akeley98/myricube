@@ -81,7 +81,7 @@ struct ChunkDrawData
 // in addition the residue coordinate of the chunk's lower-left corner
 // (needed for positioning the AABB and voxel positions in the
 // containing chunk group's coordinate system).
-void fill_chunk_mesh(
+inline void fill_chunk_mesh(
     MappedChunkMesh* mesh_ptr,
     ChunkDrawData* draw_data_ptr,
     const BinChunk& chunk,

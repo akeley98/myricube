@@ -18,9 +18,24 @@
 
 namespace myricube {
 
-class RendererLogic;
+class RenderThread;
 
-void render_loop(RendererLogic&);
+// Non-templatized base class for RendererLogic.
+class RendererBase
+{
+    // Back pointer to the RenderThread that instantiated this
+    // RendererLogic.
+    RenderThread* const p_back = nullptr;
+    friend class RenderThread;
+
+  protected:
+    RendererBase(RenderThread* p_back_) : p_back(p_back_) { }
+    virtual void draw_frame() = 0;
+    virtual void destroy_stores() = 0;
+
+  private:
+    inline void render_loop();
+};
 
 // Passed to the renderer thread.
 struct RenderArgs
@@ -47,14 +62,14 @@ class RenderThread
     // The renderer thread.
     std::thread render_thread;
 
-    friend class RendererLogic;
+    friend class RendererBase;
 
   public:
     // Start the renderer thread: this thread runs the given
     // RendererLogic factory function and runs the resulting
     // RendererLogic's renderer_loop until ordered to stop. The given
     // RenderArgs is passed through.
-    typedef std::shared_ptr<RendererLogic> Factory(RenderThread*, RenderArgs);
+    typedef std::shared_ptr<RendererBase> Factory(RenderThread*, RenderArgs);
     RenderThread(Factory factory, RenderArgs args)
     {
         assert(args.p_window != nullptr);
@@ -62,8 +77,8 @@ class RenderThread
 
         auto thread_loop = [self=this, factory=factory, args=std::move(args)]
         {
-            std::shared_ptr<RendererLogic> ptr = factory(self, std::move(args));
-            render_loop(*ptr);
+            std::shared_ptr<RendererBase> ptr = factory(self, std::move(args));
+            ptr->render_loop();
         };
         render_thread = std::thread(std::move(thread_loop));
     }
@@ -89,15 +104,22 @@ class RenderThread
     // Get the latest fps reported by the renderer thread.
     double get_fps()
     {
-        return atomic_fps.get();
+        return atomic_fps.load();
     }
 
     // Get the frame time (in seconds) reported by the renderer thread.
     double get_frame_time()
     {
-        return atomic_frame_time.get();
+        return atomic_frame_time.load();
     }
 };
+
+void RendererBase::render_loop()
+{
+    // TODO write fps and frame time.
+    while (!p_back->thread_exit_flag.load()) draw_frame();
+    destroy_stores();
+}
 
 } // end namespace myricube
 

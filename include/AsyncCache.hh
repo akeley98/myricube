@@ -316,7 +316,9 @@ class AsyncCache
     //
     // We don't honor the safety_frame_count here. To avoid invalid
     // memory troubles, you need to pass a callback that stalls the
-    // pipeline (glFinish or vkDeviceWaitIdle).
+    // pipeline (glFinish or vkDeviceWaitIdle). CRUCIALLY, this only
+    // affects the main cache (of EntryT), which the worker threads
+    // can't access; the thread-shared staging buffer is not affected.
     template <typename GLFinish>
     void set_modulus(size_t new_modulus, GLFinish finish)
     {

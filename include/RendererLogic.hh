@@ -33,12 +33,13 @@
 #include "myricube.hh"
 
 #include <cassert>
+#include <memory>
 #include <thread>
 #include <vector>
 
 #include "AsyncCache.hh"
 #include "camera.hh"
-#include "mesh.hh"
+#include "MeshVoxelVertex.hh"
 #include "PackedAABB.hh"
 #include "RenderThread.hh"
 #include "voxels.hh"
@@ -86,11 +87,8 @@ template <typename MeshEntry,
           typename MeshStaging,
           typename RaycastEntry,
           typename RaycastStaging>
-class RendererLogic
+class RendererLogic : RendererBase
 {
-    // Back pointer to the RenderThread that instantiated this
-    // RendererLogic.
-    RenderThread* const p_back = nullptr;
   protected:
     // Window, camera, world arguments used to launch the render thread.
     const std::shared_ptr<Window> p_window;
@@ -105,6 +103,12 @@ class RendererLogic
     // storing chunk groups. These are not initialized until after the
     // subclass constructor finishes (so that needed resources have a
     // chance to be initialized).
+    //
+    // NOTE: A special hack is done at RendererBase::destroy_stores
+    // ensure these are destroyed BEFORE the derived class destructor
+    // is run (but after the last frame).  This is needed in case
+    // MeshEntry/RaycastEntry depends on the context set up by the
+    // derived class.
     class MeshStore;
     class RaycastStore;
     std::unique_ptr<MeshStore> mesh_store;
@@ -122,7 +126,7 @@ class RendererLogic
   protected:
     // Base class constructor really just copies stuff in.
     RendererLogic(RenderThread* p_back_, RenderArgs args) :
-        p_back(p_back_),
+        RendererBase(p_back_),
         p_window(args.p_window),
         p_camera(args.p_camera),
         world_handle(args.world_handle),
@@ -195,6 +199,18 @@ class RendererLogic
 
     // NOTE: I really hope the above stays up-to-date if I change the
     // AsyncCache...
+
+    // A bit of a wart, just pass in glFinish or vkQueueWaitIdle.
+    // This is needed when we resize the cache due to render distance
+    // change (note: only the main 3D cache, which is accessed by the
+    // main thread only, is affected; the staging buffers shared with
+    // the workers are not affected).
+    virtual void main_thread_wait_idle() { wait_idle(); }
+
+    // Like the above, but called before destroying the cache. This
+    // affects the staging buffers as well.
+    virtual void wait_idle() = 0;
+
   private:
     // Sets the current_chunk_group ptr to point to the named chunk group.
     // (nullptr if it doesn't exist). This seems oddly stateful for my
@@ -336,6 +352,7 @@ class RendererLogic
         return draw_raycast;
     }
 
+  private:
     // 3D cache of mesh/raycast entries (one entry per chunk group).
     // Really all this is just to dispatch the real work to the
     // abstract functions: see AsyncCache for actual implementation details.
@@ -347,7 +364,7 @@ class RendererLogic
 
       public:
         StoreT(RendererLogic* owner_, const AsyncCacheArgs& args) :
-            AsyncCache(args),
+            AsyncCache<EntryT, StagingT>(args),
             owner(owner_)
         {
 
@@ -383,14 +400,14 @@ class RendererLogic
     {
       public:
         MeshStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
-        StoreT(owner_, args) { }
+        StoreT<MeshEntry, MeshStaging>(owner_, args) { }
     };
 
     class RaycastStore : StoreT<RaycastEntry, RaycastStaging>
     {
       public:
         RaycastStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
-        StoreT(owner_, args) { }
+        StoreT<RaycastEntry, RaycastStaging>(owner_, args) { }
     };
 
     // Collect a list of chunk groups (MeshEntry) that are within the
@@ -417,8 +434,8 @@ class RendererLogic
 
         glm::ivec3 group_coord_low, group_coord_high;
         glm::dvec3 disp(mesh_load_threshold);
-        split_coordinate(tr.eye - disp, &group_coord_low);
-        split_coordinate(tr.eye + disp, &group_coord_high);
+        split_coordinate(transforms.eye - disp, &group_coord_low);
+        split_coordinate(transforms.eye + disp, &group_coord_high);
 
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
@@ -481,27 +498,27 @@ class RendererLogic
         store.begin_frame();
 
         // Resize the cache to a size suitable for the given render distance.
-        auto far_plane = tr.far_plane;
+        auto far_plane = transforms.far_plane;
         uint32_t modulus = uint32_t(std::max(4.0, ceil(far_plane / 128.0)));
-        store.set_modulus(modulus, glFinish);
+        store.set_modulus(modulus, [&] { this->main_thread_wait_idle(); } );
 
         // Count and limit the number of new chunk groups added to the
         // RaycastStore this frame.
         int remaining_new_chunk_groups_allowed =
-            tr.max_frame_new_chunk_groups;
+            transforms.max_frame_new_chunk_groups;
 
         // Collect all chunk groups needing to be raycast, and sort from
         // nearest to furthest (reverse painters). This fascilitates
         // the early depth test optimization.
-        float squared_thresh = tr.far_plane;
+        float squared_thresh = transforms.far_plane;
         squared_thresh *= squared_thresh;
         std::vector<std::pair<float, glm::ivec3>> group_coord_by_depth;
 
         unsigned drawn_group_count = 0;
         glm::ivec3 group_coord_low, group_coord_high;
-        glm::dvec3 disp(tr.far_plane);
-        split_coordinate(tr.eye - disp, &group_coord_low);
-        split_coordinate(tr.eye + disp, &group_coord_high);
+        glm::dvec3 disp(transforms.far_plane);
+        split_coordinate(transforms.eye - disp, &group_coord_low);
+        split_coordinate(transforms.eye + disp, &group_coord_high);
 
         for (int32_t zH = group_coord_low.z; zH <= group_coord_high.z; ++zH) {
         for (int32_t yH = group_coord_low.y; yH <= group_coord_high.y; ++yH) {
@@ -519,7 +536,8 @@ class RendererLogic
         }
         }
 
-        if (!disable_zcull_sort) {
+        // if (!disable_zcull_sort) {
+        if (true) {
             auto lt_depth = [] (const auto& left, const auto& right)
             {
                 return left.first < right.first;
@@ -561,6 +579,22 @@ class RendererLogic
 
         // Now start filling the new staging buffers.
         raycast_store->stage_from_queue(80);
+    }
+
+  protected:
+    void draw_frame() override final
+    {
+        begin_frame();
+        render_world_mesh_step();
+        render_world_raycast_step();
+        end_frame();
+    }
+
+    void destroy_stores() override final
+    {
+        wait_idle();
+        mesh_store.reset(nullptr);
+        raycast_store.reset(nullptr);
     }
 };
 
