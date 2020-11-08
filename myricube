@@ -2,4 +2,6 @@
 FILE=$(readlink -fv "$0")
 # Disable vsync by default
 export vblank_mode=${vblank_mode:-00}
+export __GL_SYNC_TO_VBLANK=${__GL_SYNC_TO_VBLANK:-0}
+
 "${FILE}-bin" "$@" || sleep 1000000

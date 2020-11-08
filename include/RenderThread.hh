@@ -116,8 +116,41 @@ class RenderThread
 
 void RendererBase::render_loop()
 {
-    // TODO write fps and frame time.
-    while (!p_back->thread_exit_flag.load()) draw_frame();
+    double previous_update = glfwGetTime();
+    double previous_fps_update = glfwGetTime();
+    int frames = 0;
+    double frame_time = 0;
+
+    // Draw frames in a loop until the renderer is ordered to stop,
+    // calculating (CPU-side) FPS and frame time.
+    while (!p_back->thread_exit_flag.load()) {
+        draw_frame();
+
+        // Calculate (approximate) frame time. Require at least 2 ms
+        // between frames (workaround to system freeze bug).
+        double now, dt;
+        do {
+            now = glfwGetTime();
+            dt = now - previous_update;
+        } while (dt < 0.002);
+        previous_update = now;
+
+        // Update FPS and frame time. Periodically report back to the
+        // RenderThread.
+        ++frames;
+        if (dt > frame_time) frame_time = dt;
+
+        if (now - previous_fps_update >= 0.5) {
+            p_back->atomic_fps.store(frames / (now - previous_fps_update));
+            p_back->atomic_frame_time.store(frame_time);
+
+            previous_fps_update = now;
+            frames = 0;
+            frame_time = 0;
+        }
+    }
+
+    // DON'T REMOVE THIS.
     destroy_stores();
 }
 
