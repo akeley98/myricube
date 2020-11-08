@@ -1,6 +1,7 @@
-// Window class. Creates OpenGL context and manages user input via callbacks.
-// Note: Although this is written as a class, I'm not confident this will
-// work if there are multiple windows (also glfw is not threadsafe, so...)
+// Window class. Creates OpenGL context (optional) and manages user
+// input via callbacks.  Note: Although this is written as a class,
+// I'm not confident this will work if there are multiple windows
+// (also glfw is not threadsafe, so...)
 
 #ifndef MYRICUBE_WINDOW_HH_
 #define MYRICUBE_WINDOW_HH_
@@ -73,6 +74,7 @@ class Window
     int frame_x = 1920, frame_y = 1080;
 
     bool glad_loaded = false;
+    bool has_OpenGL = false;
 
     // Mapping from names of key targets to the actual key target structures.
     std::unordered_map<std::string, KeyTarget> key_target_map;
@@ -90,9 +92,7 @@ class Window
     // Window resize callback.
     OnWindowResize on_window_resize;
 
-    // Seconds (since glfw initialization?) of previous
-    // update_swap_buffers call. BOGUS for now as I factored
-    // rendering out to another thread.
+    // Seconds (since glfw initialization?) of previous update_events call.
     double previous_update = glfwGetTime();
 
     // Current cursor position; negative if not yet set.
@@ -101,8 +101,9 @@ class Window
 
   public:
     // Construct the window with a callback that is called when the
-    // window is resized.
-    Window(OnWindowResize);
+    // window is resized. bool indicates whether to attach an OpenGL
+    // context to the window.
+    Window(OnWindowResize, bool OpenGL=true);
     ~Window();
     Window(Window&&) = delete;
     // If I make this moveable, remember to update the glfw user pointer.
@@ -111,14 +112,16 @@ class Window
     void set_title(const std::string& title);
     void set_title(const char* title);
 
-    // Get framebuffer size as pair of ints.
+    // Get framebuffer size as pair of ints.  TODO: This is
+    // technically not threadsafe, but doesn't really seem to matter.
     void get_framebuffer_size(int* x, int* y) const
     {
         if (x) *x = frame_x;
         if (y) *y = frame_y;
     }
 
-    // Make the OpenGL context of this window current.
+    // Make the OpenGL context of this window current. Obviously won't
+    // work if this window was not created as an OpenGL window.
     void gl_make_current();
 
     // Provide a name for the given key target. Physical keys can then
@@ -143,6 +146,12 @@ class Window
 
     // Swap front/back OpenGL buffers for this window.
     void swap_buffers();
+
+    // Get the underlying GLFW window.
+    GLFWwindow* get_glfw_window() const
+    {
+        return window;
+    }
 
   private:
     void handle_down(int, float);

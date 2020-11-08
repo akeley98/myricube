@@ -1,9 +1,9 @@
 default: myricube-bin
 	./myricube
 
-CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm
-CXXFLAGS=-Wall -Wextra -O3 -g -fPIC -std=c++17
-CFLAGS=  -Wall -Wextra -O3 -g -fPIC
+CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm -I vk-helpers
+CFLAGS=  -Wall -Wextra -Wno-missing-field-initializers -O3 -g -fPIC
+CXXFLAGS=$(CFLAGS) -std=c++17
 
 -include cckiss/Makefile
 -include OBJS-list
@@ -24,7 +24,7 @@ libmyricube-cvoxel.so: $(LIBOBJS)
 all: myricube-bin myricube-windows
 
 myricube-bin: $(OBJS)
-	$(CXX) $(OBJS) -ldl -lpthread -o myricube-bin
+	$(CXX) $(OBJS) -ldl -lpthread -lvulkan -o myricube-bin
 
 py: libmyricube-cvoxel.so myricube-bin
 	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"

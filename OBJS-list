@@ -12,6 +12,7 @@ OBJS=cckiss/src/myricube.cc.o \
      cckiss/src/window.cc.o \
      cckiss/src/app.cc.o \
      cckiss/src/RendererGL.cc.o \
+     cckiss/src/RendererVk.cc.o \
      cckiss/src/voxels.cc.o \
      cckiss/apps/AxisTest.cc.o \
      cckiss/apps/Congestion.cc.o \
@@ -20,6 +21,12 @@ OBJS=cckiss/src/myricube.cc.o \
      cckiss/apps/Skygrid.cc.o \
      cckiss/apps/ViewWorld.cc.o \
      cckiss/apps/FastNoise.cpp.o \
+     cckiss/vk-helpers/nvh/nvprint.cpp.o \
+     cckiss/vk-helpers/nvvk/context_vk.cpp.o \
+     cckiss/vk-helpers/nvvk/debug_util_vk.cpp.o \
+     cckiss/vk-helpers/nvvk/error_vk.cpp.o \
+     cckiss/vk-helpers/nvvk/extensions_vk.cpp.o \
+     cckiss/vk-helpers/nvvk/swapchain_vk.cpp.o \
      cckiss/glad/src/glad.c.o \
      glfw-build/src/libglfw3.a \
 # (Empty line for backslash)

@@ -6,3 +6,5 @@ libmyricube-cvoxel.so
 cckiss/cckiss_EXAMPLE
 cckiss/git
 apps/FastNoise.o
+log_nvprosample.txt
+shared_sources

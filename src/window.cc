@@ -35,7 +35,7 @@ static inline Window& get_Window(GLFWwindow* window)
     return *result;
 }
 
-Window::Window(OnWindowResize on_window_resize_)
+Window::Window(OnWindowResize on_window_resize_, bool OpenGL)
 {
     on_window_resize = std::move(on_window_resize_);
 
@@ -44,10 +44,17 @@ Window::Window(OnWindowResize on_window_resize_)
     if (!glfwInit()) {
         panic("Failed to initialize glfw");
     }
+
+    has_OpenGL = OpenGL;
+    if (OpenGL) {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+    }
+    else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     window = glfwCreateWindow(1920, 1080, "Myricube", nullptr, nullptr);
 
     if (window == nullptr) {
@@ -83,6 +90,7 @@ void Window::set_title(const char* title)
 
 void Window::gl_make_current()
 {
+    assert(has_OpenGL);
     glfwMakeContextCurrent(window);
     if (!glad_loaded) {
         if (!gladLoadGL()) {
@@ -122,6 +130,7 @@ bool Window::update_events(float* out_dt)
 
 void Window::swap_buffers()
 {
+    assert(has_OpenGL);
     glfwSwapBuffers(window);
 }
 

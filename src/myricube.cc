@@ -75,6 +75,7 @@
 #include "app.hh"
 #include "camera.hh"
 #include "RendererGL.hh"
+#include "RendererVk.hh"
 #include "RenderThread.hh"
 #include "window.hh"
 #include "voxels.hh"
@@ -554,7 +555,7 @@ int Main(std::vector<std::string> args)
     {
         camera_ptr->set_framebuffer_size(x, y);
     };
-    std::shared_ptr<Window> window_ptr(new Window(on_window_resize));
+    std::shared_ptr<Window> window_ptr(new Window(on_window_resize, false));
     Window& window = *window_ptr;
 
     // Set up keyboard controls.
@@ -580,7 +581,7 @@ int Main(std::vector<std::string> args)
 
     // Start renderer thread.
     RenderArgs render_args { window_ptr, camera_ptr, handle };
-    RenderThread renderer(RendererGL_Factory, render_args);
+    RenderThread renderer(RendererVk_Factory, render_args);
 
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {
