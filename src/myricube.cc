@@ -74,7 +74,8 @@
 
 #include "app.hh"
 #include "camera.hh"
-#include "renderer.hh"
+#include "RendererGL.hh"
+#include "RenderThread.hh"
 #include "window.hh"
 #include "voxels.hh"
 
@@ -539,11 +540,12 @@ void bind_keys(Window& window)
     }
 }
 
-void set_window_title(Window& window, const Renderer& renderer)
+void set_window_title(Window& window, const RenderThread& renderer)
 {
     const char format[] = "Myricube %07.2f FPS %03dms frame time";
     char title[sizeof format + 20];
-    sprintf(title, format, get_fps(renderer), get_frame_time_ms(renderer));
+    int milliseconds = int(renderer.get_frame_time() * 1000);
+    sprintf(title, format, renderer.get_fps(), milliseconds);
     window.set_title(title);
 }
 
@@ -565,7 +567,7 @@ int Main(std::vector<std::string> args)
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
 
-    // Instantiate the shared camera (shared with Renderer).
+    // Instantiate the shared camera (shared with the renderer).
     std::shared_ptr<SyncCamera> camera_ptr(new SyncCamera());
 
     // Create a window; callback ensures the window dimensions stay accurate.
@@ -598,8 +600,8 @@ int Main(std::vector<std::string> args)
     filename_string expected_world_dir = handle.get_directory_name();
 
     // Start renderer thread.
-    UPtrRenderer renderer(
-        new_renderer(window_ptr, world->get_handle(), camera_ptr));
+    RenderArgs render_args { window_ptr, camera_ptr, handle };
+    RenderThread renderer(RendererGL_Factory, render_args);
 
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {
@@ -612,12 +614,10 @@ int Main(std::vector<std::string> args)
 
         extern bool evict_stats_debug;
         evict_stats_debug = false;
-        set_window_title(window, *renderer);
+        set_window_title(window, renderer);
     }
 
-    // Stop renderer thread.
-    renderer.reset();
-
+    // Stop renderer thread (RenderThread destructor implicit).
     return 0;
 }
 

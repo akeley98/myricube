@@ -1,6 +1,8 @@
 // OpenGL implementation of RendererLogic.
 #include "RendererLogic.hh"
 
+#include "glad/glad.h"
+
 namespace {
 
 struct MeshEntry
@@ -27,12 +29,20 @@ struct RaycastStaging
 
 namespace myricube {
 
-class RendererGL :
+struct RendererGL :
     RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
 {
+    RendererGL(RenderThread* thread, RenderArgs args) :
+        RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
+        (thread, args)
+    {
+        p_window->gl_make_current();
+        glClearColor(1, 1, 0, 1);
+    }
+
     void begin_frame() override
     {
-
+        glClear(GL_COLOR_BUFFER_BIT);
     }
 
     void
@@ -51,7 +61,7 @@ class RendererGL :
 
     void end_frame() override
     {
-
+        p_window->swap_buffers();
     }
 
     void worker_stage(MeshStaging*, const BinChunkGroup*) override
@@ -73,6 +83,18 @@ class RendererGL :
     {
         return true;
     }
+
+    void wait_idle() override
+    {
+        glFinish();
+    }
 };
+
+std::shared_ptr<RendererBase> RendererGL_Factory(
+    RenderThread* thread,
+    RenderArgs args)
+{
+    return std::shared_ptr<RendererBase>(new RendererGL(thread, args));
+}
 
 } // end namespace myricube

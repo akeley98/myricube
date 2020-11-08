@@ -32,6 +32,7 @@
 
 #include "myricube.hh"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <thread>
@@ -87,7 +88,7 @@ template <typename MeshEntry,
           typename MeshStaging,
           typename RaycastEntry,
           typename RaycastStaging>
-class RendererLogic : RendererBase
+class RendererLogic : public RendererBase
 {
   protected:
     // Window, camera, world arguments used to launch the render thread.
@@ -357,15 +358,15 @@ class RendererLogic : RendererBase
     // 3D cache of mesh/raycast entries (one entry per chunk group).
     // Really all this is just to dispatch the real work to the
     // abstract functions: see AsyncCache for actual implementation details.
-    template <typename EntryT, typename StagingT>
-    struct StoreT : public AsyncCache<EntryT, StagingT>
+    template <typename StagingT, typename EntryT>
+    struct StoreT : public AsyncCache<StagingT, EntryT>
     {
         // Back pointer to RendererLogic.
         RendererLogic* owner;
 
       public:
         StoreT(RendererLogic* owner_, const AsyncCacheArgs& args) :
-            AsyncCache<EntryT, StagingT>(args),
+            AsyncCache<StagingT, EntryT>(args),
             owner(owner_)
         {
 
@@ -397,18 +398,18 @@ class RendererLogic : RendererBase
         }
     };
 
-    class MeshStore : public StoreT<MeshEntry, MeshStaging>
+    class MeshStore : public StoreT<MeshStaging, MeshEntry>
     {
       public:
         MeshStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
-        StoreT<MeshEntry, MeshStaging>(owner_, args) { }
+        StoreT<MeshStaging, MeshEntry>(owner_, args) { }
     };
 
-    class RaycastStore : StoreT<RaycastEntry, RaycastStaging>
+    class RaycastStore : public StoreT<RaycastStaging, RaycastEntry>
     {
       public:
         RaycastStore(RendererLogic* owner_, const AsyncCacheArgs& args) :
-        StoreT<RaycastEntry, RaycastStaging>(owner_, args) { }
+        StoreT<RaycastStaging, RaycastEntry>(owner_, args) { }
     };
 
     // Collect a list of chunk groups (MeshEntry) that are within the

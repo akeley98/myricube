@@ -102,13 +102,13 @@ class RenderThread
     }
 
     // Get the latest fps reported by the renderer thread.
-    double get_fps()
+    double get_fps() const
     {
         return atomic_fps.load();
     }
 
     // Get the frame time (in seconds) reported by the renderer thread.
-    double get_frame_time()
+    double get_frame_time() const
     {
         return atomic_frame_time.load();
     }

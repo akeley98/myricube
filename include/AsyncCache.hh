@@ -302,7 +302,8 @@ class AsyncCache
     {
         thread_exit_flag.store(true);
         for (size_t i = 0; i < worker_thread_count; ++i) {
-            worker_threads[i].join();
+            std::thread& thr = worker_threads[i];
+            if (thr.joinable()) thr.join();
         }
     }
 
