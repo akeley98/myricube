@@ -47,7 +47,7 @@
 // Compute shader for copying pixels stuff from the SSBO staging
 // buffer to the 3D texture for a chunk group. Should be dispatched
 // with x, y, and z of global work groups <= GROUP_SIZE / CHUNK_SIZE.
-layout(local_size_x = CHUNK_SIZE, local_size_y = 4, local_size_z = 1) in;
+layout(local_size_x = CHUNK_SIZE, local_size_y = 8, local_size_z = 1) in;
 
 const uint edge_chunks = uint(GROUP_SIZE / CHUNK_SIZE);
 
