@@ -295,10 +295,10 @@ class AsyncCache
 
     virtual ~AsyncCache()
     {
-        stop_threads();
+        stop_wait_threads();
     }
 
-    void stop_threads()
+    void stop_wait_threads()
     {
         thread_exit_flag.store(true);
         for (size_t i = 0; i < worker_thread_count; ++i) {

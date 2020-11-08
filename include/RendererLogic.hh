@@ -192,6 +192,9 @@ class RendererLogic : public RendererBase
     // pointer-to-unique-ptr so that you can exchange the MeshEntry
     // for an entirely new MeshEntry if needed).
     //
+    // If you return true, MeshStaging MUST be ready for re-use as
+    // soon as this function returns.
+    //
     // Return true if successful, false if we need to retry later.
     virtual bool swap_in(MeshStaging*, std::unique_ptr<MeshEntry>*) = 0;
 
@@ -586,6 +589,7 @@ class RendererLogic : public RendererBase
   protected:
     void draw_frame() override final
     {
+        transforms = p_camera->get_transforms_vk(); // Use glClipControl.
         begin_frame();
         render_world_mesh_step();
         render_world_raycast_step();
@@ -594,8 +598,8 @@ class RendererLogic : public RendererBase
 
     void destroy_stores() override final
     {
-        mesh_store->stop_threads();
-        raycast_store->stop_threads();
+        mesh_store->stop_wait_threads();
+        raycast_store->stop_wait_threads();
         wait_idle();
         mesh_store.reset(nullptr);
         raycast_store.reset(nullptr);
