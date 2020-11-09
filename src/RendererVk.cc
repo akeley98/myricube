@@ -14,6 +14,8 @@
 
 #include <cassert>
 #include <fstream>
+#include <mutex>
+#include <stdexcept>
 #include <vulkan/vulkan.h>
 
 #include "nvvk/context_vk.hpp"
@@ -26,7 +28,7 @@ namespace {
 
 // These should be widely supported, but I can detect support if
 // needed later.
-constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_SRGB;
+constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr auto depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
 
 // Handle for GPU resources for the mesh of one chunk group.
@@ -219,7 +221,9 @@ struct ScopedRenderPass
 
 
 
-// Copied from vulkan-tutorial.com
+// camelCase functions copied with some modifications from
+// vulkan-tutorial.com; they're mostly exempt from my 80-column limit
+// for now.
 std::vector<char> readFile(const std::string& filename)
 {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -247,12 +251,237 @@ VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code
     createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
     VkShaderModule shaderModule;
-    if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create shader module!");
-    }
+    NVVK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
 
     return shaderModule;
 }
+
+uint32_t findMemoryType(
+    VkPhysicalDevice physicalDevice,
+    uint32_t typeFilter,
+    VkMemoryPropertyFlags properties)
+{
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("failed to find suitable memory type!");
+}
+
+// Create a buffer with dedicated device memory.
+void createBuffer(
+    VkPhysicalDevice physicalDevice,
+    VkDevice device,
+    VkDeviceSize size,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags properties,
+    VkBuffer& buffer,
+    VkDeviceMemory& bufferMemory)
+{
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    NVVK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer));
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory));
+
+    vkBindBufferMemory(device, buffer, bufferMemory, 0);
+}
+
+// Create an image with dedicated device memory.
+void createImage(
+    VkPhysicalDevice physicalDevice,
+    VkDevice device,
+    uint32_t width, uint32_t height,
+    VkFormat format,
+    VkImageTiling tiling,
+    VkImageUsageFlags usage,
+    VkMemoryPropertyFlags properties,
+    VkImage& image,
+    VkDeviceMemory& imageMemory)
+{
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = width;
+    imageInfo.extent.height = height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = tiling;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = usage;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create image!");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, image, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate image memory!");
+    }
+
+    vkBindImageMemory(device, image, imageMemory, 0);
+}
+
+VkImageView createImageView(
+    VkDevice device,
+    VkImage image,
+    VkFormat format,
+    VkImageAspectFlags aspectFlags)
+{
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = aspectFlags;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VkImageView imageView;
+    NVVK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &imageView));
+    return imageView;
+}
+
+
+// Manager for framebuffers + shared depth buffer, one per swap chain image.
+struct Framebuffers
+{
+    // From nvvk::SwapChain::getChangeID().  Basically, if this
+    // doesn't match that of nvvk::SwapChain, the swap chain has been
+    // re-created, and we need to re-create the framebuffers here to
+    // match.
+    uint32_t last_change_id;
+
+    // Borrowed device pointers and render pass.
+    VkPhysicalDevice physical_device;
+    VkDevice device;
+    VkRenderPass render_pass;
+
+    // Shared depth buffer and its memory and ImageView.
+    VkDeviceMemory depth_memory;
+    VkImage depth_image;
+    VkImageView depth_view;
+
+    // framebuffer[i] is the framebuffer for swap image i, as you'd
+    // expect.  This is cleared to indicate when this class is in an
+    // unitinialized state.
+    std::vector<VkFramebuffer> framebuffers;
+    bool initialized() const { return !framebuffers.empty(); }
+
+    Framebuffers(
+        VkPhysicalDevice physical_device_,
+        VkDevice dev_,
+        VkRenderPass render_pass_) :
+    physical_device(physical_device_),
+    device(dev_),
+    render_pass(render_pass_) { }
+
+    ~Framebuffers() { destructor(); }
+
+    // Check the swap chain and recreate now if needed (now = no
+    // synchronization done; note however that we can rely on
+    // FrameManager to wait on the main thread queue to idle before
+    // re-creating a swap chain).
+    void recreate_now_if_needed(nvvk::SwapChain& swap_chain) noexcept
+    {
+        if (initialized() or swap_chain.getChangeID() == last_change_id) {
+            return;
+        }
+
+        // Destroy old resources.
+        destructor();
+
+        // Make depth buffer.
+        createImage(
+            physical_device,
+            device,
+            swap_chain.getUpdateWidth(),
+            swap_chain.getUpdateHeight(),
+            depth_format,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            depth_image,
+            depth_memory);
+
+        depth_view = createImageView(
+            device, depth_image, depth_format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+        // Make a framebuffer for every swap chain image.
+        size_t image_count = swap_chain.getImageCount();
+        framebuffers.resize(image_count);
+        for (size_t i = 0; i < image_count; ++i) {
+            std::array<VkImageView, 2> attachments = {
+                swap_chain.getImageView(i),
+                depth_view
+            };
+
+            VkFramebufferCreateInfo framebufferInfo{};
+            framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferInfo.renderPass = render_pass;
+            framebufferInfo.attachmentCount =
+                static_cast<uint32_t>(attachments.size());
+            framebufferInfo.pAttachments = attachments.data();
+            framebufferInfo.width = swap_chain.getUpdateWidth();
+            framebufferInfo.height = swap_chain.getUpdateHeight();
+            framebufferInfo.layers = 1;
+
+            NVVK_CHECK(vkCreateFramebuffer(
+                device, &framebufferInfo, nullptr, &framebuffers.at(i)));
+        }
+
+        last_change_id = swap_chain.getChangeID();
+    }
+
+    void destructor()
+    {
+        if (initialized()) {
+            vkDestroyImageView(device, depth_view, nullptr);
+            vkDestroyImage(device, depth_image, nullptr);
+            vkFreeMemory(device, depth_memory, nullptr);
+            for (VkFramebuffer fb : framebuffers) {
+                vkDestroyFramebuffer(device, fb, nullptr);
+            }
+            framebuffers.clear();
+        }
+        assert(!initialized());
+    }
+
+    VkFramebuffer operator[] (size_t i) const
+    {
+        return framebuffers.at(i);
+    }
+};
 
 
 
@@ -268,8 +497,9 @@ static_assert(sizeof(PushConstant) <= 128);
 
 
 
-// Pipeline for mesh rendering. All we really have to do is load the
-// vert/frag shader and hook up the instanced voxels array.
+// Pipeline for mesh rendering. All we really have to do here is load
+// the vert/frag shader and hook up the instanced voxels
+// array. Everything else is just endless boilerplate.
 struct MeshPipeline
 {
     // We manage these.
@@ -464,11 +694,24 @@ struct RendererVk :
     ScopedSurface glfw_surface;
     FrameManager frame_manager;
     ScopedRenderPass render_pass;
+    Framebuffers framebuffers;
     std::unique_ptr<MeshPipeline> p_mesh_pipeline;
 
     // Set in begin_frame.
     int width, height;
 
+    // Graphics+Present queue used by the main thread, and its family.
+    VkQueue main_queue;
+    uint32_t main_queue_family;
+
+    // Transfer-only queue shared by the worker threads, plus a mutex
+    // synchronizing it.
+    VkQueue worker_queue;
+    uint32_t worker_queue_family;
+    std::mutex worker_queue_mutex;
+
+    // From FrameManager; stuff for current frame. Both owned by the
+    // main thread.
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
@@ -486,9 +729,23 @@ struct RendererVk :
             glfw_surface.initial_width,
             glfw_surface.initial_height),
         render_pass(
-            ctx.m_device)
+            ctx.m_device),
+        framebuffers(
+            ctx.m_physicalDevice,
+            ctx.m_device,
+            render_pass)
     {
+        main_queue =        ctx.m_queueGCT;
+        main_queue_family = ctx.m_queueGCT;
+        worker_queue =        ctx.m_queueT;
+        worker_queue_family = ctx.m_queueT;
 
+        if (main_queue == VK_NULL_HANDLE) {
+            throw std::runtime_error("Failed to find graphics+present queue");
+        }
+        if (worker_queue == VK_NULL_HANDLE) {
+            throw std::runtime_error("Failed to find transfer-only queue");
+        }
     }
 
     void begin_frame() override
@@ -498,6 +755,7 @@ struct RendererVk :
             &frame_cmd_buffer,
             &current_swap_image,
             width, height);
+        framebuffers.recreate_now_if_needed(frame_manager.getSwapChain());
 
         VkImageSubresourceRange imageRange {
             VK_IMAGE_ASPECT_COLOR_BIT,
