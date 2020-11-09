@@ -16,6 +16,7 @@
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <string.h>
 #include <vulkan/vulkan.h>
 
 #include "nvvk/context_vk.hpp"
@@ -25,6 +26,23 @@ using namespace myricube;
 using namespace akeley;
 
 namespace {
+
+// TODO remove
+const std::vector<MeshVoxelVertex> test_mesh = [] {
+    std::vector<MeshVoxelVertex> result;
+    result.push_back({ 0xFF000002, 0x0080FF00 });
+    result.push_back({ 0xFF000003, 0xFF800000 });
+    result.push_back({ 0xFF000103, 0x80808000 });
+    return result;
+} ();
+
+// const std::vector<MeshVoxelVertex> test_mesh = [] {
+//     std::vector<MeshVoxelVertex> result;
+//     result.push_back({ 0xFF000002 & ~pos_x_face_bit, 0x0080FF00 });
+//     result.push_back({ 0xFF000003 & ~neg_x_face_bit & ~pos_y_face_bit, 0xFF800000 });
+//     result.push_back({ 0xFF000103 & ~neg_y_face_bit, 0x80808000 });
+//     return result;
+// } ();
 
 // These should be widely supported, but I can detect support if
 // needed later.
@@ -373,6 +391,7 @@ VkImageView createImageView(
 }
 
 
+
 // Manager for framebuffers + shared depth buffer, one per swap chain image.
 struct Framebuffers
 {
@@ -521,7 +540,7 @@ struct MeshPipeline
     {
         // Boilerplate from vulkan-tutorial.com with some modifications.
         VkPushConstantRange pushConstantRange{};
-        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
         pushConstantRange.offset = 0;
         pushConstantRange.size = sizeof(PushConstant);
 
@@ -691,6 +710,7 @@ struct RendererVk :
 {
     // The order of these is very important.
     ScopedContext ctx;
+    VkDevice dev;
     ScopedSurface glfw_surface;
     FrameManager frame_manager;
     ScopedRenderPass render_pass;
@@ -716,11 +736,16 @@ struct RendererVk :
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
+    // TODO remove
+    VkDeviceMemory test_memory;
+    VkBuffer test_buffer;
+
     RendererVk(RenderThread* thread, RenderArgs args) :
         RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>(
             thread,
             args),
         ctx(),
+        dev(ctx.m_device),
         glfw_surface(
             ctx.m_instance,
             args.p_window->get_glfw_window()),
@@ -730,10 +755,10 @@ struct RendererVk :
             glfw_surface.initial_width,
             glfw_surface.initial_height),
         render_pass(
-            ctx.m_device),
+            dev),
         framebuffers(
             ctx.m_physicalDevice,
-            ctx.m_device,
+            dev,
             render_pass)
     {
         main_queue =        ctx.m_queueGCT;
@@ -747,6 +772,21 @@ struct RendererVk :
         if (worker_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
         }
+
+        // TODO Remove
+        VkDeviceSize bytes = sizeof(test_mesh[0]) * test_mesh.size();
+        createBuffer(
+            ctx.m_physicalDevice,
+            dev,
+            bytes,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            test_buffer,
+            test_memory);
+        void* map;
+        vkMapMemory(dev, test_memory, 0, bytes, 0, &map);
+        memcpy(map, test_mesh.data(), bytes);
+        vkUnmapMemory(dev, test_memory);
     }
 
     void begin_frame() override
@@ -782,58 +822,6 @@ struct RendererVk :
         };
         vkCmdBeginRenderPass(
             frame_cmd_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
-
-        // VkImageSubresourceRange imageRange {
-        //     VK_IMAGE_ASPECT_COLOR_BIT,
-        //     0, VK_REMAINING_MIP_LEVELS,
-        //     0, VK_REMAINING_ARRAY_LAYERS };
-
-        // // Command swap chain image transition to dst optimal layout.
-        // VkImageMemoryBarrier transferLayoutBarrier {
-        //     VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        //     nullptr,
-        //     0,
-        //     VK_ACCESS_MEMORY_WRITE_BIT,
-        //     VK_IMAGE_LAYOUT_UNDEFINED,
-        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        //     VK_QUEUE_FAMILY_IGNORED,
-        //     VK_QUEUE_FAMILY_IGNORED,
-        //     current_swap_image.image,
-        //     imageRange };
-
-        // vkCmdPipelineBarrier(
-        //     frame_cmd_buffer,
-        //     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        //     VK_PIPELINE_STAGE_TRANSFER_BIT,
-        //     0, 0, nullptr,
-        //     0, nullptr,
-        //     1, &transferLayoutBarrier);
-
-        // // Clear the swap chain image to one color.
-        // uint64_t ns = uint64_t(glfwGetTime() * 1e9);
-
-        // VkClearColorValue color{};
-        // double nanoTau = 6.283185307179587e-9;
-        // float red = 0.5 + 0.5 * cos((ns % 1'000'000'000) * nanoTau);
-        // float green = 0.5 + 0.5 * cos(2.0 + (ns % 1'000'000'000) * nanoTau);
-        // float blue = 1.0f - red - green;
-        // color.float32[0] = red;
-        // color.float32[1] = green;
-        // color.float32[2] = blue;
-        // color.float32[3] = 1.0f;
-        // vkCmdClearColorImage(
-        //     frame_cmd_buffer,
-        //     current_swap_image.image,
-        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        //     &color,
-        //     1, &imageRange);
-
-        // // Transition image to layout suitable for display.
-        // frame_manager.cmdSwapChainImageFixLayout(
-        //     frame_cmd_buffer,
-        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        //     VK_ACCESS_TRANSFER_WRITE_BIT,
-        //     VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
 
 
@@ -845,6 +833,7 @@ struct RendererVk :
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
+        fprintf(stderr, "draw_mesh_entries\n");
         // Since I don't know how to use dynamic state, we have to recreate
         // the pipeline if the framebuffer size changed.
         if (p_mesh_pipeline == nullptr
@@ -852,13 +841,50 @@ struct RendererVk :
             or p_mesh_pipeline->height != height)
         {
             p_mesh_pipeline.reset(new MeshPipeline(
-                ctx.m_device,
+                dev,
                 render_pass,
                 width, height));
         }
 
-        PushConstant push_constant;
+        PushConstant push_constant{};
+        glm::mat4 vp = transforms.residue_vp_matrix;
+        glm::vec3 eye_residue = transforms.eye_residue;
+        glm::ivec3 eye_group = transforms.eye_group;
 
+        // Bind the mesh-drawing pipeline.
+        vkCmdBindPipeline(
+            frame_cmd_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            *p_mesh_pipeline);
+
+        fprintf(stderr, "%i entries\n", int(entries.size()));
+        for (auto pair : entries) {
+            MeshEntry& entry = *pair.first;
+            glm::ivec3 group_coord = pair.second;
+
+            // Push the push constant. We need to update the MVP.
+            // The view matrix only takes into account the eye's residue
+            // coordinates, so the model position of the group actually
+            // needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            push_constant.mvp = vp * m;
+            vkCmdPushConstants(
+                frame_cmd_buffer,
+                p_mesh_pipeline->layout,
+                VK_SHADER_STAGE_ALL_GRAPHICS,
+                0, sizeof(PushConstant), &push_constant);
+
+            // Bind the instanced voxels buffer for this group in
+            // binding point 0.
+            VkDeviceSize offsets{0};
+            vkCmdBindVertexBuffers(
+                frame_cmd_buffer, 0, 1, &test_buffer, &offsets);
+
+            // Draw with instance rendering (36 verts per voxel).
+            vkCmdDraw(frame_cmd_buffer, 36, test_mesh.size(), 0, 0);
+        }
     }
 
     // Convert chunk group's chunks to meshes and pack into the
@@ -877,6 +903,7 @@ struct RendererVk :
         MeshStaging* staging,
         std::unique_ptr<MeshEntry>* p_uptr_entry) override
     {
+        p_uptr_entry->reset(new MeshEntry());
         return true;
     }
 
@@ -938,7 +965,7 @@ struct RendererVk :
 
     void wait_idle() override
     {
-        vkDeviceWaitIdle(ctx.m_device);
+        vkDeviceWaitIdle(dev);
     }
 };
 

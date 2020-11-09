@@ -36,6 +36,12 @@ struct MeshVoxelVertex
 
     MeshVoxelVertex() = default;
 
+    MeshVoxelVertex(uint32_t a, uint32_t b)
+    {
+        packed_residue_face_bits = a;
+        packed_color = b;
+    }
+
     // Given a _visible_ voxel and its residue coordinate, return the
     // VBO vertex carrying this information.  None of the face bits
     // are set (so this voxel starts as invisible).

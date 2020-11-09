@@ -82,6 +82,8 @@
 
 namespace myricube {
 
+constexpr bool use_OpenGL = false;
+
 // Absolute path of the executable, minus the -bin or .exe, plus -data/
 // This is where shaders and stuff are stored.
 std::string data_directory;
@@ -555,7 +557,8 @@ int Main(std::vector<std::string> args)
     {
         camera_ptr->set_framebuffer_size(x, y);
     };
-    std::shared_ptr<Window> window_ptr(new Window(on_window_resize, false));
+    std::shared_ptr<Window> window_ptr(
+        new Window(on_window_resize, use_OpenGL));
     Window& window = *window_ptr;
 
     // Set up keyboard controls.
@@ -581,7 +584,8 @@ int Main(std::vector<std::string> args)
 
     // Start renderer thread.
     RenderArgs render_args { window_ptr, camera_ptr, handle };
-    RenderThread renderer(RendererVk_Factory, render_args);
+    RenderThread renderer(
+        use_OpenGL ? RendererGL_Factory : RendererVk_Factory, render_args);
 
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {
