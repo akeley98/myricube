@@ -414,7 +414,7 @@ struct Framebuffers
     // re-creating a swap chain).
     void recreate_now_if_needed(nvvk::SwapChain& swap_chain) noexcept
     {
-        if (initialized() or swap_chain.getChangeID() == last_change_id) {
+        if (initialized() and swap_chain.getChangeID() == last_change_id) {
             return;
         }
 
@@ -710,8 +710,9 @@ struct RendererVk :
     uint32_t worker_queue_family;
     std::mutex worker_queue_mutex;
 
-    // From FrameManager; stuff for current frame. Both owned by the
-    // main thread.
+    // From FrameManager: primary command buffer that will be
+    // submitted at frame-end, and the current swap chain image. Both
+    // owned by the main thread.
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
@@ -750,6 +751,8 @@ struct RendererVk :
 
     void begin_frame() override
     {
+        // Begin the frame, recreating the swap chain (hidden in
+        // beginFrame) and framebuffers if needed.
         glfwGetFramebufferSize(glfw_surface.p_window, &width, &height);
         frame_manager.beginFrame(
             &frame_cmd_buffer,
@@ -757,67 +760,93 @@ struct RendererVk :
             width, height);
         framebuffers.recreate_now_if_needed(frame_manager.getSwapChain());
 
-        VkImageSubresourceRange imageRange {
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            0, VK_REMAINING_MIP_LEVELS,
-            0, VK_REMAINING_ARRAY_LAYERS };
+        VkClearColorValue clear_color;
+        clear_color.float32[0] = 0.0f;
+        clear_color.float32[1] = 0.0f;
+        clear_color.float32[2] = 1.0f;
+        clear_color.float32[3] = 1.0f;
+        std::array<VkClearValue, 2> clear_values{};
+        clear_values[0].color = clear_color;            // Color attachment
+        clear_values[1].depthStencil = { 1.0f, 0 };     // Depth attachment
 
-        // Command swap chain image transition to dst optimal layout.
-        VkImageMemoryBarrier transferLayoutBarrier {
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        // Start the render pass, drawing into the correct framebuffer
+        // for the current swap chain image.
+        VkRenderPassBeginInfo begin_info {
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             nullptr,
-            0,
-            VK_ACCESS_MEMORY_WRITE_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_QUEUE_FAMILY_IGNORED,
-            VK_QUEUE_FAMILY_IGNORED,
-            current_swap_image.image,
-            imageRange };
+            render_pass,
+            framebuffers[current_swap_image.index],
+            { { 0, 0 }, { uint32_t(width), uint32_t(height) } },
+            clear_values.size(),
+            clear_values.data()
+        };
+        vkCmdBeginRenderPass(
+            frame_cmd_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdPipelineBarrier(
-            frame_cmd_buffer,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, 0, nullptr,
-            0, nullptr,
-            1, &transferLayoutBarrier);
+        // VkImageSubresourceRange imageRange {
+        //     VK_IMAGE_ASPECT_COLOR_BIT,
+        //     0, VK_REMAINING_MIP_LEVELS,
+        //     0, VK_REMAINING_ARRAY_LAYERS };
 
-        // Clear the swap chain image to one color.
-        uint64_t ns = uint64_t(glfwGetTime() * 1e9);
+        // // Command swap chain image transition to dst optimal layout.
+        // VkImageMemoryBarrier transferLayoutBarrier {
+        //     VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        //     nullptr,
+        //     0,
+        //     VK_ACCESS_MEMORY_WRITE_BIT,
+        //     VK_IMAGE_LAYOUT_UNDEFINED,
+        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        //     VK_QUEUE_FAMILY_IGNORED,
+        //     VK_QUEUE_FAMILY_IGNORED,
+        //     current_swap_image.image,
+        //     imageRange };
 
-        VkClearColorValue color{};
-        double nanoTau = 6.283185307179587e-9;
-        float red = 0.5 + 0.5 * cos((ns % 1'000'000'000) * nanoTau);
-        float green = 0.5 + 0.5 * cos(2.0 + (ns % 1'000'000'000) * nanoTau);
-        float blue = 1.0f - red - green;
-        color.float32[0] = red;
-        color.float32[1] = green;
-        color.float32[2] = blue;
-        color.float32[3] = 1.0f;
-        vkCmdClearColorImage(
-            frame_cmd_buffer,
-            current_swap_image.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            &color,
-            1, &imageRange);
+        // vkCmdPipelineBarrier(
+        //     frame_cmd_buffer,
+        //     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        //     VK_PIPELINE_STAGE_TRANSFER_BIT,
+        //     0, 0, nullptr,
+        //     0, nullptr,
+        //     1, &transferLayoutBarrier);
 
-        // Transition image to layout suitable for display.
-        frame_manager.cmdSwapChainImageFixLayout(
-            frame_cmd_buffer,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT);
+        // // Clear the swap chain image to one color.
+        // uint64_t ns = uint64_t(glfwGetTime() * 1e9);
+
+        // VkClearColorValue color{};
+        // double nanoTau = 6.283185307179587e-9;
+        // float red = 0.5 + 0.5 * cos((ns % 1'000'000'000) * nanoTau);
+        // float green = 0.5 + 0.5 * cos(2.0 + (ns % 1'000'000'000) * nanoTau);
+        // float blue = 1.0f - red - green;
+        // color.float32[0] = red;
+        // color.float32[1] = green;
+        // color.float32[2] = blue;
+        // color.float32[3] = 1.0f;
+        // vkCmdClearColorImage(
+        //     frame_cmd_buffer,
+        //     current_swap_image.image,
+        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        //     &color,
+        //     1, &imageRange);
+
+        // // Transition image to layout suitable for display.
+        // frame_manager.cmdSwapChainImageFixLayout(
+        //     frame_cmd_buffer,
+        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        //     VK_ACCESS_TRANSFER_WRITE_BIT,
+        //     VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
 
 
     /* MESH RENDERING IMPLEMENTATION */
 
-    // Draw the list of chunk groups with the instanced-voxel
-    // rendering method.
+    // Add to the primary command buffer commands to draw the list
+    // of chunk groups with the instanced-voxel rendering method.
+    // At this point, we are in the render pass begin_frame started.
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
+        // Since I don't know how to use dynamic state, we have to recreate
+        // the pipeline if the framebuffer size changed.
         if (p_mesh_pipeline == nullptr
             or p_mesh_pipeline->width != width
             or p_mesh_pipeline->height != height)
@@ -827,6 +856,9 @@ struct RendererVk :
                 render_pass,
                 width, height));
         }
+
+        PushConstant push_constant;
+
     }
 
     // Convert chunk group's chunks to meshes and pack into the
@@ -896,6 +928,11 @@ struct RendererVk :
 
     void end_frame() override
     {
+        // End the one render pass there is.
+        vkCmdEndRenderPass(frame_cmd_buffer);
+
+        // Ends cmd buffer recording, submits it, and presents the
+        // rendered image.
         frame_manager.endFrame(frame_cmd_buffer);
     }
 
