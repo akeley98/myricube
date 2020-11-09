@@ -25,24 +25,20 @@
 using namespace myricube;
 using namespace akeley;
 
+namespace myricube { struct RendererVk; }
+
 namespace {
 
-// TODO remove
-const std::vector<MeshVoxelVertex> test_mesh = [] {
-    std::vector<MeshVoxelVertex> result;
-    result.push_back({ 0xFF000002, 0x0080FF00 });
-    result.push_back({ 0xFF000003, 0xFF800000 });
-    result.push_back({ 0xFF000103, 0x80808000 });
-    return result;
-} ();
+// Set by RendererVk constructor so other constructors/destructors can
+// access it. (But note this only occurs after RendererVk is fully
+// constructed).
+thread_local RendererVk* renderer = nullptr;
 
-// const std::vector<MeshVoxelVertex> test_mesh = [] {
-//     std::vector<MeshVoxelVertex> result;
-//     result.push_back({ 0xFF000002 & ~pos_x_face_bit, 0x0080FF00 });
-//     result.push_back({ 0xFF000003 & ~neg_x_face_bit & ~pos_y_face_bit, 0xFF800000 });
-//     result.push_back({ 0xFF000103 & ~neg_y_face_bit, 0x80808000 });
-//     return result;
-// } ();
+// RendererVk is responsible for constructing MeshEntry and so on.
+// Need these helpers for now as RendererVk is only forward-declared.
+struct MeshEntry;
+void constructor(MeshEntry*);
+void destructor(MeshEntry*);
 
 // These should be widely supported, but I can detect support if
 // needed later.
@@ -52,12 +48,56 @@ constexpr auto depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
 // Handle for GPU resources for the mesh of one chunk group.
 struct MeshEntry
 {
+    // Memory and buffer for the voxel instance list.
+    // TODO: Share memory among multiple MeshEntry.
+    VkDeviceMemory memory;
+    VkBuffer buffer;
 
+    // Persistent coherent mapping of buffer.
+    MappedGroupMesh* map;
+
+    // Data needed to draw chunk[z][y][x] within this chunk group.
+    ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
+
+    // Size in bytes of the vbo's data store on the GPU.
+    static constexpr GLsizeiptr vbo_bytes = sizeof(MappedGroupMesh);
+
+    // Return the offset (in number of MeshVoxelVertex's, not bytes)
+    // into the VBO where the data from mesh_array[z][y][x] is copied
+    // into.
+    static unsigned vert_offset(unsigned x, unsigned y, unsigned z)
+    {
+        assert(x < edge_chunks and y < edge_chunks and z < edge_chunks);
+        unsigned chunk_idx = x + y*edge_chunks + z*edge_chunks*edge_chunks;
+        return chunk_idx * chunk_max_verts;
+    }
+
+    // Same as above, but return offset as count of bytes.
+    static VkDeviceSize byte_offset(unsigned x, unsigned y, unsigned z)
+    {
+        auto vert_sz = VkDeviceSize(sizeof(MeshVoxelVertex));
+        VkDeviceSize off = vert_offset(x, y, z) * vert_sz;
+        assert(size_t(off) < vbo_bytes);
+        return off;
+    }
+
+    MeshEntry() { constructor(this); }
+    MeshEntry(MeshEntry&&) = delete;
+    ~MeshEntry() { destructor(this); }
 };
+
+void swap(MeshEntry& left, MeshEntry& right) noexcept
+{
+    using std::swap;
+    swap(left.memory, right.memory);
+    swap(left.buffer, right.buffer);
+    swap(left.map, right.map);
+    swap(left.draw_data, right.draw_data);
+}
 
 struct MeshStaging
 {
-
+    MeshEntry entry;
 };
 
 // aabb_array[z][y][x] is the minimal AABB containing the visible
@@ -736,10 +776,6 @@ struct RendererVk :
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
-    // TODO remove
-    VkDeviceMemory test_memory;
-    VkBuffer test_buffer;
-
     RendererVk(RenderThread* thread, RenderArgs args) :
         RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>(
             thread,
@@ -761,6 +797,11 @@ struct RendererVk :
             dev,
             render_pass)
     {
+        // As promised.
+        renderer = this;
+
+        // Steal the queues from the ever-helpful nvvk::Context.
+        // ctx.m_queueGCT is the same queue FrameManager is using.
         main_queue =        ctx.m_queueGCT;
         main_queue_family = ctx.m_queueGCT;
         worker_queue =        ctx.m_queueT;
@@ -772,21 +813,6 @@ struct RendererVk :
         if (worker_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
         }
-
-        // TODO Remove
-        VkDeviceSize bytes = sizeof(test_mesh[0]) * test_mesh.size();
-        createBuffer(
-            ctx.m_physicalDevice,
-            dev,
-            bytes,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            test_buffer,
-            test_memory);
-        void* map;
-        vkMapMemory(dev, test_memory, 0, bytes, 0, &map);
-        memcpy(map, test_mesh.data(), bytes);
-        vkUnmapMemory(dev, test_memory);
     }
 
     void begin_frame() override
@@ -803,7 +829,7 @@ struct RendererVk :
         VkClearColorValue clear_color;
         clear_color.float32[0] = 0.0f;
         clear_color.float32[1] = 0.0f;
-        clear_color.float32[2] = 1.0f;
+        clear_color.float32[2] = 0.0f;
         clear_color.float32[3] = 1.0f;
         std::array<VkClearValue, 2> clear_values{};
         clear_values[0].color = clear_color;            // Color attachment
@@ -833,7 +859,6 @@ struct RendererVk :
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
-        fprintf(stderr, "draw_mesh_entries\n");
         // Since I don't know how to use dynamic state, we have to recreate
         // the pipeline if the framebuffer size changed.
         if (p_mesh_pipeline == nullptr
@@ -857,7 +882,6 @@ struct RendererVk :
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             *p_mesh_pipeline);
 
-        fprintf(stderr, "%i entries\n", int(entries.size()));
         for (auto pair : entries) {
             MeshEntry& entry = *pair.first;
             glm::ivec3 group_coord = pair.second;
@@ -880,11 +904,53 @@ struct RendererVk :
             // binding point 0.
             VkDeviceSize offsets{0};
             vkCmdBindVertexBuffers(
-                frame_cmd_buffer, 0, 1, &test_buffer, &offsets);
+                frame_cmd_buffer, 0, 1, &entry.buffer, &offsets);
+            
+            // Draw every chunk. Each has its voxels starting at a
+            // different index in the buffer.
+            for (int z = 0; z < edge_chunks; ++z) {
+            for (int y = 0; y < edge_chunks; ++y) {
+            for (int x = 0; x < edge_chunks; ++x) {
+                auto draw_data = entry.draw_data[z][y][x];
+                PackedAABB aabb = draw_data.aabb;
+                if (decide_chunk(group_coord, aabb) != draw_mesh) {
+                    continue;
+                }
 
-            // Draw with instance rendering (36 verts per voxel).
-            vkCmdDraw(frame_cmd_buffer, 36, test_mesh.size(), 0, 0);
+                if (draw_data.vert_count == 0) continue;
+                // Draw with instance rendering (36 verts per voxel).
+                uint32_t instances = uint32_t(draw_data.vert_count);
+                uint32_t base = MeshEntry::vert_offset(x, y, z);
+                vkCmdDraw(frame_cmd_buffer, 36, instances, 0, base);
+            }
+            }
+            }
         }
+    }
+    
+    // Construct the given MeshEntry. Only called by main thread. TODO
+    void constructor(MeshEntry* entry)
+    {
+        VkDeviceSize bytes = sizeof(MappedGroupMesh);
+        createBuffer(
+            ctx.m_physicalDevice,
+            dev,
+            bytes,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            entry->buffer,
+            entry->memory);
+        void* p_void;
+        vkMapMemory(dev, entry->memory, 0, bytes, 0, &p_void);
+        entry->map = static_cast<MappedGroupMesh*>(p_void);
+    }
+    
+    // Release resources of MeshEntry.  Only called by main thread. TODO
+    void destructor(MeshEntry* entry)
+    {
+        vkUnmapMemory(dev, entry->memory);
+        vkDestroyBuffer(dev, entry->buffer, nullptr);
+        vkFreeMemory(dev, entry->memory, nullptr);
     }
 
     // Convert chunk group's chunks to meshes and pack into the
@@ -892,18 +958,25 @@ struct RendererVk :
     void worker_stage(
         MeshStaging* staging, const BinChunkGroup* group_ptr) override
     {
-
+        MeshEntry* entry = &staging->entry;
+        for (int zL = 0; zL < edge_chunks; ++zL) {
+        for (int yL = 0; yL < edge_chunks; ++yL) {
+        for (int xL = 0; xL < edge_chunks; ++xL) {
+            fill_chunk_mesh(&entry->map->chunks[zL][yL][xL],
+                            &entry->draw_data[zL][yL][xL],
+                            group_ptr->chunk_array[zL][yL][xL],
+                            glm::ivec3(xL, yL, zL) * chunk_size);
+        }
+        }
+        }
     }
 
-    // Since MeshEntry and MeshStaging are actually the same,
-    // literally swap-in the staged buffer into the cache (with the
-    // evicted cache entry, which is no longer used for rendering,
-    // used as the new staging buffer).
     bool swap_in(
         MeshStaging* staging,
         std::unique_ptr<MeshEntry>* p_uptr_entry) override
     {
-        p_uptr_entry->reset(new MeshEntry());
+        if (*p_uptr_entry == nullptr) p_uptr_entry->reset(new MeshEntry());
+        swap(staging->entry, **p_uptr_entry);
         return true;
     }
 
@@ -976,5 +1049,11 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
     return std::shared_ptr<RendererBase>(new RendererVk(thread, args));
 }
 
-
 } // end namespace myricube
+
+namespace {
+
+void constructor(MeshEntry* entry) { renderer->constructor(entry); }
+void destructor(MeshEntry* entry) { renderer->destructor(entry); }
+
+}

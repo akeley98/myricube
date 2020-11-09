@@ -23,6 +23,13 @@ class AxisTest : public App
             world.set(glm::ivec3(0, -i, 0), green);
             world.set(glm::ivec3(0, 0, i), blue);
             world.set(glm::ivec3(0, 0, -i), blue);
+            
+            world.set(glm::ivec3(i, 1, 0), red);
+            world.set(glm::ivec3(-i, 1, 0), red);
+            world.set(glm::ivec3(0, i+1, 0), green);
+            world.set(glm::ivec3(0, 1-i, 0), green);
+            world.set(glm::ivec3(0, 1, i), blue);
+            world.set(glm::ivec3(0, 1, -i), blue);
         }
     }
     
