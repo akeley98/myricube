@@ -82,8 +82,6 @@
 
 namespace myricube {
 
-constexpr bool use_OpenGL = false;
-
 // Absolute path of the executable, minus the -bin or .exe, plus -data/
 // This is where shaders and stuff are stored.
 std::string data_directory;
@@ -548,6 +546,19 @@ int Main(std::vector<std::string> args)
     }
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
     data_directory += "-data/";
+
+    // Check if we are using OpenGL.
+    bool use_OpenGL = false;
+    const char* api_name = getenv("myricube_api");
+    if (api_name != nullptr) {
+        if (strcmp(api_name, "gl") == 0) {
+            use_OpenGL = true;
+        }
+        else if (strcmp(api_name, "vk") != 0) {
+            panic("myricube_api environment variable set to unknown value",
+                api_name);
+        }
+    }
 
     // Instantiate the shared camera (shared with the renderer).
     std::shared_ptr<SyncCamera> camera_ptr(new SyncCamera());
