@@ -1,12 +1,4 @@
 // Vulkan implementation of RendererLogic.
-
-#ifdef WIN32
-    #define VK_USE_PLATFORM_WIN32_KHR
-#else
-    #define VK_USE_PLATFORM_XCB_KHR
-    #define VK_USE_PLATFORM_XLIB_KHR
-#endif
-
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
 
@@ -41,6 +33,12 @@ thread_local RendererVk* thread_local_renderer = nullptr;
 struct MeshEntry;
 void constructor(MeshEntry*);
 void destructor(MeshEntry*);
+struct RaycastEntry;
+void constructor(RaycastEntry*);
+void destructor(RaycastEntry*);
+struct RaycastStaging;
+void constructor(RaycastStaging*);
+void destructor(RaycastStaging*);
 
 // These should be widely supported, but I can detect support if
 // needed later.
@@ -107,6 +105,8 @@ struct MeshStaging
     MeshEntry entry;
 };
 
+
+
 // aabb_array[z][y][x] is the minimal AABB containing the visible
 // voxels of ChunkGroup::chunk_array[z][y][x].
 //
@@ -123,16 +123,48 @@ struct AABBs
 // handle for the GPU data needed to raycast one chunk group.
 struct RaycastEntry
 {
+    // VBO storing packed AABBs, and a memory map of it.
+    VkBuffer aabb_buffer = VK_NULL_HANDLE;
+    AABBs* aabb_map = nullptr;
 
+    // 3D image storing voxels of this chunk group.
+    VkImage voxels_image = VK_NULL_HANDLE;
+
+    RaycastEntry() { constructor(this); }
+
+    RaycastEntry(RaycastEntry&&) = delete;
+
+    ~RaycastEntry() { destructor(this); }
+};
+
+
+
+struct MappedChunks
+{
+    BinChunk chunks[edge_chunks][edge_chunks][edge_chunks];
 };
 
 // Staging buffer for the async cache of raycast chunk groups.
 struct RaycastStaging
 {
+    // RaycastEntry to be created.
+    std::unique_ptr<RaycastEntry> entry;
 
+    // Buffer storing the staging buffer, and a memory map of it.
+    // The chunks are stored in [z][y][x] order as usual.
+    VkBuffer chunk_buffer = VK_NULL_HANDLE;
+    MappedChunks* chunk_map = nullptr;
+
+    // Fence for the main thread to wait on to indicate the staging
+    // buffer -> image copy is done.
+    VkFence fence = VK_NULL_HANDLE;
+
+    RaycastStaging() { constructor(this); }
+
+    RaycastStaging(RaycastStaging&&) = delete;
+
+    ~RaycastStaging() { destructor(this); }
 };
-
-
 
 // nvvk::Context with proper constructor and destructor.
 struct ScopedContext : nvvk::Context
@@ -338,36 +370,6 @@ uint32_t findMemoryType(
     }
 
     throw std::runtime_error("failed to find suitable memory type!");
-}
-
-// Create a buffer with dedicated device memory.
-void createBuffer(
-    VkPhysicalDevice physicalDevice,
-    VkDevice device,
-    VkDeviceSize size,
-    VkBufferUsageFlags usage,
-    VkMemoryPropertyFlags properties,
-    VkBuffer& buffer,
-    VkDeviceMemory& bufferMemory)
-{
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    NVVK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer));
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
-
-    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory));
-    vkBindBufferMemory(device, buffer, bufferMemory, 0);
 }
 
 template <typename T>
@@ -613,10 +615,6 @@ struct Framebuffers
 
 
 
-static_assert(sizeof(PushConstant) <= 128);
-
-
-
 // Pipeline for mesh rendering. All we really have to do here is load
 // the vert/frag shader and hook up the instanced voxels
 // array. Everything else is just endless boilerplate.
@@ -800,6 +798,188 @@ struct MeshPipeline
 
 
 
+// Raycast pipeline. We have to draw AABBs with instanced rendering
+// and feed a push constant plus a 3D voxels image TODO.
+struct RaycastPipeline
+{
+    // We manage these.
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+
+    // Borrowed pointer.
+    VkDevice device;
+
+    const uint32_t width, height;
+
+    RaycastPipeline(
+        VkDevice dev_,
+        VkRenderPass render_pass,
+        uint32_t width_, uint32_t height_) :
+    device(dev_),
+    width(width_),
+    height(height_)
+    {
+        // Boilerplate from vulkan-tutorial.com with some modifications.
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(PushConstant);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 0;
+        pipelineLayoutInfo.pSetLayouts = nullptr; // TODO
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
+
+        auto vertShaderCode = readFile(expand_filename("vk/raycast.vert.spv"));
+        auto fragShaderCode = readFile(expand_filename("vk/raycast.frag.spv"));
+
+        VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
+        VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
+
+        VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+        vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertShaderStageInfo.module = vertShaderModule;
+        vertShaderStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+        fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragShaderStageInfo.module = fragShaderModule;
+        fragShaderStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+        vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+        VkVertexInputBindingDescription bindingDescription {
+            0, // binding
+            sizeof(PackedAABB), // stride
+            VK_VERTEX_INPUT_RATE_INSTANCE, // AABB array is instanced.
+        };
+        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions {
+            VkVertexInputAttributeDescription {
+              0, // location
+              0, // binding
+              VK_FORMAT_R32_SINT,
+              offsetof(PackedAABB, packed_low) },
+            VkVertexInputAttributeDescription {
+              1, // location
+              0, // binding
+              VK_FORMAT_R32_SINT,
+              offsetof(PackedAABB, packed_high) },
+        };
+
+        vertexInputInfo.vertexBindingDescriptionCount = 1;
+        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+        vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+        vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = width;
+        viewport.height = height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = VkExtent2D{ width, height };
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.depthClampEnable = VK_FALSE;
+        rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.depthBiasEnable = VK_FALSE;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.sampleShadingEnable = VK_FALSE;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.stencilTestEnable = VK_FALSE;
+
+        VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.logicOp = VK_LOGIC_OP_COPY;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+        colorBlending.blendConstants[0] = 0.0f;
+        colorBlending.blendConstants[1] = 0.0f;
+        colorBlending.blendConstants[2] = 0.0f;
+        colorBlending.blendConstants[3] = 0.0f;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = shaderStages;
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.layout = layout;
+        pipelineInfo.renderPass = render_pass;
+        pipelineInfo.subpass = 0;
+        pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+        NVVK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline));
+
+        vkDestroyShaderModule(device, fragShaderModule, nullptr);
+        vkDestroyShaderModule(device, vertShaderModule, nullptr);
+    }
+
+    RaycastPipeline(RaycastPipeline&&) = delete;
+
+    ~RaycastPipeline()
+    {
+        vkDestroyPipeline(device, pipeline, nullptr);
+        vkDestroyPipelineLayout(device, layout, nullptr);
+    }
+
+    operator VkPipeline() const
+    {
+        return pipeline;
+    }
+};
+
+
+
 } // end anonymous namespace.
 
 
@@ -809,7 +989,8 @@ namespace myricube {
 struct RendererVk :
     RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
 {
-    // The order of these is very important.
+    // The order of these is very important (things need to be
+    // destroyed in the right order).
     ScopedContext ctx;
     VkDevice dev;
     ScopedSurface glfw_surface;
@@ -817,6 +998,7 @@ struct RendererVk :
     ScopedRenderPass render_pass;
     Framebuffers framebuffers;
     std::unique_ptr<MeshPipeline> p_mesh_pipeline;
+    std::unique_ptr<RaycastPipeline> p_raycast_pipeline;
 
     // Set in begin_frame.
     int width, height;
@@ -837,11 +1019,14 @@ struct RendererVk :
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
-    // MeshEntry buffers to destroy. Only destroyed after the MeshStore
-    // is gone, as only at that point will all MeshEntry destructors
-    // be called putting unused buffers on this list.
-    // This is ensured by RenderThread::destroy_stores.
+    // Garbage produced by MeshStore/RaycastStore. Only destroyed
+    // after the stores are destroyed, as only at that point will all
+    // MeshEntry/RaycastEntry destructors be called (fully filling out
+    // the list). This is ensured by RenderThread::destroy_stores.
     std::vector<MappedBuffer<MappedGroupMesh>> unused_mesh_buffers;
+    std::vector<MappedBuffer<MappedChunks>>    unused_chunk_buffers;
+    std::vector<MappedBuffer<AABBs>>           unused_aabb_buffers;
+    std::vector<VkImage>                       unused_voxel_images;
 
     // VkDeviceMemory we're using that is to be freed in the destructor.
     std::vector<VkDeviceMemory> memory_to_free;
@@ -890,6 +1075,17 @@ struct RendererVk :
         for (auto mapped_buffer : unused_mesh_buffers) {
             vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
         }
+        for (auto mapped_buffer : unused_chunk_buffers) {
+            vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
+        }
+        for (auto mapped_buffer : unused_aabb_buffers) {
+            vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
+        }
+
+        for (VkImage image : unused_voxel_images) {
+            vkDestroyImage(dev, image, nullptr);
+        }
+
         for (VkDeviceMemory mem : memory_to_free) {
             vkFreeMemory(dev, mem, nullptr);
         }
@@ -942,8 +1138,8 @@ struct RendererVk :
         // Since I don't know how to use dynamic state, we have to recreate
         // the pipeline if the framebuffer size changed.
         if (p_mesh_pipeline == nullptr
-            or p_mesh_pipeline->width != width
-            or p_mesh_pipeline->height != height)
+            or p_mesh_pipeline->width != uint32_t(width)
+            or p_mesh_pipeline->height != uint32_t(height))
         {
             p_mesh_pipeline.reset(new MeshPipeline(
                 dev,
@@ -1041,11 +1237,10 @@ struct RendererVk :
         memory_to_free.push_back(VK_NULL_HANDLE);
         unused_mesh_buffers.reserve(unused_mesh_buffers.size() + block_size);
 
-        VkDeviceSize bytes = sizeof(MappedGroupMesh);
         auto buffers = create_mapped_buffer_array<MappedGroupMesh>(
             ctx.m_physicalDevice,
             dev,
-            bytes,
+            sizeof(MappedGroupMesh),
             block_size,
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
@@ -1120,18 +1315,207 @@ struct RendererVk :
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>& entries)
     override
     {
+        // Since I don't know how to use dynamic state, we have to recreate
+        // the pipeline if the framebuffer size changed.
+        if (p_raycast_pipeline == nullptr
+            or p_raycast_pipeline->width != uint32_t(width)
+            or p_raycast_pipeline->height != uint32_t(height))
+        {
+            p_raycast_pipeline.reset(new RaycastPipeline(
+                dev,
+                render_pass,
+                width, height));
+        }
 
+        glm::mat4 vp = transforms.residue_vp_matrix;
+        glm::vec3 eye_residue = transforms.eye_residue;
+        glm::ivec3 eye_group = transforms.eye_group;
+
+        PushConstant push_constant{};
+        push_constant.flags = 0;
+        push_constant.far_plane_squared =
+            transforms.far_plane * transforms.far_plane;
+        push_constant.raycast_thresh_squared =
+            raycast_threshold * raycast_threshold;
+
+        // Bind the raycast-drawing pipeline.
+        vkCmdBindPipeline(
+            frame_cmd_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            *p_raycast_pipeline);
+
+        for (auto pair : entries) {
+            RaycastEntry& entry = *pair.first;
+            glm::ivec3 group_coord = pair.second;
+
+            // Push the push constant. We need to update the MVP.
+            // The view matrix only takes into account the eye's residue
+            // coordinates, so the model position of the group actually
+            // needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            push_constant.mvp = vp * m;
+            push_constant.eye_relative_group_origin = glm::vec4(
+                eye_residue - model_offset, 0);
+
+            vkCmdPushConstants(
+                frame_cmd_buffer,
+                p_raycast_pipeline->layout,
+                VK_SHADER_STAGE_ALL_GRAPHICS,
+                0, sizeof(PushConstant), &push_constant);
+
+            // Bind the instanced AABB buffer for this group in
+            // binding point 0.
+            VkDeviceSize offsets{0};
+            vkCmdBindVertexBuffers(
+                frame_cmd_buffer, 0, 1, &entry.aabb_buffer, &offsets);
+
+            // Draw the AABBs, there are as many as there are chunks
+            // in a chunk group and each takes 14 vertices.
+            uint32_t instances = edge_chunks * edge_chunks * edge_chunks;
+            vkCmdDraw(frame_cmd_buffer, 14, instances, 0, 0);
+        }
     }
 
-    void worker_stage(
-        RaycastStaging* stage, const BinChunkGroup* group_ptr) override
+    // Fill in the AABB buffer and 3D image. We'll use the same block
+    // strategy as in MeshEntry.
+    void constructor(RaycastEntry* entry)
     {
+      retry_buffer:
+        // Recycle if possible.
+        if (!unused_aabb_buffers.empty()) {
+            entry->aabb_buffer = unused_aabb_buffers.back().buffer;
+            entry->aabb_map = unused_aabb_buffers.back().map;
+            unused_aabb_buffers.pop_back();
+            return;
+        }
 
+        // Otherwise, we have to allocate a new block of buffers.
+        constexpr size_t block_size = 4096;
+        memory_to_free.push_back(VK_NULL_HANDLE);
+        unused_aabb_buffers.reserve(unused_aabb_buffers.size() + block_size);
+
+        auto buffers = create_mapped_buffer_array<AABBs>(
+            ctx.m_physicalDevice,
+            dev,
+            sizeof(AABBs),
+            block_size,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &memory_to_free.back());
+
+        for (auto buffer : buffers) {
+            unused_aabb_buffers.push_back(buffer);
+        }
+        goto retry_buffer;
+
+        // TODO Image
+    }
+
+    void destructor(RaycastEntry* entry) noexcept
+    {
+        unused_aabb_buffers.push_back(
+            { entry->aabb_buffer, entry->aabb_map } );
+        // TODO image
+    }
+
+    void constructor(RaycastStaging* staging)
+    {
+        // Create the RaycastEntry (including sub-resources)
+        staging->entry.reset(new RaycastEntry());
+
+        // Create the memory-mapped staging buffer.
+      retry_buffer:
+        // Recycle if possible.
+        if (!unused_chunk_buffers.empty()) {
+            staging->chunk_buffer = unused_chunk_buffers.back().buffer;
+            staging->chunk_map = unused_chunk_buffers.back().map;
+            unused_chunk_buffers.pop_back();
+            return;
+        }
+
+        // Otherwise, we have to allocate a new block of buffers.
+        constexpr size_t block_size = 4096;
+        memory_to_free.push_back(VK_NULL_HANDLE);
+        unused_chunk_buffers.reserve(unused_chunk_buffers.size() + block_size);
+
+        auto buffers = create_mapped_buffer_array<MappedChunks>(
+            ctx.m_physicalDevice,
+            dev,
+            sizeof(MappedChunks),
+            block_size,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &memory_to_free.back());
+
+        for (auto buffer : buffers) {
+            unused_chunk_buffers.push_back(buffer);
+        }
+        goto retry_buffer;
+
+        // Create the fence.
+        VkFenceCreateInfo fence_info {
+            VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, 0 };
+        NVVK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &staging->fence));
+    }
+
+    void destructor(RaycastStaging* staging)
+    {
+        // Real destructor will take care of the RaycastEntry.
+
+        // Recycle the staging buffer.
+        unused_chunk_buffers.push_back(
+            { staging->chunk_buffer, staging->chunk_map } );
+
+        // Destroy the fence.
+        vkDestroyFence(dev, staging->fence, nullptr);
+    }
+
+    // Fill in both the AABB and staging chunk buffers, then trigger a copy
+    // from the staging buffer to the 3D voxel image.
+    void worker_stage(
+        RaycastStaging* staging, const BinChunkGroup* group_ptr) override
+    {
+        assert(staging);
+        assert(staging->entry);
+        assert(staging->entry->aabb_map);
+        auto& aabb_array = staging->entry->aabb_map->aabb_array;
+
+        for (int zL = 0; zL < edge_chunks; ++zL) {
+        for (int yL = 0; yL < edge_chunks; ++yL) {
+        for (int xL = 0; xL < edge_chunks; ++xL) {
+            // Load raw voxel data chunk-by-chunk onto the SSBO.
+            const BinChunk& bin_chunk = group_ptr->chunk_array[zL][yL][xL];
+            auto* p_source_chunk = &bin_chunk.voxel_array;
+            auto* p_device_chunk =
+                &staging->chunk_map->chunks[zL][yL][xL];
+            auto sz = sizeof(BinChunk);
+            assert(sz == sizeof(*p_source_chunk));
+            assert(sz == sizeof(*p_device_chunk));
+            memcpy(p_device_chunk, p_source_chunk, sz);
+
+            // Also load the AABB for this chunk.
+            auto chunk_residue = glm::ivec3(xL, yL, zL) * chunk_size;
+            PackedAABB aabb(bin_chunk, chunk_residue);
+            aabb_array[zL][yL][xL] = aabb;
+        }
+        }
+        }
+        // TODO image and copy.
     }
 
     bool swap_in(RaycastStaging* staging,
                  std::unique_ptr<RaycastEntry>* p_uptr_entry) override
     {
+        // TODO fence wait.
+        std::swap(staging->entry, *p_uptr_entry);
+        if (staging->entry == nullptr) {
+            staging->entry.reset(new RaycastEntry());
+        }
+
         return true;
     }
 
@@ -1174,4 +1558,24 @@ void destructor(MeshEntry* entry)
     thread_local_renderer->destructor(entry);
 }
 
+void constructor(RaycastEntry* entry)
+{
+    thread_local_renderer->constructor(entry);
 }
+
+void destructor(RaycastEntry* entry)
+{
+    thread_local_renderer->destructor(entry);
+}
+
+void constructor(RaycastStaging* staging)
+{
+    thread_local_renderer->constructor(staging);
+}
+
+void destructor(RaycastStaging* staging)
+{
+    thread_local_renderer->destructor(staging);
+}
+
+} // end anonymous namespace

@@ -26,6 +26,10 @@ struct PushConstant
 #ifdef __cplusplus
 static_assert(sizeof(PushConstant) <= 128,
     "Vulkan spec only guarantees 128 bytes of push constant");
+#else
+layout (push_constant) uniform PushConstantBlock {
+    PushConstant pc;
+} pc;
 #endif
 
 #endif

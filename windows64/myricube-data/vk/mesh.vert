@@ -18,10 +18,6 @@
 
 #include "PushConstant.glsl"
 
-layout (push_constant) uniform PushConstantBlock {
-    PushConstant pc;
-} pc;
-
 // Instanced inputs:
 // Residue coordinates and bitfield of visible +/- x,y,z faces.
 layout(location=0) in uint packed_residue_face_bits;

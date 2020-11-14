@@ -1,17 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : enable
 
-#define BORDER_WIDTH_LOW  0.075
-#define BORDER_WIDTH_HIGH 0.45
-#define BORDER_FADE  0.75
-#define BORDER_DIST_LOW  100
-#define BORDER_DIST_HIGH 350
-
 #include "PushConstant.glsl"
-
-layout(push_constant) uniform PushConstantBlock {
-    PushConstant pc;
-} pc;
 
 layout(location=0) in vec3 v_color;
 layout(location=1) in vec3 v_residue_coord;
