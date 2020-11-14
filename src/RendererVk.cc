@@ -57,6 +57,8 @@ struct MeshEntry
     // Data needed to draw chunk[z][y][x] within this chunk group.
     ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
 
+    // Make sure you fix the swap function if you add more stuff.
+
     // Size in bytes of the vbo's data store on the GPU.
     static constexpr GLsizeiptr vbo_bytes = sizeof(MappedGroupMesh);
 
