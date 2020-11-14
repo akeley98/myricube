@@ -22,6 +22,8 @@
 #include "nvvk/context_vk.hpp"
 #include "FrameManager.hpp"
 
+#include "../myricube-data/vk/PushConstant.glsl"
+
 using namespace myricube;
 using namespace akeley;
 
@@ -32,7 +34,7 @@ namespace {
 // Set by RendererVk constructor so other constructors/destructors can
 // access it. (But note this only occurs after RendererVk is fully
 // constructed).
-thread_local RendererVk* renderer = nullptr;
+thread_local RendererVk* thread_local_renderer = nullptr;
 
 // RendererVk is responsible for constructing MeshEntry and so on.
 // Need these helpers for now as RendererVk is only forward-declared.
@@ -48,13 +50,11 @@ constexpr auto depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
 // Handle for GPU resources for the mesh of one chunk group.
 struct MeshEntry
 {
-    // Memory and buffer for the voxel instance list.
-    // TODO: Share memory among multiple MeshEntry.
-    VkDeviceMemory memory;
-    VkBuffer buffer;
+    // Buffer for the voxel instance list.
+    VkBuffer buffer = VK_NULL_HANDLE;
 
     // Persistent coherent mapping of buffer.
-    MappedGroupMesh* map;
+    MappedGroupMesh* map = nullptr;
 
     // Data needed to draw chunk[z][y][x] within this chunk group.
     ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
@@ -82,14 +82,21 @@ struct MeshEntry
     }
 
     MeshEntry() { constructor(this); }
-    MeshEntry(MeshEntry&&) = delete;
+
+    MeshEntry(VkBuffer buffer_, MappedGroupMesh* map_)
+    {
+        buffer = buffer_;
+        map = map_;
+    }
+
+    MeshEntry(MeshEntry&& other) = delete;
+
     ~MeshEntry() { destructor(this); }
 };
 
 void swap(MeshEntry& left, MeshEntry& right) noexcept
 {
     using std::swap;
-    swap(left.memory, right.memory);
     swap(left.buffer, right.buffer);
     swap(left.map, right.map);
     swap(left.draw_data, right.draw_data);
@@ -136,13 +143,15 @@ struct ScopedContext : nvvk::Context
         nvvk::ContextCreateInfo deviceInfo;
         deviceInfo.apiMajor = 1;
         deviceInfo.apiMinor = 1;
-        deviceInfo.addInstanceExtension(VK_KHR_SURFACE_EXTENSION_NAME);
-#ifdef WIN32
-        deviceInfo.addInstanceExtension(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-#else
-        deviceInfo.addInstanceExtension(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-        deviceInfo.addInstanceExtension(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
-#endif
+        uint32_t extension_count;
+        const char** extensions =
+            glfwGetRequiredInstanceExtensions(&extension_count);
+        if (extensions == nullptr) {
+            throw std::runtime_error("Could not get glfw vk extensions.");
+        }
+        for (uint32_t i = 0; i < extension_count; ++i) {
+            deviceInfo.addInstanceExtension(extensions[i]);
+        }
         deviceInfo.addDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
         // Initialize the nvvk context.
@@ -358,8 +367,68 @@ void createBuffer(
     allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
 
     NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory));
-
     vkBindBufferMemory(device, buffer, bufferMemory, 0);
+}
+
+template <typename T>
+struct MappedBuffer
+{
+    VkBuffer buffer;
+    T* map;
+};
+
+// Create buffer_count many buffers of buffer_bytes bytes each that
+// all share one VK memory allocation, which is returned through
+// *p_buffer_memory. The memory is mapped to the host, and each
+// buffer is paired with a pointer to its portion of the mapping.
+template <typename T>
+std::vector<MappedBuffer<T>> create_mapped_buffer_array(
+    VkPhysicalDevice physical_device,
+    VkDevice device,
+    VkDeviceSize buffer_bytes,
+    size_t buffer_count,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags properties,
+    VkDeviceMemory* p_buffer_memory) noexcept
+{
+    assert(buffer_count != 0);
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = buffer_bytes;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    std::vector<MappedBuffer<T>> array(buffer_count);
+    for (auto& map : array) {
+        NVVK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &map.buffer));
+    }
+
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(device, array[0].buffer, &requirements);
+    VkDeviceSize stride = (requirements.size + requirements.alignment - 1)
+                        & ~(requirements.alignment - 1);
+
+    VkMemoryAllocateInfo allocInfo{};
+    VkDeviceSize alloc_size = stride * buffer_count;
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = alloc_size;
+    allocInfo.memoryTypeIndex = findMemoryType(
+        physical_device, requirements.memoryTypeBits, properties);
+
+    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, p_buffer_memory));
+    VkDeviceMemory memory = *p_buffer_memory;
+
+    void* p_void;
+    NVVK_CHECK(vkMapMemory(device, memory, 0, alloc_size, 0, &p_void));
+    char* memory_mapping = static_cast<char*>(p_void);
+
+    for (size_t i = 0; i < buffer_count; ++i) {
+        VkDeviceSize off = stride * i;
+        NVVK_CHECK(vkBindBufferMemory(device, array[i].buffer, memory, off));
+        array[i].map = reinterpret_cast<T*>(memory_mapping + off);
+    }
+    return array;
 }
 
 // Create an image with dedicated device memory.
@@ -544,14 +613,6 @@ struct Framebuffers
 
 
 
-struct PushConstant
-{
-    glm::mat4 mvp;
-    glm::vec4 eye_relative_group_origin; // w unused.
-    int32_t flags;
-    int32_t far_plane_squared;
-    int32_t raycast_thresh_squared;
-};
 static_assert(sizeof(PushConstant) <= 128);
 
 
@@ -776,6 +837,15 @@ struct RendererVk :
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
+    // MeshEntry buffers to destroy. Only destroyed after the MeshStore
+    // is gone, as only at that point will all MeshEntry destructors
+    // be called putting unused buffers on this list.
+    // This is ensured by RenderThread::destroy_stores.
+    std::vector<MappedBuffer<MappedGroupMesh>> unused_mesh_buffers;
+
+    // VkDeviceMemory we're using that is to be freed in the destructor.
+    std::vector<VkDeviceMemory> memory_to_free;
+
     RendererVk(RenderThread* thread, RenderArgs args) :
         RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>(
             thread,
@@ -798,7 +868,7 @@ struct RendererVk :
             render_pass)
     {
         // As promised.
-        renderer = this;
+        thread_local_renderer = this;
 
         // Steal the queues from the ever-helpful nvvk::Context.
         // ctx.m_queueGCT is the same queue FrameManager is using.
@@ -812,6 +882,16 @@ struct RendererVk :
         }
         if (worker_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
+        }
+    }
+
+    ~RendererVk()
+    {
+        for (auto mapped_buffer : unused_mesh_buffers) {
+            vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
+        }
+        for (VkDeviceMemory mem : memory_to_free) {
+            vkFreeMemory(dev, mem, nullptr);
         }
     }
 
@@ -871,10 +951,16 @@ struct RendererVk :
                 width, height));
         }
 
-        PushConstant push_constant{};
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
+
+        PushConstant push_constant{};
+        push_constant.flags = 0;
+        push_constant.far_plane_squared =
+            transforms.far_plane * transforms.far_plane;
+        push_constant.raycast_thresh_squared =
+            raycast_threshold * raycast_threshold;
 
         // Bind the mesh-drawing pipeline.
         vkCmdBindPipeline(
@@ -894,6 +980,9 @@ struct RendererVk :
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
             push_constant.mvp = vp * m;
+            push_constant.eye_relative_group_origin = glm::vec4(
+                eye_residue - model_offset, 0);
+
             vkCmdPushConstants(
                 frame_cmd_buffer,
                 p_mesh_pipeline->layout,
@@ -905,7 +994,7 @@ struct RendererVk :
             VkDeviceSize offsets{0};
             vkCmdBindVertexBuffers(
                 frame_cmd_buffer, 0, 1, &entry.buffer, &offsets);
-            
+
             // Draw every chunk. Each has its voxels starting at a
             // different index in the buffer.
             for (int z = 0; z < edge_chunks; ++z) {
@@ -927,30 +1016,52 @@ struct RendererVk :
             }
         }
     }
-    
-    // Construct the given MeshEntry. Only called by main thread. TODO
+
+    // Implement the constructor and destructor for MeshEntry
+    // (basically just a host-mapped buffer of MeshVoxelVertex).  My
+    // plan is to allocate big blocks of buffers (block = shared
+    // vulkan device memory) and only release the memory at the very
+    // end. Hence, I need to recycle buffers (in unused_mesh_buffers)
+    // to avoid an unbounded memory leak.
+
+    // Construct the given MeshEntry. Only called by main thread.
     void constructor(MeshEntry* entry)
     {
+      restart:
+        // Recycle if possible.
+        if (!unused_mesh_buffers.empty()) {
+            entry->buffer = unused_mesh_buffers.back().buffer;
+            entry->map = unused_mesh_buffers.back().map;
+            unused_mesh_buffers.pop_back();
+            return;
+        }
+
+        // Otherwise, we have to allocate a new block of buffers.
+        constexpr size_t block_size = 80;
+        memory_to_free.push_back(VK_NULL_HANDLE);
+        unused_mesh_buffers.reserve(unused_mesh_buffers.size() + block_size);
+
         VkDeviceSize bytes = sizeof(MappedGroupMesh);
-        createBuffer(
+        auto buffers = create_mapped_buffer_array<MappedGroupMesh>(
             ctx.m_physicalDevice,
             dev,
             bytes,
+            block_size,
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            entry->buffer,
-            entry->memory);
-        void* p_void;
-        vkMapMemory(dev, entry->memory, 0, bytes, 0, &p_void);
-        entry->map = static_cast<MappedGroupMesh*>(p_void);
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &memory_to_free.back());
+
+        for (auto buffer : buffers) {
+            unused_mesh_buffers.push_back(buffer);
+        }
+        goto restart;
     }
-    
-    // Release resources of MeshEntry.  Only called by main thread. TODO
-    void destructor(MeshEntry* entry)
+
+    // Release resources of MeshEntry.  Only called by main thread.
+    void destructor(MeshEntry* entry) noexcept
     {
-        vkUnmapMemory(dev, entry->memory);
-        vkDestroyBuffer(dev, entry->buffer, nullptr);
-        vkFreeMemory(dev, entry->memory, nullptr);
+        unused_mesh_buffers.push_back( { entry->buffer, entry->map } );
     }
 
     // Convert chunk group's chunks to meshes and pack into the
@@ -1053,7 +1164,14 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
 
 namespace {
 
-void constructor(MeshEntry* entry) { renderer->constructor(entry); }
-void destructor(MeshEntry* entry) { renderer->destructor(entry); }
+void constructor(MeshEntry* entry)
+{
+    thread_local_renderer->constructor(entry);
+}
+
+void destructor(MeshEntry* entry)
+{
+    thread_local_renderer->destructor(entry);
+}
 
 }

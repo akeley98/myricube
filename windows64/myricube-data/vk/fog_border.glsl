@@ -1,46 +1,11 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #define BORDER_WIDTH_LOW  0.075
 #define BORDER_WIDTH_HIGH 0.45
 #define BORDER_FADE  0.75
-// #define BORDER_FADE  0.95
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
 #define DITHER_MASK 3
 #define DITHER_SCALAR (0.0035 / DITHER_MASK)
-
-uniform bool fog_enabled;
-uniform bool black_fog;
-uniform int far_plane_squared;
+#define FOG_SCALAR 1.125
 
 float logistic(float t, float k)
 {
@@ -51,7 +16,7 @@ float logistic(float t, float k)
 // is the sky color)
 vec3 fog_color_from_world_direction(vec3 world_direction)
 {
-    if (black_fog) return vec3(0, 0, 0);
+    // if (black_fog) return vec3(0, 0, 0);
 
     world_direction = normalize(world_direction);
     float t_horizon = logistic(world_direction.y + .25, -5.0);
@@ -79,6 +44,10 @@ vec4 fog_border_color(
     vec2 uv, // "Texture coordinate"
     vec3 fog_color)
 {
+    // const float n = 0.1;
+    // bool allow = false;
+    // allow = (uv.x < n) || (uv.x > 1-n) || (uv.y < n) || (uv.y > 1-n) || ((uv.x-uv.y < n) && (uv.x-uv.y > -n));
+    // if (!allow) discard;
     // Border fade diminishes with distance. First, calculate how
     // strong the border fade is (which might not actually matter if
     // this fragment is not on the border).
@@ -105,9 +74,10 @@ vec4 fog_border_color(
 
     // Fog fade depends on linear distance from camera.
     float raw_fog_fade =
-        fog_enabled ?
-        FOG_SCALAR * (1 - sqrt(dist_squared/far_plane_squared)) :
-        1.0;
+        FOG_SCALAR * (1 - sqrt(dist_squared/pc.pc.far_plane_squared));
+        // fog_enabled ?
+        // FOG_SCALAR * (1 - sqrt(dist_squared/pc.pc.far_plane_squared)) :
+        // 1.0;
     float fog_fade = clamp(raw_fog_fade, 0.0, 1.0);
 
     // Apply fog and border effects.

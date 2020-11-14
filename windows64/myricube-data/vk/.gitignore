@@ -1,0 +1,4 @@
+# Ignore SPIR-V shaders.
+# This may not be practical since then everyone needs the Vulkan SDK,
+# but it is what it is for now.
+*.spv

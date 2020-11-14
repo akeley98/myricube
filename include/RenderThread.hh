@@ -1,7 +1,8 @@
 // Handle for a rendering thread (runs OpenGL or whatever renderer in
 // a loop on its own thread). Nothing really is happening here except
-// storing a handle to a thread and a flag for ordering the thread to
-// exit; the real work is in RendererLogic.
+// implementing the top-level render loop (calls draw_frame in a
+// loop), and checking for an atomic flag that tells the loop to
+// stop. the real work is in RendererLogic.
 
 #ifndef MYRICUBE_RENDERTHREAD_HH_
 #define MYRICUBE_RENDERTHREAD_HH_

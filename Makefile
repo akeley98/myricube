@@ -23,8 +23,14 @@ libmyricube-cvoxel.so: $(LIBOBJS)
 
 all: myricube-bin myricube-windows
 
-myricube-bin: $(OBJS)
+myricube-bin: $(OBJS) vk-shaders
 	$(CXX) $(OBJS) -ldl -lpthread -lvulkan -o myricube-bin
+
+# Rebuild vulkan shaders every time for now due to no method to track
+# include dependencies.
+vk-shaders:
+	glslangValidator myricube-data/vk/mesh.vert -V -o myricube-data/vk/mesh.vert.spv
+	glslangValidator myricube-data/vk/mesh.frag -V -o myricube-data/vk/mesh.frag.spv
 
 py: libmyricube-cvoxel.so myricube-bin
 	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"

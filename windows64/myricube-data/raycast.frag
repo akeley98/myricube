@@ -47,12 +47,6 @@ vec4 fog_border_color(
     vec2 uv,
     vec3 fog_color);
 
-void old_raycast(
-    vec3 frag_residue_coord,
-    out vec4 voxel_color,
-    out vec3 disp,
-    out vec2 uv);
-
 void raycast(
     vec3 frag_residue_coord,
     out vec4 voxel_color,
