@@ -28,6 +28,8 @@ namespace {
 // constructed).
 thread_local RendererVk* thread_local_renderer = nullptr;
 
+constexpr float min_depth = 0.0f, max_depth = 1.0f;
+
 // RendererVk is responsible for constructing MeshEntry and so on.
 // Need these helpers for now as RendererVk is only forward-declared.
 struct MeshEntry;
@@ -131,6 +133,10 @@ struct RaycastEntry
 
     // 3D image storing voxels of this chunk group.
     VkImage voxels_image = VK_NULL_HANDLE;
+    VkImageView voxels_view = VK_NULL_HANDLE;
+
+    // Descriptor set referring to above 3D image.
+    VkDescriptorSet voxels_descriptor = VK_NULL_HANDLE;
 
     RaycastEntry() { constructor(this); }
 
@@ -462,9 +468,7 @@ void createImage(
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create image!");
-    }
+    NVVK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &image));
 
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(device, image, &memRequirements);
@@ -479,6 +483,62 @@ void createImage(
     }
 
     vkBindImageMemory(device, image, imageMemory, 0);
+}
+
+// Create a 3D image + image view for storing a chunk group's
+// voxels. Uses dedicated device memory.
+void create_chunk_group_image(
+    VkPhysicalDevice physicalDevice,
+    VkDevice device,
+    VkFormat format,
+    VkImageTiling tiling,
+    VkImageUsageFlags usage,
+    VkMemoryPropertyFlags properties,
+    VkImage& image,
+    VkImageView& view,
+    VkDeviceMemory& imageMemory)
+{
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_3D;
+    imageInfo.extent.width = group_size;
+    imageInfo.extent.height = group_size;
+    imageInfo.extent.depth = group_size;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = tiling;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = usage;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    NVVK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &image));
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, image, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory));
+
+    vkBindImageMemory(device, image, imageMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    NVVK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &view));
 }
 
 VkImageView createImageView(
@@ -617,9 +677,10 @@ struct Framebuffers
 
 
 
-// Pipeline for mesh rendering. All we really have to do here is load
-// the vert/frag shader and hook up the instanced voxels
-// array. Everything else is just endless boilerplate.
+// Dynamic viewport/scissor pipeline for mesh rendering. All we really
+// have to do here is load the vert/frag shader and hook up the
+// instanced voxels array. Everything else is just endless
+// boilerplate.
 struct MeshPipeline
 {
     // We manage these.
@@ -629,16 +690,10 @@ struct MeshPipeline
     // Borrowed pointer.
     VkDevice device;
 
-    const uint32_t width, height;
-
-    MeshPipeline(
-        VkDevice dev_,
-        VkRenderPass render_pass,
-        uint32_t width_, uint32_t height_) :
-    device(dev_),
-    width(width_),
-    height(height_)
+    MeshPipeline(VkDevice dev_, VkRenderPass render_pass)
     {
+        device = dev_;
+
         // Boilerplate from vulkan-tutorial.com with some modifications.
         VkPushConstantRange pushConstantRange{};
         pushConstantRange.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
@@ -708,14 +763,14 @@ struct MeshPipeline
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = width;
-        viewport.height = height;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
+        viewport.width = 1.0f;
+        viewport.height = 1.0f;
+        viewport.minDepth = min_depth;
+        viewport.maxDepth = max_depth;
 
         VkRect2D scissor{};
         scissor.offset = {0, 0};
-        scissor.extent = VkExtent2D{ width, height };
+        scissor.extent = VkExtent2D{ 1, 1 };
 
         VkPipelineViewportStateCreateInfo viewportState{};
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -764,6 +819,7 @@ struct MeshPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -806,22 +862,52 @@ struct RaycastPipeline
 {
     // We manage these.
     VkPipeline pipeline;
-    VkPipelineLayout layout;
+    VkPipelineLayout pipeline_layout;
+    VkDescriptorSetLayout set_layout;
 
     // Borrowed pointer.
     VkDevice device;
 
-    const uint32_t width, height;
+    static constexpr uint32_t pool_sets = 512;
+    static constexpr VkDescriptorPoolSize pool_size {
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        pool_sets };
 
-    RaycastPipeline(
-        VkDevice dev_,
-        VkRenderPass render_pass,
-        uint32_t width_, uint32_t height_) :
-    device(dev_),
-    width(width_),
-    height(height_)
+    // A VkDescriptorPoolCreateInfo that describes creating a pool
+    // with enough room for pool_sets-many descriptors for the raycast
+    // pipeline.
+    static constexpr VkDescriptorPoolCreateInfo descriptor_pool_info {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        nullptr,
+        0,
+        pool_sets,
+        1,
+        &pool_size };
+
+    RaycastPipeline(VkDevice dev_, VkRenderPass render_pass)
     {
+        device = dev_;
+
         // Boilerplate from vulkan-tutorial.com with some modifications.
+
+        // Only binding is the 3D image holding voxel data.
+        VkDescriptorSetLayoutBinding voxels_binding {
+            0,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            1,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr };
+
+        VkDescriptorSetLayoutCreateInfo set_info {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            nullptr,
+            0,
+            1,
+            &voxels_binding };
+
+        NVVK_CHECK(vkCreateDescriptorSetLayout(
+            device, &set_info, nullptr, &set_layout));
+
         VkPushConstantRange pushConstantRange{};
         pushConstantRange.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
         pushConstantRange.offset = 0;
@@ -829,12 +915,13 @@ struct RaycastPipeline
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 0;
-        pipelineLayoutInfo.pSetLayouts = nullptr; // TODO
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &set_layout;
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
-        NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
+        NVVK_CHECK(vkCreatePipelineLayout(
+            device, &pipelineLayoutInfo, nullptr, &pipeline_layout));
 
         auto vertShaderCode = readFile(expand_filename("vk/raycast.vert.spv"));
         auto fragShaderCode = readFile(expand_filename("vk/raycast.frag.spv"));
@@ -890,14 +977,14 @@ struct RaycastPipeline
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = width;
-        viewport.height = height;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
+        viewport.width = 1.0f;
+        viewport.height = 1.0f;
+        viewport.minDepth = min_depth;
+        viewport.maxDepth = max_depth;
 
         VkRect2D scissor{};
         scissor.offset = {0, 0};
-        scissor.extent = VkExtent2D{ width, height };
+        scissor.extent = VkExtent2D{ 1, 1 };
 
         VkPipelineViewportStateCreateInfo viewportState{};
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -946,6 +1033,7 @@ struct RaycastPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -955,7 +1043,7 @@ struct RaycastPipeline
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlending;
-        pipelineInfo.layout = layout;
+        pipelineInfo.layout = pipeline_layout;
         pipelineInfo.renderPass = render_pass;
         pipelineInfo.subpass = 0;
         pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
@@ -971,7 +1059,8 @@ struct RaycastPipeline
     ~RaycastPipeline()
     {
         vkDestroyPipeline(device, pipeline, nullptr);
-        vkDestroyPipelineLayout(device, layout, nullptr);
+        vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
     }
 
     operator VkPipeline() const
@@ -996,11 +1085,14 @@ struct RendererVk :
     ScopedContext ctx;
     VkDevice dev;
     ScopedSurface glfw_surface;
-    FrameManager frame_manager;
     ScopedRenderPass render_pass;
     Framebuffers framebuffers;
-    std::unique_ptr<MeshPipeline> p_mesh_pipeline;
-    std::unique_ptr<RaycastPipeline> p_raycast_pipeline;
+    MeshPipeline mesh_pipeline;
+    RaycastPipeline raycast_pipeline;
+
+    // Last, as FrameManager destructor blocks the main queue,
+    // allowing the aboves' destructors to run safely.
+    FrameManager frame_manager;
 
     // Set in begin_frame.
     int width, height;
@@ -1011,9 +1103,9 @@ struct RendererVk :
 
     // Transfer-only queue shared by the worker threads, plus a mutex
     // synchronizing it.
-    VkQueue worker_queue;
-    uint32_t worker_queue_family;
-    std::mutex worker_queue_mutex;
+    VkQueue workers_queue;
+    uint32_t workers_queue_family;
+    std::mutex workers_queue_mutex;
 
     // From FrameManager: primary command buffer that will be
     // submitted at frame-end, and the current swap chain image. Both
@@ -1029,6 +1121,8 @@ struct RendererVk :
     std::vector<MappedBuffer<MappedChunks>>    unused_chunk_buffers;
     std::vector<MappedBuffer<AABBs>>           unused_aabb_buffers;
     std::vector<VkImage>                       unused_voxel_images;
+    std::vector<VkDescriptorPool>              descriptor_pools_to_free;
+    std::vector<VkDescriptorSet>               unused_descriptor_sets;
 
     // VkDeviceMemory we're using that is to be freed in the destructor.
     std::vector<VkDeviceMemory> memory_to_free;
@@ -1042,17 +1136,23 @@ struct RendererVk :
         glfw_surface(
             ctx.m_instance,
             args.p_window->get_glfw_window()),
-        frame_manager(
-            ctx,
-            glfw_surface.surface,
-            glfw_surface.initial_width,
-            glfw_surface.initial_height),
         render_pass(
             dev),
         framebuffers(
             ctx.m_physicalDevice,
             dev,
-            render_pass)
+            render_pass),
+        mesh_pipeline(
+            dev,
+            render_pass),
+        raycast_pipeline(
+            dev,
+            render_pass),
+        frame_manager(
+            ctx,
+            glfw_surface.surface,
+            glfw_surface.initial_width,
+            glfw_surface.initial_height)
     {
         // As promised.
         thread_local_renderer = this;
@@ -1061,19 +1161,22 @@ struct RendererVk :
         // ctx.m_queueGCT is the same queue FrameManager is using.
         main_queue =        ctx.m_queueGCT;
         main_queue_family = ctx.m_queueGCT;
-        worker_queue =        ctx.m_queueT;
-        worker_queue_family = ctx.m_queueT;
+        workers_queue =        ctx.m_queueT;
+        workers_queue_family = ctx.m_queueT;
 
         if (main_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find graphics+present queue");
         }
-        if (worker_queue == VK_NULL_HANDLE) {
+        if (workers_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
         }
     }
 
     ~RendererVk()
     {
+        // By the time this destructor runs, RendererBase has
+        // destroyed MeshStore and RaycastStore, stopping all worker
+        // threads.
         for (auto mapped_buffer : unused_mesh_buffers) {
             vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
         }
@@ -1137,18 +1240,6 @@ struct RendererVk :
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
-        // Since I don't know how to use dynamic state, we have to recreate
-        // the pipeline if the framebuffer size changed.
-        if (p_mesh_pipeline == nullptr
-            or p_mesh_pipeline->width != uint32_t(width)
-            or p_mesh_pipeline->height != uint32_t(height))
-        {
-            p_mesh_pipeline.reset(new MeshPipeline(
-                dev,
-                render_pass,
-                width, height));
-        }
-
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
@@ -1164,8 +1255,17 @@ struct RendererVk :
         vkCmdBindPipeline(
             frame_cmd_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
-            *p_mesh_pipeline);
+            mesh_pipeline);
 
+        // Set viewport and scissors.
+        VkViewport viewport {
+            0, 0, float(width), float(height), min_depth, max_depth };
+        vkCmdSetViewport(frame_cmd_buffer, 0, 1, &viewport);
+
+        VkRect2D scissor { { 0, 0 }, { uint32_t(width), uint32_t(height) } };
+        vkCmdSetScissor(frame_cmd_buffer, 0, 1, &scissor);
+
+        // Ready to draw the entries.
         for (auto pair : entries) {
             MeshEntry& entry = *pair.first;
             glm::ivec3 group_coord = pair.second;
@@ -1183,7 +1283,7 @@ struct RendererVk :
 
             vkCmdPushConstants(
                 frame_cmd_buffer,
-                p_mesh_pipeline->layout,
+                mesh_pipeline.layout,
                 VK_SHADER_STAGE_ALL_GRAPHICS,
                 0, sizeof(PushConstant), &push_constant);
 
@@ -1317,18 +1417,6 @@ struct RendererVk :
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>& entries)
     override
     {
-        // Since I don't know how to use dynamic state, we have to recreate
-        // the pipeline if the framebuffer size changed.
-        if (p_raycast_pipeline == nullptr
-            or p_raycast_pipeline->width != uint32_t(width)
-            or p_raycast_pipeline->height != uint32_t(height))
-        {
-            p_raycast_pipeline.reset(new RaycastPipeline(
-                dev,
-                render_pass,
-                width, height));
-        }
-
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
@@ -1344,8 +1432,17 @@ struct RendererVk :
         vkCmdBindPipeline(
             frame_cmd_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
-            *p_raycast_pipeline);
+            raycast_pipeline);
 
+        // Set viewport and scissor.
+        VkViewport viewport {
+            0, 0, float(width), float(height), min_depth, max_depth };
+        vkCmdSetViewport(frame_cmd_buffer, 0, 1, &viewport);
+
+        VkRect2D scissor { { 0, 0 }, { uint32_t(width), uint32_t(height) } };
+        vkCmdSetScissor(frame_cmd_buffer, 0, 1, &scissor);
+
+        // Draw the raycast entries.
         for (auto pair : entries) {
             RaycastEntry& entry = *pair.first;
             glm::ivec3 group_coord = pair.second;
@@ -1363,7 +1460,7 @@ struct RendererVk :
 
             vkCmdPushConstants(
                 frame_cmd_buffer,
-                p_raycast_pipeline->layout,
+                raycast_pipeline.pipeline_layout,
                 VK_SHADER_STAGE_ALL_GRAPHICS,
                 0, sizeof(PushConstant), &push_constant);
 
@@ -1380,8 +1477,8 @@ struct RendererVk :
         }
     }
 
-    // Fill in the AABB buffer and 3D image. We'll use the same block
-    // strategy as in MeshEntry.
+    // Fill in the AABB buffer, 3D image, and descriptor set bound to
+    // that image. We'll use the same block strategy as in MeshEntry.
     void constructor(RaycastEntry* entry)
     {
       retry_buffer:
@@ -1390,30 +1487,59 @@ struct RendererVk :
             entry->aabb_buffer = unused_aabb_buffers.back().buffer;
             entry->aabb_map = unused_aabb_buffers.back().map;
             unused_aabb_buffers.pop_back();
-            return;
         }
-
         // Otherwise, we have to allocate a new block of buffers.
-        constexpr size_t block_size = 4096;
-        memory_to_free.push_back(VK_NULL_HANDLE);
-        unused_aabb_buffers.reserve(unused_aabb_buffers.size() + block_size);
+        else {
+            constexpr size_t block_size = 4096;
+            memory_to_free.push_back(VK_NULL_HANDLE);
+            unused_aabb_buffers.reserve(
+                unused_aabb_buffers.size() + block_size);
+            auto buffers = create_mapped_buffer_array<AABBs>(
+                ctx.m_physicalDevice,
+                dev,
+                sizeof(AABBs),
+                block_size,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                    | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &memory_to_free.back());
 
-        auto buffers = create_mapped_buffer_array<AABBs>(
-            ctx.m_physicalDevice,
-            dev,
-            sizeof(AABBs),
-            block_size,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &memory_to_free.back());
-
-        for (auto buffer : buffers) {
-            unused_aabb_buffers.push_back(buffer);
+            for (auto buffer : buffers) {
+                unused_aabb_buffers.push_back(buffer);
+            }
+            goto retry_buffer;
         }
-        goto retry_buffer;
 
         // TODO Image
+
+      // retry_set:
+      //   if (!unused_descriptor_sets.empty()) {
+      //       entry->descriptor_set = unused_descriptor_sets.back();
+      //       unused_descriptor_sets.pop_back();
+      //   }
+      //   else {
+      //       auto pool_info = RaycastPipeline::descriptor_pool_info;
+      //       auto block_size = RaycastPipeline::pool_sets;
+      //       descriptor_pools_to_free.push_back(VK_NULL_HANDLE);
+      //       VkDescriptorPool* p_pool = &descriptor_pools_to_free.back();
+      //       unused_descriptor_sets.reserve(
+      //           unused_descriptor_sets.size() + block_size);
+      //       NVVK_CHECK(vkCreateDescriptorPool(
+      //           device, &pool_info, nullptr, p_pool));
+
+      //       VkDescriptorSetAllocateInfo set_info {
+      //           VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      //           nullptr,
+      //           *p_pool,
+      //           1,
+      //           // set layout...
+      //       };
+
+      //       for (auto i = block_size; i != 0; ++i) {
+      //           VkDescriptorSet set;
+      //           vkAllocateDescriptorSet
+      //       }
+      //   }
     }
 
     void destructor(RaycastEntry* entry) noexcept
@@ -1506,13 +1632,14 @@ struct RendererVk :
         }
         }
         }
-        // TODO image and copy.
+        // TODO image and copy and fence and command pool and queue
+        // ownership transfer.
     }
 
     bool swap_in(RaycastStaging* staging,
                  std::unique_ptr<RaycastEntry>* p_uptr_entry) override
     {
-        // TODO fence wait.
+        // TODO fence wait and ownership transfer.
         std::swap(staging->entry, *p_uptr_entry);
         if (staging->entry == nullptr) {
             staging->entry.reset(new RaycastEntry());
@@ -1533,9 +1660,15 @@ struct RendererVk :
         frame_manager.endFrame(frame_cmd_buffer);
     }
 
+    void main_thread_wait_idle() override
+    {
+        vkQueueWaitIdle(main_queue);
+    }
+
     void wait_idle() override
     {
-        vkDeviceWaitIdle(dev);
+        vkQueueWaitIdle(main_queue);
+        vkQueueWaitIdle(workers_queue);
     }
 };
 
