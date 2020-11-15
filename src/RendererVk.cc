@@ -490,18 +490,20 @@ void createImage(
     vkBindImageMemory(device, image, imageMemory, 0);
 }
 
-// Create a 3D image + image view for storing a chunk group's
-// voxels. Uses dedicated device memory.
-void create_chunk_group_image(
+
+
+// Create a vector of 3D images suitable for storing a chunk group's voxels,
+// paired with a corresponding image view. All voxels share one memory
+// allocation, returned through *p_memory.
+std::vector<std::pair<VkImage, VkImageView>> create_chunk_group_images(
     VkPhysicalDevice physicalDevice,
     VkDevice device,
+    size_t image_count,
     VkFormat format,
     VkImageTiling tiling,
     VkImageUsageFlags usage,
     VkMemoryPropertyFlags properties,
-    VkImage& image,
-    VkImageView& view,
-    VkDeviceMemory& imageMemory)
+    VkDeviceMemory* p_memory)
 {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -518,32 +520,49 @@ void create_chunk_group_image(
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    NVVK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &image));
+    assert(image_count != 0);
+    std::vector<std::pair<VkImage, VkImageView>> result(image_count);
 
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(device, image, &memRequirements);
+    VkImage* p_image;
+    for (size_t i = 0; i < image_count; ++i) {
+        p_image = &result[i].first;
+        NVVK_CHECK(vkCreateImage(device, &imageInfo, nullptr, p_image));
+    }
+
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(device, *p_image, &requirements);
+
+    VkDeviceSize stride = (requirements.size + requirements.alignment - 1)
+                        & ~(requirements.alignment - 1);
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+    allocInfo.allocationSize = stride * VkDeviceSize(image_count);
+    allocInfo.memoryTypeIndex = findMemoryType(
+        physicalDevice, requirements.memoryTypeBits, properties);
 
-    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory));
+    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, p_memory));
 
-    vkBindImageMemory(device, image, imageMemory, 0);
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = VK_NULL_HANDLE;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    view_info.format = format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = 1;
 
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    for (VkDeviceSize i = 0; i < VkDeviceSize(image_count); ++i) {
+        VkImage image = result[i].first;
+        NVVK_CHECK(vkBindImageMemory(device, image, *p_memory, stride * i));
+        view_info.image = image;
+        NVVK_CHECK(vkCreateImageView(
+            device, &view_info, nullptr, &result[i].second));
+    }
 
-    NVVK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &view));
+    return result;
 }
 
 VkImageView createImageView(
@@ -873,7 +892,7 @@ struct RaycastPipeline
     // Borrowed pointer.
     VkDevice device;
 
-    static constexpr uint32_t pool_sets = 512;
+    static constexpr uint32_t pool_sets = 1024;
     static constexpr VkDescriptorPoolSize pool_size {
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         pool_sets };
@@ -1126,12 +1145,12 @@ struct RendererVk :
     // after the stores are destroyed, as only at that point will all
     // MeshEntry/RaycastEntry destructors be called (fully filling out
     // the list). This is ensured by RenderThread::destroy_stores.
-    std::vector<MappedBuffer<MappedGroupMesh>> unused_mesh_buffers;
-    std::vector<MappedBuffer<MappedChunks>>    unused_chunk_buffers;
-    std::vector<MappedBuffer<AABBs>>           unused_aabb_buffers;
-    std::vector<VkImage>                       unused_voxel_images;
-    std::vector<VkDescriptorPool>              descriptor_pools_to_free;
-    std::vector<VkDescriptorSet>               unused_descriptor_sets;
+    std::vector<MappedBuffer<MappedGroupMesh>>  unused_mesh_buffers;
+    std::vector<MappedBuffer<MappedChunks>>     unused_chunk_buffers;
+    std::vector<MappedBuffer<AABBs>>            unused_aabb_buffers;
+    std::vector<std::pair<VkImage, VkImageView>>unused_voxel_images;
+    std::vector<VkDescriptorPool>               descriptor_pools_to_free;
+    std::vector<VkDescriptorSet>                unused_descriptor_sets;
 
     // VkDeviceMemory we're using that is to be freed in the destructor.
     std::vector<VkDeviceMemory> memory_to_free;
@@ -1198,8 +1217,13 @@ struct RendererVk :
             vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
         }
 
-        for (VkImage image : unused_voxel_images) {
-            vkDestroyImage(dev, image, nullptr);
+        for (std::pair<VkImage, VkImageView> pair : unused_voxel_images) {
+            vkDestroyImageView(dev, pair.second, nullptr);
+            vkDestroyImage(dev, pair.first, nullptr);
+        }
+
+        for (VkDescriptorPool pool : descriptor_pools_to_free) {
+            vkDestroyDescriptorPool(dev, pool, nullptr);
         }
 
         for (VkDeviceMemory mem : memory_to_free) {
@@ -1533,19 +1557,32 @@ struct RendererVk :
         }
 
         // Init the 3D chunk group voxel image.
+      retry_image:
+        if (!unused_voxel_images.empty()) {
+            entry->voxels_image = unused_voxel_images.back().first;
+            entry->voxels_view = unused_voxel_images.back().second;
+            unused_voxel_images.pop_back();
+        }
+        else {
+            constexpr size_t block_size = 384;
+            memory_to_free.push_back(VK_NULL_HANDLE);
+            unused_voxel_images.reserve(
+                unused_voxel_images.size() + block_size);
+            auto images = create_chunk_group_images(
+                ctx.m_physicalDevice,
+                dev,
+                block_size,
+                VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &memory_to_free.back());
 
-        // TODO LEAK
-        VkDeviceMemory memory;
-        create_chunk_group_image(
-            ctx.m_physicalDevice,
-            dev,
-            VK_FORMAT_R8G8B8A8_UNORM,
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            entry->voxels_image,
-            entry->voxels_view,
-            memory);
+            for (auto image : images) {
+                unused_voxel_images.push_back(image);
+            }
+            goto retry_image;
+        }
 
         // Init the descriptor set.
       retry_set:
@@ -1601,7 +1638,10 @@ struct RendererVk :
     {
         unused_aabb_buffers.push_back(
             { entry->aabb_buffer, entry->aabb_map } );
-        // TODO image
+        unused_voxel_images.push_back(
+            { entry->voxels_image, entry->voxels_view } );
+        unused_descriptor_sets.push_back(
+            { entry->voxels_descriptor } );
     }
 
     void constructor(RaycastStaging* staging)
@@ -1718,9 +1758,10 @@ struct RendererVk :
             0, nullptr,
             1, &barrier);
         VkClearColorValue color;
-        color.float32[0] = 0.5;
-        color.float32[1] = 0.5;
-        color.float32[2] = 0.0;
+        thread_local uint32_t counter = 0;
+        color.float32[0] = (counter++ & 63) / 63.0f;
+        color.float32[1] = (counter++ & 63) / 63.0f;
+        color.float32[2] = (counter++ & 63) / 63.0f;
         color.float32[3] = 1.0;
         vkCmdClearColorImage(
             pre_frame_buffer,
