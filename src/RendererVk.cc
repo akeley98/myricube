@@ -47,6 +47,11 @@ void destructor(RaycastStaging*);
 constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr auto depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
 
+constexpr VkImageSubresourceRange color_range {
+    VK_IMAGE_ASPECT_COLOR_BIT,
+    0, VK_REMAINING_MIP_LEVELS,
+    0, VK_REMAINING_ARRAY_LAYERS };
+
 // Handle for GPU resources for the mesh of one chunk group.
 struct MeshEntry
 {
@@ -1113,6 +1118,10 @@ struct RendererVk :
     VkCommandBuffer frame_cmd_buffer = VK_NULL_HANDLE;
     nvvk::SwapChainImage current_swap_image;
 
+    // From FrameManager: primary command buffer submitted before
+    // frame_cmd_buffer.
+    VkCommandBuffer pre_frame_buffer = VK_NULL_HANDLE;
+
     // Garbage produced by MeshStore/RaycastStore. Only destroyed
     // after the stores are destroyed, as only at that point will all
     // MeshEntry/RaycastEntry destructors be called (fully filling out
@@ -1170,6 +1179,8 @@ struct RendererVk :
         if (workers_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
         }
+
+        pre_frame_buffer = frame_manager.recordOneTimeCommandBuffer();
     }
 
     ~RendererVk()
@@ -1270,10 +1281,11 @@ struct RendererVk :
             MeshEntry& entry = *pair.first;
             glm::ivec3 group_coord = pair.second;
 
-            // Push the push constant. We need to update the MVP.
-            // The view matrix only takes into account the eye's residue
-            // coordinates, so the model position of the group actually
-            // needs to be shifted by the eye's group coord.
+            // Push the push constant. We need to update the MVP and
+            // the eye position relative to this group.  The view
+            // matrix only takes into account the eye's residue
+            // coordinates, so the model position of the group
+            // actually needs to be shifted by the eye's group coord.
             glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
@@ -1447,10 +1459,11 @@ struct RendererVk :
             RaycastEntry& entry = *pair.first;
             glm::ivec3 group_coord = pair.second;
 
-            // Push the push constant. We need to update the MVP.
-            // The view matrix only takes into account the eye's residue
-            // coordinates, so the model position of the group actually
-            // needs to be shifted by the eye's group coord.
+            // Push the push constant. We need to update the MVP and
+            // eye position relative to this group.  The view matrix
+            // only takes into account the eye's residue coordinates,
+            // so the model position of the group actually needs to be
+            // shifted by the eye's group coord.
             glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
                                    * float(group_size);
             glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
@@ -1470,6 +1483,14 @@ struct RendererVk :
             vkCmdBindVertexBuffers(
                 frame_cmd_buffer, 0, 1, &entry.aabb_buffer, &offsets);
 
+            // Bind the chunk group voxels 3D image.
+            vkCmdBindDescriptorSets(
+                frame_cmd_buffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                raycast_pipeline.pipeline_layout,
+                0, 1, &entry.voxels_descriptor,
+                0, nullptr);
+
             // Draw the AABBs, there are as many as there are chunks
             // in a chunk group and each takes 14 vertices.
             uint32_t instances = edge_chunks * edge_chunks * edge_chunks;
@@ -1481,6 +1502,7 @@ struct RendererVk :
     // that image. We'll use the same block strategy as in MeshEntry.
     void constructor(RaycastEntry* entry)
     {
+        // Init the AABB buffer.
       retry_buffer:
         // Recycle if possible.
         if (!unused_aabb_buffers.empty()) {
@@ -1510,36 +1532,69 @@ struct RendererVk :
             goto retry_buffer;
         }
 
-        // TODO Image
+        // Init the 3D chunk group voxel image.
 
-      // retry_set:
-      //   if (!unused_descriptor_sets.empty()) {
-      //       entry->descriptor_set = unused_descriptor_sets.back();
-      //       unused_descriptor_sets.pop_back();
-      //   }
-      //   else {
-      //       auto pool_info = RaycastPipeline::descriptor_pool_info;
-      //       auto block_size = RaycastPipeline::pool_sets;
-      //       descriptor_pools_to_free.push_back(VK_NULL_HANDLE);
-      //       VkDescriptorPool* p_pool = &descriptor_pools_to_free.back();
-      //       unused_descriptor_sets.reserve(
-      //           unused_descriptor_sets.size() + block_size);
-      //       NVVK_CHECK(vkCreateDescriptorPool(
-      //           device, &pool_info, nullptr, p_pool));
+        // TODO LEAK
+        VkDeviceMemory memory;
+        create_chunk_group_image(
+            ctx.m_physicalDevice,
+            dev,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            entry->voxels_image,
+            entry->voxels_view,
+            memory);
 
-      //       VkDescriptorSetAllocateInfo set_info {
-      //           VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      //           nullptr,
-      //           *p_pool,
-      //           1,
-      //           // set layout...
-      //       };
+        // Init the descriptor set.
+      retry_set:
+        if (!unused_descriptor_sets.empty()) {
+            entry->voxels_descriptor = unused_descriptor_sets.back();
+            unused_descriptor_sets.pop_back();
+        }
+        else {
+            auto pool_info = RaycastPipeline::descriptor_pool_info;
+            auto block_size = RaycastPipeline::pool_sets;
+            descriptor_pools_to_free.push_back(VK_NULL_HANDLE);
+            VkDescriptorPool* p_pool = &descriptor_pools_to_free.back();
+            unused_descriptor_sets.reserve(
+                unused_descriptor_sets.size() + block_size);
+            NVVK_CHECK(vkCreateDescriptorPool(
+                dev, &pool_info, nullptr, p_pool));
 
-      //       for (auto i = block_size; i != 0; ++i) {
-      //           VkDescriptorSet set;
-      //           vkAllocateDescriptorSet
-      //       }
-      //   }
+            VkDescriptorSetAllocateInfo set_info {
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                nullptr,
+                *p_pool,
+                1,
+                &raycast_pipeline.set_layout };
+
+            for (auto i = block_size; i != 0; --i) {
+                VkDescriptorSet set;
+                vkAllocateDescriptorSets(dev, &set_info, &set);
+                unused_descriptor_sets.push_back(set);
+            }
+            goto retry_set;
+        }
+
+        // Bind descriptor set to point to the image.
+        VkDescriptorImageInfo image_info {
+            VK_NULL_HANDLE,
+            entry->voxels_view,
+            VK_IMAGE_LAYOUT_GENERAL };
+        VkWriteDescriptorSet write {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            nullptr,
+            entry->voxels_descriptor,
+            0,
+            0,
+            1,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            &image_info,
+            nullptr,
+            nullptr };
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
     }
 
     void destructor(RaycastEntry* entry) noexcept
@@ -1640,11 +1695,57 @@ struct RendererVk :
                  std::unique_ptr<RaycastEntry>* p_uptr_entry) override
     {
         // TODO fence wait and ownership transfer.
+
+        RaycastEntry& staged_entry = *staging->entry;
+
+        VkImageMemoryBarrier barrier {
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_MEMORY_WRITE_BIT,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL,
+            main_queue_family,
+            main_queue_family,
+            staged_entry.voxels_image,
+            color_range };
+        vkCmdPipelineBarrier(
+            pre_frame_buffer,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+        VkClearColorValue color;
+        color.float32[0] = 0.5;
+        color.float32[1] = 0.5;
+        color.float32[2] = 0.0;
+        color.float32[3] = 1.0;
+        vkCmdClearColorImage(
+            pre_frame_buffer,
+            staged_entry.voxels_image,
+            VK_IMAGE_LAYOUT_GENERAL,
+            &color,
+            1,
+            &color_range);
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        vkCmdPipelineBarrier(
+            pre_frame_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+
         std::swap(staging->entry, *p_uptr_entry);
         if (staging->entry == nullptr) {
             staging->entry.reset(new RaycastEntry());
         }
-
         return true;
     }
 
@@ -1652,12 +1753,32 @@ struct RendererVk :
 
     void end_frame() override
     {
+        // End the before-frame command buffer and submit, then schedule
+        // it to be freed one frame later.
+        vkEndCommandBuffer(pre_frame_buffer);
+        VkSubmitInfo submit = {
+            VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            nullptr,
+            0, nullptr, nullptr,
+            1, &pre_frame_buffer,
+            0, 0 };
+        NVVK_CHECK(vkQueueSubmit(main_queue, 1, &submit, VK_NULL_HANDLE));
+
+        frame_manager.addFrameGarbage(
+        [buffer=pre_frame_buffer] (const FrameManager& m) {
+            vkFreeCommandBuffers(m.getDevice(), m.getCommandPool(), 1, &buffer);
+        } );
+
         // End the one render pass there is.
         vkCmdEndRenderPass(frame_cmd_buffer);
 
         // Ends cmd buffer recording, submits it, and presents the
         // rendered image.
         frame_manager.endFrame(frame_cmd_buffer);
+        frame_cmd_buffer = VK_NULL_HANDLE;
+
+        // Get a new pre-frame command buffer.
+        pre_frame_buffer = frame_manager.recordOneTimeCommandBuffer();
     }
 
     void main_thread_wait_idle() override

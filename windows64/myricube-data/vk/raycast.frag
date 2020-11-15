@@ -16,16 +16,15 @@ layout(location=0) out vec4 out_color;
 #include "fog_border.glsl"
 
 // group_size^3 3D image storing voxel colors for this chunk group.
-// layout(binding=0, set=0, rgba8) uniform readonly image3D group_voxels;
+layout(binding=0, set=0, rgba8) uniform readonly image3D group_voxels;
 
 vec4 read_group_voxel(ivec3 residue)
 {
-    return (residue.x % 2 == 0) ? vec4(1,0,1,1) : vec4(0);
-    // ivec3 clamped_residue = clamp(
-    //     residue,
-    //     ivec3(0),
-    //     imageSize(group_voxels) - ivec3(1));
-    // return imageLoad(group_voxels, clamped_residue);
+    ivec3 clamped_residue = clamp(
+        residue,
+        ivec3(0),
+        imageSize(group_voxels) - ivec3(1));
+    return imageLoad(group_voxels, clamped_residue);
 }
 
 void raycast(
