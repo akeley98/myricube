@@ -170,7 +170,7 @@ struct RaycastStaging
 
     // Fence for the main thread to wait on to indicate the staging
     // buffer -> image copy is done.
-    VkFence fence = VK_NULL_HANDLE;
+    std::shared_ptr<VkFence> p_fence = nullptr;
 
     RaycastStaging() { constructor(this); }
 
@@ -1140,12 +1140,19 @@ struct RendererVk :
     // re-recorded.
     struct WorkerCmdBuffer
     {
-        VkCommandBuffer buffer;
+        VkCommandBuffer buffer = VK_NULL_HANDLE;
 
-        // In a signalled state iff buffer is not currently recording
-        // but may safely enter recording state. (Hence, it should be
-        // allocated in a signalled state).
-        VkFence fence;
+        // Three possible states:
+        //
+        // non-nullptr, signalled: buffer submitted to queue,
+        // retired. Command buffer may be re-recorded.
+        //
+        // non-nullptr, not-signalled: buffer submitted to queue, not
+        // yet retired OR command buffer currently recording; this
+        // fence will be signalled after buffer submitted and retired.
+        //
+        // nullptr: all other possibilities.
+        std::shared_ptr<VkFence> p_fence;
     };
 
     // Pool of worker command buffers. One is chosen for current
@@ -1215,8 +1222,8 @@ struct RendererVk :
         // ctx.m_queueGCT is the same queue FrameManager is using.
         main_queue =        ctx.m_queueGCT;
         main_queue_family = ctx.m_queueGCT;
-        transfer_queue =        ctx.m_queueT;
-        transfer_queue_family = ctx.m_queueT;
+        transfer_queue =        ctx.m_queueC; // XXX
+        transfer_queue_family = ctx.m_queueC; // TODO ctx.m_queueT
 
         if (main_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find graphics+present queue");
@@ -1235,7 +1242,7 @@ struct RendererVk :
         VkCommandPoolCreateInfo cmd_pool_info {
             VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             nullptr,
-            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, // as promised
+            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             transfer_queue_family };
         NVVK_CHECK(vkCreateCommandPool(
             dev, &cmd_pool_info, nullptr, &transfer_cmd_pool));
@@ -1249,23 +1256,13 @@ struct RendererVk :
                 1 };
             NVVK_CHECK(vkAllocateCommandBuffers(dev, &info, &wcb.buffer));
 
-            VkFenceCreateInfo fence_info {
-                VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-                nullptr,
-                VK_FENCE_CREATE_SIGNALED_BIT, // as explained.
-            };
-            NVVK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &wcb.fence));
+            // wcb.p_fence == nullptr is correct.
+            // Not recording or submitted to queue yet.
         }
 
-        // Pick one of the transfer cmd buffers to start recording.
-        p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
-        vkResetFences(dev, 1, &p_worker_cmd_buffer->fence);
-        VkCommandBufferBeginInfo begin_info {
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            nullptr,
-            0,
-            nullptr };
-        vkBeginCommandBuffer(p_worker_cmd_buffer->buffer, &begin_info);
+        // Put one worker command buffer in recording state.
+        p_worker_cmd_buffer = worker_cmd_buffer_array.data();
+        flush_worker_cmd_buffer(true);
     }
 
     ~RendererVk()
@@ -1273,9 +1270,6 @@ struct RendererVk :
         // By the time this destructor runs, RendererBase has
         // destroyed MeshStore and RaycastStore, stopping all worker
         // threads.
-        for (WorkerCmdBuffer& wcb : worker_cmd_buffer_array) {
-            vkDestroyFence(dev, wcb.fence, nullptr);
-        }
         vkDestroyCommandPool(dev, transfer_cmd_pool, nullptr);
 
         for (auto mapped_buffer : unused_mesh_buffers) {
@@ -1305,40 +1299,66 @@ struct RendererVk :
     // Stop recording and submit the transfer-only command buffer,
     // then pick a new command buffer, start recording it, and set it
     // as the command buffer for workers to record commands to.
-    void flush_worker_cmd_buffer() noexcept
+    // first_time=true is used for initialization: skip the
+    // end-record-and-submit in that case.
+    void flush_worker_cmd_buffer(bool first_time=false) noexcept
     {
         // Think carefully before considering releasing this mutex
         // during "expensive" operations. The state of all this worker
         // cmd buffer business is mostly inconsistent through all
         // this.
         std::lock_guard guard(worker_cmd_mutex);
-        vkEndCommandBuffer(p_worker_cmd_buffer->buffer);
 
-        VkSubmitInfo submit {
-            VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            nullptr,
-            0, nullptr, nullptr,
-            1, &p_worker_cmd_buffer->buffer,
-            0, nullptr };
-        vkQueueSubmit(transfer_queue, 1, &submit, p_worker_cmd_buffer->fence);
+        if (!first_time) {
+            // End command buffer recording. Since I was recording this
+            // buffer, the p_fence should not be nullptr.
+            vkEndCommandBuffer(p_worker_cmd_buffer->buffer);
+            assert(p_worker_cmd_buffer->p_fence != nullptr);
 
-        ++p_worker_cmd_buffer;
-        if (p_worker_cmd_buffer == &*worker_cmd_buffer_array.end()) {
-            p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
-        }
-        VkFence* p_fence = &p_worker_cmd_buffer->fence;
+            // Submit to transfer-only queue.
+            VkSubmitInfo submit {
+                VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                nullptr,
+                0, nullptr, nullptr,
+                1, &p_worker_cmd_buffer->buffer,
+                0, nullptr };
+            vkQueueSubmit(
+                transfer_queue, 1, &submit, *p_worker_cmd_buffer->p_fence);
 
-        VkResult result = vkWaitForFences(dev, 1, p_fence, VK_TRUE, 0);
-        if (result == VK_TIMEOUT) {
-            thread_local bool did_warning;
-            if (!did_warning) {
-                fprintf(stderr, "flush_worker_cmd_buffer: waited on fence\n");
-                did_warning = true;
+            // Pick another command buffer for the worker threads to record to.
+            ++p_worker_cmd_buffer;
+            if (p_worker_cmd_buffer == &*worker_cmd_buffer_array.end()) {
+                p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
             }
-            NVVK_CHECK(vkWaitForFences(dev, 1, p_fence, VK_TRUE, UINT64_MAX));
         }
-        vkResetFences(dev, 1, p_fence);
 
+        // Wait on a fence, if neccessary.
+        if (p_worker_cmd_buffer->p_fence != nullptr) {
+            VkFence* p_fence = p_worker_cmd_buffer->p_fence.get();
+
+            VkResult result = vkWaitForFences(dev, 1, p_fence, true, 0);
+            if (result == VK_TIMEOUT) {
+                thread_local bool did_warning;
+                if (!did_warning) {
+                    fprintf(stderr, "flush_worker_cmd_buffer: waited on fence\n");
+                    did_warning = true;
+                }
+                NVVK_CHECK(vkWaitForFences(dev, 1, p_fence, true, UINT64_MAX));
+            }
+        }
+
+        // Now that recording will start, I need to make p_fence non-null.
+        VkFenceCreateInfo fence_info {
+            VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            nullptr,
+            0 };
+        VkFence* p_fence = new VkFence;
+        vkCreateFence(dev, &fence_info, nullptr, p_fence);
+        auto del = [dev=dev] (VkFence* p_fence) {
+            vkDestroyFence(dev, *p_fence, nullptr); };
+        p_worker_cmd_buffer->p_fence.reset(p_fence, del);
+
+        // Actually start recording said command buffer.
         VkCommandBufferBeginInfo begin_info {
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             nullptr,
@@ -1799,11 +1819,6 @@ struct RendererVk :
             unused_chunk_buffers.push_back(buffer);
         }
         goto retry_buffer;
-
-        // Create the fence.
-        VkFenceCreateInfo fence_info {
-            VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, 0 };
-        NVVK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &staging->fence));
     }
 
     void destructor(RaycastStaging* staging)
@@ -1813,9 +1828,6 @@ struct RendererVk :
         // Recycle the staging buffer.
         unused_chunk_buffers.push_back(
             { staging->chunk_buffer, staging->chunk_map } );
-
-        // Destroy the fence.
-        vkDestroyFence(dev, staging->fence, nullptr);
     }
 
     // Fill in both the AABB and staging chunk buffers, then trigger a copy
@@ -1823,9 +1835,7 @@ struct RendererVk :
     void worker_stage(
         RaycastStaging* staging, const BinChunkGroup* group_ptr) override
     {
-        assert(staging);
-        assert(staging->entry);
-        assert(staging->entry->aabb_map);
+        // Fill in the AABB buffer and voxel staging buffer.
         auto& aabb_array = staging->entry->aabb_map->aabb_array;
 
         for (int zL = 0; zL < edge_chunks; ++zL) {
@@ -1848,15 +1858,8 @@ struct RendererVk :
         }
         }
         }
-        // TODO image and copy and fence and command pool and queue
-        // ownership transfer.
-    }
 
-    bool swap_in(RaycastStaging* staging,
-                 std::unique_ptr<RaycastEntry>* p_uptr_entry) override
-    {
-        // TODO fence wait and ownership transfer.
-
+        std::lock_guard guard(worker_cmd_mutex);
         RaycastEntry& staged_entry = *staging->entry;
 
         VkImageMemoryBarrier barrier {
@@ -1865,13 +1868,13 @@ struct RendererVk :
             VK_ACCESS_MEMORY_WRITE_BIT,
             VK_ACCESS_TRANSFER_WRITE_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_GENERAL,
-            main_queue_family,
-            main_queue_family,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
             staged_entry.voxels_image,
             color_range };
         vkCmdPipelineBarrier(
-            pre_frame_buffer,
+            p_worker_cmd_buffer->buffer,
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
             0,
@@ -1885,16 +1888,60 @@ struct RendererVk :
         color.float32[2] = (counter++ & 63) / 63.0f;
         color.float32[3] = 1.0;
         vkCmdClearColorImage(
-            pre_frame_buffer,
+            p_worker_cmd_buffer->buffer,
             staged_entry.voxels_image,
-            VK_IMAGE_LAYOUT_GENERAL,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             &color,
             1,
             &color_range);
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        barrier = VkImageMemoryBarrier {
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_MEMORY_READ_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_GENERAL,
+            transfer_queue_family,
+            main_queue_family,
+            staged_entry.voxels_image,
+            color_range };
+        vkCmdPipelineBarrier(
+            p_worker_cmd_buffer->buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+        // TODO image and copy and fence and command pool and queue
+        // ownership transfer.
+
+        staging->p_fence = p_worker_cmd_buffer->p_fence;
+    }
+
+    bool swap_in(RaycastStaging* staging,
+                 std::unique_ptr<RaycastEntry>* p_uptr_entry) override
+    {
+        // Check if the entry is actually ready to be swapped in.
+        VkResult res = vkWaitForFences(dev, 1, staging->p_fence.get(), true, 0);
+        if (VK_SUCCESS != res) {
+            return false;
+        }
+
+        RaycastEntry& staged_entry = *staging->entry;
+
+        // Transfer ownership from the transfer queue to the main queue.
+        VkImageMemoryBarrier barrier = VkImageMemoryBarrier {
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_MEMORY_READ_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_GENERAL,
+            transfer_queue_family,
+            main_queue_family,
+            staged_entry.voxels_image,
+            color_range };
         vkCmdPipelineBarrier(
             pre_frame_buffer,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -1904,6 +1951,7 @@ struct RendererVk :
             0, nullptr,
             1, &barrier);
 
+        // Swap into the main cache.
         std::swap(staging->entry, *p_uptr_entry);
         if (staging->entry == nullptr) {
             staging->entry.reset(new RaycastEntry());
