@@ -41,7 +41,7 @@ void main()
     vec3 disp;
     vec2 uv;
 
-    if (false) {
+    if ((pc.pc.flags & MYRICUBE_CHUNK_DEBUG_BIT) != 0) {
         ivec3 residue_floor =
             ivec3(floor(frag_residue_coord + aabb_half_normal));
         voxel_color = vec4(residue_floor & ivec3(1, 1, 1), 1);

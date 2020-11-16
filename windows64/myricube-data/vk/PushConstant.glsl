@@ -23,6 +23,10 @@ struct PushConstant
     int32_t raycast_thresh_squared;
 };
 
+#define MYRICUBE_FOG_BIT 1
+#define MYRICUBE_BLACK_FOG_BIT 2
+#define MYRICUBE_CHUNK_DEBUG_BIT 4
+
 #ifdef __cplusplus
 static_assert(sizeof(PushConstant) <= 128,
     "Vulkan spec only guarantees 128 bytes of push constant");

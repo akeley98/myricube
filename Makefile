@@ -33,6 +33,8 @@ vk-shaders:
 	glslangValidator myricube-data/vk/mesh.frag -V -o myricube-data/vk/mesh.frag.spv
 	glslangValidator myricube-data/vk/raycast.vert -V -o myricube-data/vk/raycast.vert.spv
 	glslangValidator myricube-data/vk/raycast.frag -V -o myricube-data/vk/raycast.frag.spv
+	glslangValidator myricube-data/vk/background.vert -V -o myricube-data/vk/background.vert.spv
+	glslangValidator myricube-data/vk/background.frag -V -o myricube-data/vk/background.frag.spv
 
 py: libmyricube-cvoxel.so myricube-bin
 	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"

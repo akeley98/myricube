@@ -47,6 +47,11 @@ constexpr uint64_t chunk_group_base_magic_number = 587569177;
 constexpr uint64_t renderer_mesh_dirty_flag = uint64_t(1) << 63;
 constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
 
+// I changed the voxel endianness (red_shift, green_shift, blue_shift)
+// partway through development, so I need this bit in the magic number
+// to detect files in the old endianness.
+constexpr uint64_t new_endian_magic = uint64_t(1) << 63;
+
 
 
 // /MEM:/ is the in_memory_prefix. Colons are not allowed in file
@@ -150,7 +155,8 @@ struct BinChunkGroupT
     static constexpr uint64_t expected_magic =
         chunk_group_base_magic_number |
         uint64_t(EdgeChunks) << 32 |
-        uint64_t(ChunkSize) << 40;
+        uint64_t(ChunkSize) << 40 |
+        new_endian_magic;
 
     const uint64_t magic_number = expected_magic;
     uint64_t reserved[510] = { 0 };

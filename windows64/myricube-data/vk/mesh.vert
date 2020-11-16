@@ -12,9 +12,9 @@
 #define Y_SHIFT 8
 #define Z_SHIFT 16
 
-#define RED_SHIFT 24
-#define GREEN_SHIFT 16
-#define BLUE_SHIFT 8
+#define RED_SHIFT 0
+#define GREEN_SHIFT 8
+#define BLUE_SHIFT 16
 
 #include "PushConstant.glsl"
 
