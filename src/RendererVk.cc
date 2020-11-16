@@ -169,7 +169,8 @@ struct RaycastStaging
     MappedChunks* chunk_map = nullptr;
 
     // Fence for the main thread to wait on to indicate the staging
-    // buffer -> image copy is done.
+    // buffer -> image copy is done, and we can swap the RaycastEntry
+    // into the main cache.
     std::shared_ptr<VkFence> p_fence = nullptr;
 
     RaycastStaging() { constructor(this); }
@@ -1222,8 +1223,8 @@ struct RendererVk :
         // ctx.m_queueGCT is the same queue FrameManager is using.
         main_queue =        ctx.m_queueGCT;
         main_queue_family = ctx.m_queueGCT;
-        transfer_queue =        ctx.m_queueC; // XXX
-        transfer_queue_family = ctx.m_queueC; // TODO ctx.m_queueT
+        transfer_queue =        ctx.m_queueT;
+        transfer_queue_family = ctx.m_queueT;
 
         if (main_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find graphics+present queue");
@@ -1810,7 +1811,7 @@ struct RendererVk :
             dev,
             sizeof(MappedChunks),
             block_size,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
                 | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &memory_to_free.back());
@@ -1859,9 +1860,11 @@ struct RendererVk :
         }
         }
 
+        // Acquire mutex before recording to shared worker command buffer.
         std::lock_guard guard(worker_cmd_mutex);
         RaycastEntry& staged_entry = *staging->entry;
 
+        // Transition chunk group voxels 3D image to transfer dst layout.
         VkImageMemoryBarrier barrier {
             VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             nullptr,
@@ -1881,19 +1884,33 @@ struct RendererVk :
             0, nullptr,
             0, nullptr,
             1, &barrier);
-        VkClearColorValue color;
-        thread_local uint32_t counter = 0;
-        color.float32[0] = (counter++ & 63) / 63.0f;
-        color.float32[1] = (counter++ & 63) / 63.0f;
-        color.float32[2] = (counter++ & 63) / 63.0f;
-        color.float32[3] = 1.0;
-        vkCmdClearColorImage(
-            p_worker_cmd_buffer->buffer,
-            staged_entry.voxels_image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            &color,
-            1,
-            &color_range);
+
+        // Copy chunk-by-chunk from staging buffer to image.
+        for (int z = 0; z < edge_chunks; ++z) {
+        for (int y = 0; y < edge_chunks; ++y) {
+        for (int x = 0; x < edge_chunks; ++x) {
+            VkBufferImageCopy region;
+            region.bufferOffset = offsetof(MappedChunks, chunks[z][y][x]);
+            region.bufferRowLength = chunk_size;
+            region.bufferImageHeight = chunk_size;
+            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.imageOffset = { x*chunk_size, y*chunk_size, z*chunk_size };
+            region.imageExtent = { chunk_size, chunk_size, chunk_size };
+
+            vkCmdCopyBufferToImage(
+                p_worker_cmd_buffer->buffer,
+                staging->chunk_buffer,
+                staged_entry.voxels_image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                &region);
+        }
+        }
+        }
+
+        // Transition layout to general layout and transfer ownership
+        // to the main queue family (used for graphics and swap chain
+        // present).
         barrier = VkImageMemoryBarrier {
             VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             nullptr,
@@ -1913,9 +1930,11 @@ struct RendererVk :
             0, nullptr,
             0, nullptr,
             1, &barrier);
-        // TODO image and copy and fence and command pool and queue
-        // ownership transfer.
 
+        // *p_worker_cmd_buffer->p_fence is signalled when the command
+        // buffer we are recording to is submitted and retired, so
+        // make swapping into the main cache conditional on said fence
+        // being signalled.
         staging->p_fence = p_worker_cmd_buffer->p_fence;
     }
 
@@ -1923,8 +1942,8 @@ struct RendererVk :
                  std::unique_ptr<RaycastEntry>* p_uptr_entry) override
     {
         // Check if the entry is actually ready to be swapped in.
-        VkResult res = vkWaitForFences(dev, 1, staging->p_fence.get(), true, 0);
-        if (VK_SUCCESS != res) {
+        auto result = vkWaitForFences(dev, 1, staging->p_fence.get(), true, 0);
+        if (VK_SUCCESS != result) {
             return false;
         }
 
