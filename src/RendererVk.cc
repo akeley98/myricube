@@ -881,7 +881,8 @@ struct MeshPipeline
 
 
 // Raycast pipeline. We have to draw AABBs with instanced rendering
-// and feed a push constant plus a 3D voxels image TODO.
+// and set up a pipeline layout for feeding a push constant plus a 3D
+// voxels image.
 struct RaycastPipeline
 {
     // We manage these.
@@ -1125,11 +1126,36 @@ struct RendererVk :
     VkQueue main_queue;
     uint32_t main_queue_family;
 
-    // Transfer-only queue shared by the worker threads, plus a mutex
-    // synchronizing it.
-    VkQueue workers_queue;
-    uint32_t workers_queue_family;
-    std::mutex workers_queue_mutex;
+    // Transfer-only queue. Command buffers submitted to it may be
+    // filled on worker threads (see WorkerCmdBuffer and
+    // worker_cmd_mutex), but are submitted by the main thread.
+    VkQueue transfer_queue;
+    uint32_t transfer_queue_family;
+
+    // Command pool for allocating command buffers for transfer_queue.
+    VkCommandPool transfer_cmd_pool;
+
+    // Command buffer for submitting to transfer_queue, plus a fence
+    // synchronizing access to it. This command buffer can be
+    // re-recorded.
+    struct WorkerCmdBuffer
+    {
+        VkCommandBuffer buffer;
+
+        // In a signalled state iff buffer is not currently recording
+        // but may safely enter recording state. (Hence, it should be
+        // allocated in a signalled state).
+        VkFence fence;
+    };
+
+    // Pool of worker command buffers. One is chosen for current
+    // recording. As multiple worker threads write into it, we need a
+    // mutex to synchronize access. Periodically the main thread will
+    // submit the command buffer and choose a new command buffer from
+    // the array for recording.
+    std::array<WorkerCmdBuffer, 6> worker_cmd_buffer_array;
+    WorkerCmdBuffer* p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
+    std::mutex worker_cmd_mutex;
 
     // From FrameManager: primary command buffer that will be
     // submitted at frame-end, and the current swap chain image. Both
@@ -1189,17 +1215,57 @@ struct RendererVk :
         // ctx.m_queueGCT is the same queue FrameManager is using.
         main_queue =        ctx.m_queueGCT;
         main_queue_family = ctx.m_queueGCT;
-        workers_queue =        ctx.m_queueT;
-        workers_queue_family = ctx.m_queueT;
+        transfer_queue =        ctx.m_queueT;
+        transfer_queue_family = ctx.m_queueT;
 
         if (main_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find graphics+present queue");
         }
-        if (workers_queue == VK_NULL_HANDLE) {
+        if (transfer_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find transfer-only queue");
         }
 
+        // Since in principle the pre_frame_buffer could have commands
+        // recorded into it at any time (not just between begin and
+        // end frame), we have to start recording right now.
         pre_frame_buffer = frame_manager.recordOneTimeCommandBuffer();
+
+        // Initialize the command pool and synchronized (among worker
+        // threads) command buffers for the transfer-only queue.
+        VkCommandPoolCreateInfo cmd_pool_info {
+            VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            nullptr,
+            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, // as promised
+            transfer_queue_family };
+        NVVK_CHECK(vkCreateCommandPool(
+            dev, &cmd_pool_info, nullptr, &transfer_cmd_pool));
+
+        for (WorkerCmdBuffer& wcb : worker_cmd_buffer_array) {
+            VkCommandBufferAllocateInfo info {
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                nullptr,
+                transfer_cmd_pool,
+                VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                1 };
+            NVVK_CHECK(vkAllocateCommandBuffers(dev, &info, &wcb.buffer));
+
+            VkFenceCreateInfo fence_info {
+                VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                nullptr,
+                VK_FENCE_CREATE_SIGNALED_BIT, // as explained.
+            };
+            NVVK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &wcb.fence));
+        }
+
+        // Pick one of the transfer cmd buffers to start recording.
+        p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
+        vkResetFences(dev, 1, &p_worker_cmd_buffer->fence);
+        VkCommandBufferBeginInfo begin_info {
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            nullptr,
+            0,
+            nullptr };
+        vkBeginCommandBuffer(p_worker_cmd_buffer->buffer, &begin_info);
     }
 
     ~RendererVk()
@@ -1207,6 +1273,11 @@ struct RendererVk :
         // By the time this destructor runs, RendererBase has
         // destroyed MeshStore and RaycastStore, stopping all worker
         // threads.
+        for (WorkerCmdBuffer& wcb : worker_cmd_buffer_array) {
+            vkDestroyFence(dev, wcb.fence, nullptr);
+        }
+        vkDestroyCommandPool(dev, transfer_cmd_pool, nullptr);
+
         for (auto mapped_buffer : unused_mesh_buffers) {
             vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
         }
@@ -1231,8 +1302,55 @@ struct RendererVk :
         }
     }
 
+    // Stop recording and submit the transfer-only command buffer,
+    // then pick a new command buffer, start recording it, and set it
+    // as the command buffer for workers to record commands to.
+    void flush_worker_cmd_buffer() noexcept
+    {
+        // Think carefully before considering releasing this mutex
+        // during "expensive" operations. The state of all this worker
+        // cmd buffer business is mostly inconsistent through all
+        // this.
+        std::lock_guard guard(worker_cmd_mutex);
+        vkEndCommandBuffer(p_worker_cmd_buffer->buffer);
+
+        VkSubmitInfo submit {
+            VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            nullptr,
+            0, nullptr, nullptr,
+            1, &p_worker_cmd_buffer->buffer,
+            0, nullptr };
+        vkQueueSubmit(transfer_queue, 1, &submit, p_worker_cmd_buffer->fence);
+
+        ++p_worker_cmd_buffer;
+        if (p_worker_cmd_buffer == &*worker_cmd_buffer_array.end()) {
+            p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
+        }
+        VkFence* p_fence = &p_worker_cmd_buffer->fence;
+
+        VkResult result = vkWaitForFences(dev, 1, p_fence, VK_TRUE, 0);
+        if (result == VK_TIMEOUT) {
+            thread_local bool did_warning;
+            if (!did_warning) {
+                fprintf(stderr, "flush_worker_cmd_buffer: waited on fence\n");
+                did_warning = true;
+            }
+            NVVK_CHECK(vkWaitForFences(dev, 1, p_fence, VK_TRUE, UINT64_MAX));
+        }
+        vkResetFences(dev, 1, p_fence);
+
+        VkCommandBufferBeginInfo begin_info {
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            nullptr,
+            0,
+            nullptr };
+        vkBeginCommandBuffer(p_worker_cmd_buffer->buffer, &begin_info);
+    }
+
     void begin_frame() override
     {
+        flush_worker_cmd_buffer();
+
         // Begin the frame, recreating the swap chain (hidden in
         // beginFrame) and framebuffers if needed.
         glfwGetFramebufferSize(glfw_surface.p_window, &width, &height);
@@ -1275,6 +1393,8 @@ struct RendererVk :
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
+        flush_worker_cmd_buffer();
+
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
@@ -1445,7 +1565,6 @@ struct RendererVk :
     //
     // Both threads also need to schedule a pipeline barrier in order
     // to do the image layout transition and queue ownership transfer.
-    // TODO implement
 
     // Draw the given list of chunk groups with the raycast-AABB
     // rendering method.
@@ -1453,6 +1572,8 @@ struct RendererVk :
         const std::vector<std::pair<RaycastEntry*, glm::ivec3>>& entries)
     override
     {
+        flush_worker_cmd_buffer();
+
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
@@ -1794,6 +1915,8 @@ struct RendererVk :
 
     void end_frame() override
     {
+        flush_worker_cmd_buffer();
+
         // End the before-frame command buffer and submit, then schedule
         // it to be freed one frame later.
         vkEndCommandBuffer(pre_frame_buffer);
@@ -1830,7 +1953,7 @@ struct RendererVk :
     void wait_idle() override
     {
         vkQueueWaitIdle(main_queue);
-        vkQueueWaitIdle(workers_queue);
+        vkQueueWaitIdle(transfer_queue);
     }
 };
 
