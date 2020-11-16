@@ -21,7 +21,7 @@ def set_rgb(x, y, z, r, g, b):
 
 """Convert 8-bit RGB triple to 32-bit opaque voxel value (last argument to Set)"""
 def rgb(r, g, b):
-    return min(max(r, 0), 255) << 24 | min(max(g, 0), 255) << 16 | min(max(b, 0), 255) << 8 | 128
+    return min(max(r, 0), 255) | min(max(g, 0), 255) << 8 | min(max(b, 0), 255) << 16 | (1 << 31)
 
 """Set the voxel at the (x,y,z) coordinate of the current world to the
 given 32-bit voxel value. NOTE: 0 is an empty voxel."""

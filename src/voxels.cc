@@ -4,10 +4,12 @@
 
 #include "voxels.hh"
 
+#include <arpa/inet.h> /* htonl needed for endian hack */
 #include <errno.h>
 #include <mutex>
 #include <new>
 #include <stdexcept>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <type_traits>
@@ -166,7 +168,9 @@ WorldHandle::WorldHandle(const filename_string& arg)
         unmap_if_disk_file<BinWorld>);
 
     // Finally check the magic number.
-    if (bin_world->magic_number != bin_world->expected_magic) {
+    // Ignore the endian bit as that will be checked later.
+    auto xord = bin_world->magic_number ^ bin_world->expected_magic;
+    if ((xord & ~new_endian_magic) != 0) {
         throw std::runtime_error("Incorrect magic number: "
             + bin_world_filename);
     }
@@ -189,6 +193,72 @@ std::string group_coord_filename(glm::ivec3 group_coord)
     return result;
 }
 
+// Older versions of myricube used a different endianness for files.
+// I detected this by changing the magic number for new endianness
+// files.  I detect the old magic number here and fix the endianness
+// and magic number in-place if needed, but only if the user opted in
+// with a nonzero myricube_endian_fix environment variable (as this is
+// a potentially dangerous operation if interrupted).
+//
+// Return value: Return true if the endianness was wrong and we
+// corrected it.
+//
+// NOTE: This function is not actually const of course but it doesn't
+// matter since the actual files should all be read/write (they have
+// to be due to the dirty bits) and this is a hack anyway.
+static inline bool maybe_fix_endian(
+    const filename_string& filename,
+    const BinChunkGroup& group_const)
+{
+    BinChunkGroup& group = const_cast<BinChunkGroup&>(group_const);
+
+    auto old_magic_number = group.expected_magic & ~new_endian_magic;
+    if (group.magic_number != old_magic_number) {
+        return false;
+    }
+
+    thread_local long endian_fix_enabled;
+    if (!endian_fix_enabled) {
+        const char* env = getenv("myricube_endian_fix");
+        if (env != nullptr) {
+            char* endptr;
+            endian_fix_enabled = strtol(env, &endptr, 10);
+            if (*endptr != 0) {
+                throw std::runtime_error("Could not parse myricube_endian_fix "
+                    "environment variable as integer.");
+            }
+        }
+    }
+
+    if (!endian_fix_enabled) {
+        throw std::runtime_error("Incorrect endianness: " + filename
+            + "\nrun with environment variable myricube_endian_fix=1"
+              "\nto fix in-place (backup first!)");
+    }
+
+    for (int zH = 0; zH < edge_chunks; ++zH) {
+    for (int yH = 0; yH < edge_chunks; ++yH) {
+    for (int xH = 0; xH < edge_chunks; ++xH) {
+        BinChunk& chunk = group.chunk_array[zH][yH][xH];
+
+        for (int zL = 0; zL < chunk_size; ++zL) {
+        for (int yL = 0; yL < chunk_size; ++yL) {
+        for (int xL = 0; xL < chunk_size; ++xL) {
+            uint32_t* p_voxel = &chunk.voxel_array[zL][yL][xL];
+            *p_voxel = htonl(*p_voxel);
+            // Just get rid of maybe_fix_endian on Windows.
+        }
+        }
+        }
+    }
+    }
+    }
+
+    group.magic_number |= new_endian_magic;
+    fprintf(stderr, "Fixed endianness of %s\n", filename.c_str());
+    return true;
+}
+
 UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 {
     // Map the correct file for this chunk group.
@@ -207,8 +277,11 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 
     // Check magic number and return.
     if (result->magic_number != result->expected_magic) {
+        bool okay = maybe_fix_endian(filename, *result);
+        if (okay) goto its_okay;
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
+  its_okay:
     return result;
 }
 
@@ -220,9 +293,13 @@ UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
         directory_trailing_slash, group_coord_filename(group_coord).c_str());
     auto result = UPtrChunkGroup(map_file<const BinChunkGroup>(filename, 0));
     if (result == nullptr) return nullptr;
+
     if (result->magic_number != result->expected_magic) {
+        bool okay = maybe_fix_endian(filename, *result);
+        if (okay) goto its_okay;
         throw std::runtime_error("Incorrect magic number: " + filename);
     }
+  its_okay:
     return result;
 }
 

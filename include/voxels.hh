@@ -158,7 +158,7 @@ struct BinChunkGroupT
         uint64_t(ChunkSize) << 40 |
         new_endian_magic;
 
-    const uint64_t magic_number = expected_magic;
+    uint64_t magic_number = expected_magic;
     uint64_t reserved[510] = { 0 };
 
     // Set to ~uint64_t(0) _after_ making modifications, or call

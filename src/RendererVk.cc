@@ -53,6 +53,7 @@ constexpr auto chunk_group_voxels_image_format = VK_FORMAT_R8G8B8A8_UNORM;
 static_assert(red_shift == 0);
 static_assert(green_shift == 8);
 static_assert(blue_shift == 16);
+// Assume little endian for now, the endian wars have finally ended.
 
 constexpr VkImageSubresourceRange color_range {
     VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1159,7 +1160,7 @@ struct BackgroundPipeline
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
-        // Hard coded 4-vertex quad.
+        // Hard coded 4-vertex quad in vertex shader, so no vertex attributes.
         vertexInputInfo.vertexBindingDescriptionCount = 0;
         vertexInputInfo.vertexAttributeDescriptionCount = 0;
         vertexInputInfo.pVertexBindingDescriptions = nullptr;
@@ -1914,7 +1915,7 @@ struct RendererVk :
             unused_voxel_images.pop_back();
         }
         else {
-            constexpr size_t block_size = 384;
+            constexpr size_t block_size = 256;
             memory_to_free.push_back(VK_NULL_HANDLE);
             unused_voxel_images.reserve(
                 unused_voxel_images.size() + block_size);
