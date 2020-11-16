@@ -1,4 +1,5 @@
 // Vulkan implementation of RendererLogic.
+#define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
 
@@ -75,7 +76,7 @@ struct MeshEntry
     // Make sure you fix the swap function if you add more stuff.
 
     // Size in bytes of the vbo's data store on the GPU.
-    static constexpr GLsizeiptr vbo_bytes = sizeof(MappedGroupMesh);
+    static constexpr size_t vbo_bytes = sizeof(MappedGroupMesh);
 
     // Return the offset (in number of MeshVoxelVertex's, not bytes)
     // into the VBO where the data from mesh_array[z][y][x] is copied
