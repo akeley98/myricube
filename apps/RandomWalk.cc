@@ -5,9 +5,14 @@
 
 namespace myricube {
 
-class RandomWalk : public App
+template <bool InMemory>
+class RandomWalkBase : public App
 {
-    VoxelWorld world { expand_filename("RandomWalk/world.myricube") };
+    VoxelWorld world {
+        InMemory
+        ? add_in_memory_prefix("RandomWalk/world.myricube")
+        : expand_filename("RandomWalk/world.myricube") };
+
     std::mt19937 rng{19980724};
 
     void add_random_walk()
@@ -32,7 +37,7 @@ class RandomWalk : public App
     }
 
   public:
-    RandomWalk()
+    RandomWalkBase()
     {
         add_random_walk();
     }
@@ -52,9 +57,22 @@ class RandomWalk : public App
             return true;
         };
         window.add_key_target("add_random_walk", target);
+
+        KeyTarget target100;
+        target100.down = [this] (KeyArg arg) -> bool
+        {
+            if (arg.repeat) return false;
+            for (int i = 0; i < 100; ++i) this->add_random_walk();
+            return true;
+        };
+        window.add_key_target("add_random_walk_100", target100);
     }
 };
 
+using RandomWalk = RandomWalkBase<false>;
+using RandomWalkMem = RandomWalkBase<true>;
+
 MYRICUBE_ADD_APP(RandomWalk)
+MYRICUBE_ADD_APP(RandomWalkMem)
 
 } // end namespace

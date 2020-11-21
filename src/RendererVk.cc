@@ -1333,7 +1333,7 @@ struct RendererVk :
     // mutex to synchronize access. Periodically the main thread will
     // submit the command buffer and choose a new command buffer from
     // the array for recording.
-    std::array<WorkerCmdBuffer, 6> worker_cmd_buffer_array;
+    std::array<WorkerCmdBuffer, 4> worker_cmd_buffer_array;
     WorkerCmdBuffer* p_worker_cmd_buffer = &worker_cmd_buffer_array[0];
     std::mutex worker_cmd_mutex;
 
@@ -1364,6 +1364,10 @@ struct RendererVk :
     // Push constant. Frame-constant fields set in begin_frame (too
     // small to be worth using a UBO, plus I'm lazy).
     PushConstant push_constant{};
+
+    // Used in flush_worker_cmd_buffers.
+    bool cmd_buffer_fence_timeout = false;
+    bool cmd_buffer_fence_warning = false;
 
     RendererVk(RenderThread* thread, RenderArgs args) :
         RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>(
@@ -1481,15 +1485,26 @@ struct RendererVk :
     // as the command buffer for workers to record commands to.
     // first_time=true is used for initialization: skip the
     // end-record-and-submit in that case.
+    //
+    // Shoehorned hack: if we couldn't acquire a new command buffer
+    // (all are in flight an their fences aren't yet signalled), don't
+    // start recording a new command buffer, and hold the
+    // worker_cmd_mutex to stall worker threads. Subsequent calls
+    // to flush_worker_cmd_buffer can resolve this situation.
+    //
+    // This is to avoid stalling the main thread.
     void flush_worker_cmd_buffer(bool first_time=false) noexcept
     {
         // Think carefully before considering releasing this mutex
         // during "expensive" operations. The state of all this worker
         // cmd buffer business is mostly inconsistent through all
         // this.
-        std::lock_guard guard(worker_cmd_mutex);
 
-        if (!first_time) {
+        if (!cmd_buffer_fence_timeout) {
+            worker_cmd_mutex.lock();
+        }
+
+        if (!first_time and !cmd_buffer_fence_timeout) {
             // End command buffer recording. Since I was recording this
             // buffer, the p_fence should not be nullptr.
             vkEndCommandBuffer(p_worker_cmd_buffer->buffer);
@@ -1512,18 +1527,22 @@ struct RendererVk :
             }
         }
 
-        // Wait on a fence, if neccessary.
+        // Wait on a fence, if neccessary. If we fail, exit early (keep holding
+        // the mutex) and hope the situation fixes itself in a subsequent call.
         if (p_worker_cmd_buffer->p_fence != nullptr) {
             VkFence* p_fence = p_worker_cmd_buffer->p_fence.get();
 
             VkResult result = vkWaitForFences(dev, 1, p_fence, true, 0);
             if (result == VK_TIMEOUT) {
-                thread_local bool did_warning;
-                if (!did_warning) {
-                    fprintf(stderr, "flush_worker_cmd_buffer: waited on fence\n");
-                    did_warning = true;
+                cmd_buffer_fence_timeout = true;
+                if (!cmd_buffer_fence_warning) {
+                    fprintf(stderr, "flush_worker_cmd_buffer: no cmd buffer available\n");
+                    cmd_buffer_fence_warning = true;
                 }
-                NVVK_CHECK(vkWaitForFences(dev, 1, p_fence, true, UINT64_MAX));
+                return;
+            }
+            else {
+                cmd_buffer_fence_timeout = false;
             }
         }
 
@@ -1533,18 +1552,23 @@ struct RendererVk :
             nullptr,
             0 };
         VkFence* p_fence = new VkFence;
+        static long fence_count;
+        fence_count++;
         vkCreateFence(dev, &fence_info, nullptr, p_fence);
         auto del = [dev=dev] (VkFence* p_fence) {
-            vkDestroyFence(dev, *p_fence, nullptr); };
+            vkDestroyFence(dev, *p_fence, nullptr);
+            /* fprintf(stderr, "Fence count: %i\n", fence_count); */};
         p_worker_cmd_buffer->p_fence.reset(p_fence, del);
 
-        // Actually start recording said command buffer.
+        // Actually start recording said command buffer, then unlock
+        // the mutex to unblock worker threads.
         VkCommandBufferBeginInfo begin_info {
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             nullptr,
             0,
             nullptr };
         vkBeginCommandBuffer(p_worker_cmd_buffer->buffer, &begin_info);
+        worker_cmd_mutex.unlock();
     }
 
     void begin_frame() override
@@ -2160,6 +2184,7 @@ struct RendererVk :
         if (VK_SUCCESS != result) {
             return false;
         }
+        staging->p_fence.reset();
 
         RaycastEntry& staged_entry = *staging->entry;
 

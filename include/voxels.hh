@@ -52,15 +52,18 @@ constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
 // to detect files in the old endianness.
 constexpr uint64_t new_endian_magic = uint64_t(1) << 63;
 
-
-
 // /MEM:/ is the in_memory_prefix. Colons are not allowed in file
 // names on Windows and almost certainly not in the name of a
 // top-level directory on Unix.
-static const filename_string in_memory_prefix = "/MEM:/";
+inline const filename_string& get_in_memory_prefix()
+{
+    static filename_string result = "/MEM:/";
+    return result;
+}
 
 inline bool starts_with_in_memory_prefix(const filename_string& arg)
 {
+    filename_string in_memory_prefix = get_in_memory_prefix();
     if (arg.size() < in_memory_prefix.size()) return false;
     size_t index = 0;
     for (auto c : in_memory_prefix) {
@@ -73,7 +76,7 @@ inline filename_string add_in_memory_prefix(const filename_string& arg)
 {
     if (starts_with_in_memory_prefix(arg)) return arg;
 
-    filename_string result = in_memory_prefix;
+    filename_string result = get_in_memory_prefix();
     result.append(arg);
     return result;
 }
@@ -577,15 +580,16 @@ using ViewWorldCache = WorldCache<UPtrChunkGroup, true>;
 class VoxelWorld
 {
     mutable MutWorldCache world_cache;
-    static const inline filename_string in_memory_world_filename =
-        filename_concat_c_str(in_memory_prefix, world_filename);
 
   public:
     explicit VoxelWorld(WorldHandle handle) :
         world_cache(handle) { }
 
-    explicit VoxelWorld(filename_string filename=in_memory_world_filename) :
+    explicit VoxelWorld(filename_string filename) :
         VoxelWorld(WorldHandle(std::move(filename))) { }
+
+    explicit VoxelWorld() :
+        VoxelWorld(add_in_memory_prefix(world_filename)) { }
 
     // Return voxel at the given coordinate.
     uint32_t operator() (glm::ivec3 c) const
