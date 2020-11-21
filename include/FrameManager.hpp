@@ -25,8 +25,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef AKELEY_FRAMEMANAGER_HPP_
-#define AKELEY_FRAMEMANAGER_HPP_
+#ifndef VKDO_FRAMEMANAGER_HPP_
+#define VKDO_FRAMEMANAGER_HPP_
 
 #include <array>
 #include <cassert>
@@ -41,7 +41,7 @@
 #include <nvvk/error_vk.hpp>
 #include <nvvk/swapchain_vk.hpp>
 
-namespace akeley { // Placeholder namespace
+namespace vkdo {
 
 class FrameManager;
 
@@ -77,7 +77,8 @@ class FrameManager
     VkCommandBuffer m_userCommandBuffer = VK_NULL_HANDLE;
 
     // Abstracts away most swap chain stuff. We store the width and
-    // height last used to update the swap chain.
+    // height of the actual swap chain image (which may differ from
+    // requested).
     nvvk::SwapChain m_swapChain;
     uint32_t m_width, m_height;
 
@@ -211,24 +212,31 @@ class FrameManager
     // modified or destroyed by the host, as it can be in-use by the
     // device.
     template <typename T>
-    T& evenOdd(T& useOnEven, T& useOnOdd) const
+    T&& evenOdd(T&& useOnEven, T&& useOnOdd) const
     {
         assert(inBeginEndPair());
-        return m_frameNumber & 1 ? useOnEven : useOnOdd;
+        return std::forward<T>(m_frameNumber & 1 ? useOnEven : useOnOdd);
     }
 
     template <typename T, size_t Two>
     T& evenOdd(T array[Two]) const
     {
         static_assert(Two == 2, "Must be size 2 array.");
-        return evenOdd(array[0], array[1]);
+        return array[evenOdd()];
     }
 
     template <typename Container>
     auto& evenOdd(Container& container) const
     {
         assert(container.size() == 2);
-        return evenOdd(container.at(0), container.at(1));
+        return container[evenOdd()];
+    }
+
+    // Return a raw 0 or 1 value depending on whether the frame number
+    // is even or odd.
+    int evenOdd() const
+    {
+        return int(m_frameNumber & 1);
     }
 
     // Return whether we're in-between a beginFrame/endFrame
@@ -267,10 +275,8 @@ class FrameManager
     void beginFrame(
         VkCommandBuffer* pCmdBuffer,
         nvvk::SwapChainImage* pSwapChainImage,
-        uint32_t width, uint32_t height)
+        uint32_t* p_width, uint32_t* p_height)
     {
-        m_width = width;
-        m_height = height;
         // Increment frame counter.
         assert(!inBeginEndPair());
         ++m_frameNumber; // Exception safety?
@@ -288,16 +294,25 @@ class FrameManager
 
         // Get the next swap chain image.
         assert(pSwapChainImage != nullptr);
-        m_swapChain.acquire(width, height, pSwapChainImage);
+        m_swapChain.acquire(*p_width, *p_height, pSwapChainImage);
+
+        // Return the actual swap chain image size.
+        VkExtent2D extent = m_swapChain.getExtent();
+        *p_width = extent.width;
+        m_width  = extent.width;
+        *p_height = extent.height;
+        m_height  = extent.height;
     }
 
     // Record a command for transitioning the layout of the current
     // swap chain image from the given oldLayout to
     // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR. This also defines a memory
     // barrier operation ensuring all writes (done on this queue) to
-    // the swap chain image finish before layout transition. Requires
-    // that swap chain image is owned by m_presentQueue (if you don't
-    // use multiple queues, it is).
+    // the swap chain image finish before layout transition (unless
+    // you pass accessFlags manually).
+    //
+    // Requires that swap chain image is owned by m_presentQueue (if
+    // you don't use multiple queues, it is).
     void cmdSwapChainImageFixLayout(
         VkCommandBuffer cmdBuf,
         VkImageLayout oldLayout,
@@ -379,21 +394,21 @@ class FrameManager
     {
         evenOdd(m_garbageLists).push_front(std::move(garbage));
     }
-    
+
     template <typename T> void addFrameGarbage(
         T obj, void (*destroyer) (T, const FrameManager&))
     {
         addFrameGarbage([obj, destroyer] (const FrameManager& self) {
             destroyer(obj, self); } );
     }
-    
+
     // Like the above two functions, but callbacks are called in the
     // order they're registered.
     void addFrameGarbageLast(FrameGarbageCallback garbage)
     {
         evenOdd(m_garbageLists).push_back(std::move(garbage));
     }
-    
+
     template <typename T> void addFrameGarbageLast(
         T obj, void (*destroyer) (T, const FrameManager&))
     {

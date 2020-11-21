@@ -18,7 +18,7 @@
 #include "../myricube-data/vk/PushConstant.glsl"
 
 using namespace myricube;
-using namespace akeley;
+using namespace vkdo;
 
 namespace myricube { struct RendererVk; }
 
@@ -44,9 +44,9 @@ void constructor(RaycastStaging*);
 void destructor(RaycastStaging*);
 
 // These should be widely supported, but I can detect support if
-// needed later.
+// needed later. No stencil buffer for now.
 constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_UNORM;
-constexpr auto depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
+constexpr auto depth_format = VK_FORMAT_D32_SFLOAT;
 
 // Image format for 3D images used to store chunk groups' voxels.
 // Need to check that it matches the bit assignments.
@@ -651,8 +651,8 @@ struct Framebuffers
         createImage(
             physical_device,
             device,
-            swap_chain.getUpdateWidth(),
-            swap_chain.getUpdateHeight(),
+            swap_chain.getWidth(),
+            swap_chain.getHeight(),
             depth_format,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -678,8 +678,8 @@ struct Framebuffers
             framebufferInfo.attachmentCount =
                 static_cast<uint32_t>(attachments.size());
             framebufferInfo.pAttachments = attachments.data();
-            framebufferInfo.width = swap_chain.getUpdateWidth();
-            framebufferInfo.height = swap_chain.getUpdateHeight();
+            framebufferInfo.width = swap_chain.getWidth();
+            framebufferInfo.height = swap_chain.getHeight();
             framebufferInfo.layers = 1;
 
             NVVK_CHECK(vkCreateFramebuffer(
@@ -1293,7 +1293,7 @@ struct RendererVk :
     FrameManager frame_manager;
 
     // Set in begin_frame.
-    int width, height;
+    uint32_t width, height;
 
     // Graphics+Present queue used by the main thread, and its family.
     VkQueue main_queue;
@@ -1552,12 +1552,16 @@ struct RendererVk :
         flush_worker_cmd_buffer();
 
         // Begin the frame, recreating the swap chain (hidden in
-        // beginFrame) and framebuffers if needed.
-        glfwGetFramebufferSize(glfw_surface.p_window, &width, &height);
+        // beginFrame) and framebuffers if needed. This converts the
+        // GLFW window size to the actual framebuffer size (might
+        // differ due to lag, etc.)
+        int glfw_width, glfw_height;
+        glfwGetFramebufferSize(glfw_surface.p_window, &glfw_width, &glfw_height);
+        width = uint32_t(glfw_width), height = uint32_t(glfw_height);
         frame_manager.beginFrame(
             &frame_cmd_buffer,
             &current_swap_image,
-            width, height);
+            &width, &height);
         framebuffers.recreate_now_if_needed(frame_manager.getSwapChain());
 
         VkClearColorValue clear_color;
