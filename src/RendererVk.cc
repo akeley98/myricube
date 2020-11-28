@@ -1,12 +1,10 @@
 // Vulkan implementation of RendererLogic.
 
-#define GLFW_INCLUDE_NONE
-#define GLFW_INCLUDE_VULKAN
+#ifdef MYRICUBE_NO_VK
 
+#define GLFW_INCLUDE_NONE
 #include "myricube.hh"
 #include "RendererLogic.hh"
-
-#ifdef MYRICUBE_NO_VK
 
 std::shared_ptr<RendererBase> RendererVk_Factory(
     RenderThread* thread,
@@ -16,6 +14,12 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
 }
 
 #else
+
+#define GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_VULKAN
+
+#include "myricube.hh"
+#include "RendererLogic.hh"
 
 #include "GLFW/glfw3.h"
 

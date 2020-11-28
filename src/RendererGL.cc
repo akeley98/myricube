@@ -1,9 +1,9 @@
 // OpenGL implementation of RendererLogic.
 
+#ifdef MYRICUBE_NO_GL
+
 #include "myricube.hh"
 #include "RendererLogic.hh"
-
-#ifdef MYRICUBE_NO_GL
 
 std::shared_ptr<RendererBase> RendererGL_Factory(
     RenderThread* thread,
@@ -14,8 +14,12 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
 
 #else
 
-#include <cassert>
+#include "myricube.hh"
+
 #include "glad/glad.h"
+#include "RendererLogic.hh"
+
+#include <cassert>
 #include "shaders.hh"
 
 using namespace myricube;
