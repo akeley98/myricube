@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Convert stdout log of makefile to format suitable for rtags's rc.
-# Usage: make --dry-run | cckiss/for_rtags.py | rc -c -
+# Usage: make --dry-run | cckiss/rtags.py | rc -c -
 import sys, os
 for line in sys.stdin:
     if line.startswith("cckiss/cckiss"):
