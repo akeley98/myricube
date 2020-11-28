@@ -597,6 +597,7 @@ int Main(std::vector<std::string> args)
     RenderArgs render_args { window_ptr, camera_ptr, handle };
     RenderThread renderer(
         use_OpenGL ? RendererGL_Factory : RendererVk_Factory, render_args);
+    camera_ptr->set_max_frame_new_chunk_groups(use_OpenGL ? 5 : 100);
 
     // Meanwhile main thread handles user input and runs the demonstration app.
     while (window.update_events(&dt)) {

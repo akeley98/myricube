@@ -431,6 +431,7 @@ class AsyncCache
     // actual number of entries swapped-in.
     size_t swap_in_from_staging(size_t max_attempts=1)
     {
+        // fprintf(stderr, "swap_in_from_staging\n");
         size_t attempts = 0;
         size_t swapped_count = 0;
 
@@ -447,6 +448,7 @@ class AsyncCache
         for (size_t i = 0; i < staging_buffer_count; ++i) {
             if (attempts >= max_attempts) break;
             StagingBuffer& buffer = staging_buffers[staging_buffer_swap_finger];
+            // fprintf(stderr, "finger %i\n", staging_buffer_swap_finger);
 
             if (buffer.state == staging_ready_to_swap) {
                 attempts++;
@@ -471,29 +473,28 @@ class AsyncCache
                     // if this was the first failure.
                     if (finger_to_store != size_t(-1)) {
                         finger_to_store = staging_buffer_swap_finger;
-                        // TODO
-                    }
-                    continue;
-                }
-
-                buffer.state = staging_unused;
-
-                // This shouldn't emit any exceptions.
-                // Mark the slot with the coordinate and frame number,
-                // then swap it into the evicted cache slot, BUT, first
-                // invalidate any existing cache slot for this chunk
-                // group, so that the most up-to-date entry is used.
-                for (CacheSlot* s = set_begin; s != set_end; ++s) {
-                    if (s->matches_coord(buffer.coord)) {
-                        s->valid = false;
                     }
                 }
-                extra_slot.coord = buffer.coord;
-                extra_slot.last_access_frame = frame_counter;
-                extra_slot.valid = true;
-                std::swap(extra_slot, *to_evict);
+                else {
+                    buffer.state = staging_unused;
 
-                ++swapped_count;
+                    // This shouldn't emit any exceptions.
+                    // Mark the slot with the coordinate and frame number,
+                    // then swap it into the evicted cache slot, BUT, first
+                    // invalidate any existing cache slot for this chunk
+                    // group, so that the most up-to-date entry is used.
+                    for (CacheSlot* s = set_begin; s != set_end; ++s) {
+                        if (s->matches_coord(buffer.coord)) {
+                            s->valid = false;
+                        }
+                    }
+                    extra_slot.coord = buffer.coord;
+                    extra_slot.last_access_frame = frame_counter;
+                    extra_slot.valid = true;
+                    std::swap(extra_slot, *to_evict);
+
+                    ++swapped_count;
+                }
             }
 
             staging_buffer_swap_finger =
