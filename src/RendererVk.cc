@@ -1,9 +1,23 @@
 // Vulkan implementation of RendererLogic.
+
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
-#include "GLFW/glfw3.h"
 
+#include "myricube.hh"
 #include "RendererLogic.hh"
+
+#ifdef MYRICUBE_NO_VK
+
+std::shared_ptr<RendererBase> RendererVk_Factory(
+    RenderThread* thread,
+    RenderArgs args)
+{
+    panic("Vulkan renderer not compiled in (MYRICUBE_NO_VK defined)");
+}
+
+#else
+
+#include "GLFW/glfw3.h"
 
 #include <cassert>
 #include <fstream>
@@ -2362,3 +2376,5 @@ void destructor(RaycastStaging* staging)
 }
 
 } // end anonymous namespace
+
+#endif /* !MYRICUBE_NO_VK */

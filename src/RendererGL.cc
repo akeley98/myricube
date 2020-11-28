@@ -1,5 +1,18 @@
 // OpenGL implementation of RendererLogic.
+
+#include "myricube.hh"
 #include "RendererLogic.hh"
+
+#ifdef MYRICUBE_NO_GL
+
+std::shared_ptr<RendererBase> RendererGL_Factory(
+    RenderThread* thread,
+    RenderArgs args)
+{
+    panic("OpenGL renderer not compiled in (MYRICUBE_NO_GL defined)");
+}
+
+#else
 
 #include <cassert>
 #include "glad/glad.h"
@@ -745,3 +758,5 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
 }
 
 } // end namespace myricube
+
+#endif /* !MYRICUBE_NO_GL */
