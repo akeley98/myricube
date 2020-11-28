@@ -5,11 +5,16 @@
 #include "myricube.hh"
 #include "RendererLogic.hh"
 
+namespace myricube {
+
 std::shared_ptr<RendererBase> RendererGL_Factory(
-    RenderThread* thread,
-    RenderArgs args)
+    RenderThread*,
+    RenderArgs)
 {
     panic("OpenGL renderer not compiled in (MYRICUBE_NO_GL defined)");
+    return nullptr;
+}
+
 }
 
 #else

@@ -6,11 +6,16 @@
 #include "myricube.hh"
 #include "RendererLogic.hh"
 
+namespace myricube {
+
 std::shared_ptr<RendererBase> RendererVk_Factory(
-    RenderThread* thread,
-    RenderArgs args)
+    RenderThread*,
+    RenderArgs)
 {
     panic("Vulkan renderer not compiled in (MYRICUBE_NO_VK defined)");
+    return nullptr;
+}
+
 }
 
 #else
