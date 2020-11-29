@@ -902,7 +902,7 @@ struct MeshPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT;
+        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -1117,7 +1117,7 @@ struct RaycastPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT;
+        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -1280,7 +1280,7 @@ struct BackgroundPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT;
+        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
