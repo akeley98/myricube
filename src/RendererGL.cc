@@ -1,24 +1,4 @@
 // OpenGL implementation of RendererLogic.
-
-#ifdef MYRICUBE_NO_GL
-
-#include "myricube.hh"
-#include "RendererLogic.hh"
-
-namespace myricube {
-
-std::shared_ptr<RendererBase> RendererGL_Factory(
-    RenderThread*,
-    RenderArgs)
-{
-    panic("OpenGL renderer not compiled in (MYRICUBE_NO_GL defined)");
-    return nullptr;
-}
-
-}
-
-#else
-
 #include "myricube.hh"
 #include "EnvVar.hh"
 
@@ -257,7 +237,7 @@ struct RendererGL :
         RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
         (thread, args)
     {
-        p_window->gl_make_current();
+        p_window->gl_make_current(gladLoadGL);
 
         glClearColor(0, 0, 0, 1);
 
@@ -796,5 +776,3 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
 }
 
 } // end namespace myricube
-
-#endif /* !MYRICUBE_NO_GL */

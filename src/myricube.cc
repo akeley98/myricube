@@ -74,6 +74,7 @@
 
 #include "app.hh"
 #include "camera.hh"
+#include "EnvVar.hh"
 #include "RendererGL.hh"
 #include "RendererVk.hh"
 #include "RenderThread.hh"
@@ -571,16 +572,20 @@ int Main(std::vector<filename_string> args)
     data_directory = filename_concat_c_str(data_directory, "-data/");
 
     // Check if we are using OpenGL.
-    bool use_OpenGL = false;
-    const char* api_name = getenv("myricube_api");
-    if (api_name != nullptr) {
-        if (strcmp(api_name, "gl") == 0) {
-            use_OpenGL = true;
-        }
-        else if (strcmp(api_name, "vk") != 0) {
-            panic("myricube_api environment variable set to unknown value",
-                api_name);
-        }
+    bool use_OpenGL;
+    std::string api_name =
+        EnvVarString("myricube_api", vulkan_compiled_in ? "vk" : "gl");
+
+    if (api_name == "gl") {
+        use_OpenGL = true;
+    }
+    else if (api_name == "vk") {
+        use_OpenGL = false;
+    }
+    else {
+        panic("myricube_api environment variable set to unknown value "
+                + api_name);
+        use_OpenGL = false; // Compiler warning
     }
 
     // Instantiate the shared camera (shared with the renderer).

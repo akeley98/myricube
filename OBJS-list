@@ -8,11 +8,10 @@
 
 # (Empty line for backslash)
 
+# Objects agnostic to graphics API
 OBJS=cckiss/src/myricube.cc.o \
      cckiss/src/window.cc.o \
      cckiss/src/app.cc.o \
-     cckiss/src/RendererGL.cc.o \
-     cckiss/src/RendererVk.cc.o \
      cckiss/src/voxels.cc.o \
      cckiss/apps/AxisTest.cc.o \
      cckiss/apps/Congestion.cc.o \
@@ -21,13 +20,26 @@ OBJS=cckiss/src/myricube.cc.o \
      cckiss/apps/Skygrid.cc.o \
      cckiss/apps/ViewWorld.cc.o \
      cckiss/apps/FastNoise.cpp.o \
-     cckiss/vk-helpers/nvh/nvprint.cpp.o \
-     cckiss/vk-helpers/nvvk/context_vk.cpp.o \
-     cckiss/vk-helpers/nvvk/debug_util_vk.cpp.o \
-     cckiss/vk-helpers/nvvk/error_vk.cpp.o \
-     cckiss/vk-helpers/nvvk/extensions_vk.cpp.o \
-     cckiss/vk-helpers/nvvk/swapchain_vk.cpp.o \
-     cckiss/glad/src/glad.c.o \
      glfw-build/src/libglfw3.a \
 # (Empty line for backslash)
 
+# Objects only needed for OpenGL.
+GL_OBJS=cckiss/src/RendererGL.cc.o \
+        cckiss/glad/src/glad.c.o \
+# (Empty line for backslash)
+
+# Objects only needed for OpenGL when Vulkan not used.
+VK_DUMMY_OBJS=cckiss/src/DummyVk.cc.o
+
+# Objects only needed for Vulkan.
+VK_OBJS=cckiss/src/RendererVk.cc.o \
+        cckiss/vk-helpers/nvh/nvprint.cpp.o \
+        cckiss/vk-helpers/nvvk/context_vk.cpp.o \
+        cckiss/vk-helpers/nvvk/debug_util_vk.cpp.o \
+        cckiss/vk-helpers/nvvk/error_vk.cpp.o \
+        cckiss/vk-helpers/nvvk/extensions_vk.cpp.o \
+        cckiss/vk-helpers/nvvk/swapchain_vk.cpp.o \
+# (Empty line for backslash)
+
+# Objects only needed for Vulkan when OpenGL not used.
+GL_DUMMY_OBJS=cckiss/src/DummyGL.cc.o

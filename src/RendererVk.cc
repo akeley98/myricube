@@ -1,25 +1,5 @@
 // Vulkan implementation of RendererLogic.
 
-#ifdef MYRICUBE_NO_VK
-
-#define GLFW_INCLUDE_NONE
-#include "myricube.hh"
-#include "RendererLogic.hh"
-
-namespace myricube {
-
-std::shared_ptr<RendererBase> RendererVk_Factory(
-    RenderThread*,
-    RenderArgs)
-{
-    panic("Vulkan renderer not compiled in (MYRICUBE_NO_VK defined)");
-    return nullptr;
-}
-
-}
-
-#else
-
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 
@@ -45,7 +25,10 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
 using namespace myricube;
 using namespace vkdo;
 
-namespace myricube { struct RendererVk; }
+namespace myricube {
+    struct RendererVk;
+    bool vulkan_compiled_in = true;
+}
 
 namespace {
 
@@ -2430,5 +2413,3 @@ void destructor(RaycastStaging* staging)
 }
 
 } // end anonymous namespace
-
-#endif /* !MYRICUBE_NO_VK */

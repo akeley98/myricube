@@ -88,12 +88,12 @@ void Window::set_title(const char* title)
     glfwSetWindowTitle(window, title);
 }
 
-void Window::gl_make_current()
+void Window::gl_make_current(int (*_gladLoadGL)())
 {
     assert(has_OpenGL);
     glfwMakeContextCurrent(window);
     if (!glad_loaded) {
-        if (!gladLoadGL()) {
+        if (!_gladLoadGL()) {
             panic("gladLoadGL failed");
         }
         glad_loaded = true;

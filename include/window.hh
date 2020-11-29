@@ -122,7 +122,9 @@ class Window
 
     // Make the OpenGL context of this window current. Obviously won't
     // work if this window was not created as an OpenGL window.
-    void gl_make_current();
+    // To fix linker error when compiling without OpenGL support,
+    // you must pass in the gladLoadGL function yourself.
+    void gl_make_current(int (*_gladLoadGL)());
 
     // Provide a name for the given key target. Physical keys can then
     // be bound to this name.

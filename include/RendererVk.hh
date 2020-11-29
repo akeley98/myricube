@@ -8,6 +8,7 @@
 
 namespace myricube {
 
+extern bool vulkan_compiled_in;
 std::shared_ptr<RendererBase> RendererVk_Factory(RenderThread*, RenderArgs);
 
 } // end namespace myricube

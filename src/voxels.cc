@@ -16,7 +16,8 @@
 #include <unordered_set>
 
 #ifdef MYRICUBE_WINDOWS
-// todo
+#include <windows.h>
+
 #else
 #include <arpa/inet.h> /* htonl needed for endian hack */
 #include <fcntl.h>
@@ -24,6 +25,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 #endif
 
 namespace myricube {
@@ -91,6 +93,7 @@ template <typename T> T* map_file(const filename_string& filename, int* flags)
               ? map_mem_file_impl(filename, sizeof(T), flags)
               : map_disk_file_impl(filename, sizeof(T), flags);
     if (*flags & file_created_flag) {
+        assert(ptr != nullptr);
         new(ptr) T;
     }
     // TODO think about potential race / interruption condition:
@@ -105,7 +108,11 @@ template <typename T> void unmap_if_disk_file(const T* ptr)
     std::lock_guard guard(in_memory_filesystem_mutex);
     if (in_memory_file_ptrs.count(uintptr_t(ptr))) return;
 
-    throw std::runtime_error("Todo: implement unmap_if_disk_file");
+    bool okay = UnmapViewOfFile(ptr);
+    if (!okay) {
+        fprintf(stderr, "UnmapViewOfFile: %i\n", int(GetLastError()));
+        panic("UnmapViewOfFile failed");
+    }
 }
 #else
 template <typename T> void unmap_if_disk_file(const T* ptr)
@@ -366,7 +373,161 @@ WorldHandle::bitfield_for_chunk_group(glm::ivec3 group_coord) const
 // Map an actual on-disk file.
 void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
 {
-    throw std::runtime_error("TODO: Implement map_disk_file_impl on Windows");
+    assert(!starts_with_in_memory_prefix(filename));
+
+    const char* doing = "";
+    auto check_last_error = [&]
+    {
+        DWORD error = GetLastError();
+        if (error) {
+            wchar_t buf[256];
+            FormatMessageW(
+                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                 NULL,
+                 error,
+                 MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                 buf,
+                 (sizeof(buf) / sizeof(wchar_t)),
+                 NULL);
+
+            std::wstring msg = filename;
+            msg += L": ";
+            msg += buf;
+            fprintf(stderr, "%ls\n", msg.c_str());
+            throw std::runtime_error(
+                std::string("map_disk_file_impl failed on ") + doing);
+        }
+    };
+
+    // Try to open the file if it exists.
+    doing = "Opening";
+    HANDLE handle = CreateFileW(
+        filename.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+
+    // fprintf(stderr, "File=%ls Handle=%p\n", filename.c_str(), handle);
+
+    // Cheap RAII for handle.
+    struct Closer {
+        HANDLE& handle_ref;
+        ~Closer()
+        {
+            if (handle_ref != INVALID_HANDLE_VALUE) CloseHandle(handle_ref);
+        }
+    };
+    Closer closer = { handle };
+
+    // Depending on create_flag, either return null or create the file
+    // if it doesn't exist.
+    if (handle == INVALID_HANDLE_VALUE) {
+        // ...but first check that the failure was actually that the
+        // file didn't exist.
+        if (GetLastError() != ERROR_FILE_NOT_FOUND) {
+            check_last_error();
+        }
+        if (!(*flags & create_flag)) return nullptr;
+
+        // Create file now.
+        doing = "Creating";
+        SetLastError(0);
+        handle = CreateFileW(
+            filename.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE,
+            NULL,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL);
+        *flags |= file_created_flag;
+        check_last_error();
+
+        // Resize the file to the correct size.
+        SetLastError(0);
+        doing = "Setting file pointer";
+        LONG low = LONG(sz);
+        LONG high = LONG(sz >> 32);
+        SetFilePointer(handle, low, &high, FILE_BEGIN);
+        check_last_error();
+
+        doing = "Resizing file";
+        SetEndOfFile(handle);
+        check_last_error();
+    }
+
+    // Check the file size is expected, or resize from 0 if needed
+    // (and allowed by the create_flag).
+    doing = "Checking file size of";
+    size_t file_size;
+    {
+        DWORD low;
+        DWORD high;
+        low = GetFileSize(handle, &high);
+        check_last_error();
+        file_size = size_t(low) | size_t(high) << 32;
+    }
+
+    if (file_size != sz) {
+        fprintf(stderr, "Incorrect file size: %ls\n", filename.c_str());
+        throw std::runtime_error(
+            "Incorrect file size (consider removing file manually)");
+    }
+    else if (file_size == 0) {
+        if (*flags & create_flag) {
+            *flags |= file_created_flag;
+
+            // Resize the file to the correct size.  This might be
+            // redundant on Windows (CreateFileMapping resizes
+            // implicitly?), not sure.
+            SetLastError(0);
+            doing = "Setting existing file pointer";
+            LONG low = LONG(sz);
+            LONG high = LONG(sz >> 32);
+            SetFilePointer(handle, low, &high, FILE_BEGIN);
+            check_last_error();
+
+            doing = "Resizing existing file";
+            SetEndOfFile(handle);
+            check_last_error();
+        }
+    }
+
+    // Now I need to create a "file-mapping object". There seems to be
+    // no Linux equivalent so let's hope I did this correctly...
+    doing = "Creating Windows File Mapping Object";
+    HANDLE mapobj = CreateFileMappingA(
+        handle, // mabye I should have given it a better name...
+        NULL,
+        PAGE_READWRITE,
+        DWORD(sz >> 32), // These are now swapped in order from before!!!
+        DWORD(sz),       // Now low is second instead of first WTF
+        NULL);
+    Closer mapobj_closer { mapobj }; // More cheap RAII.
+    check_last_error();
+
+    // Finally can access the mapping.
+    doing = "Memory mapping";
+    void* mapping = MapViewOfFile(
+        mapobj,
+        FILE_MAP_ALL_ACCESS,
+        0, 0,
+        sz); // OMG now I can just use size_t directly!!!
+    if (mapping == nullptr) check_last_error();
+    return mapping;
+
+    // NOTE: At this point the Closer objects destroy the mapping
+    // object and the file handle. Some of the docs I read say I
+    // shouldn't do this, but this seems based on the assumption that
+    // I want exclusive file access, which I don't. According to this
+    // stack overflow answer:
+    //
+    // https://stackoverflow.com/questions/36495158/c-windows-api-close-file-handle-before-unmapviewoffile
+    //
+    // ...it should be okay to close those handles now.
 }
 
 // Map an ephemeral in-memory file.
@@ -414,6 +575,8 @@ void* map_mem_file_impl(const filename_string& filename, size_t sz, int* flags)
     return mapping;
 }
 
+
+// Linux implementation of memory-mapped files.
 #else
 // Map an actual on-disk file.
 void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
@@ -456,8 +619,6 @@ void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
             code = fd;
             check_code();
         }
-        doing = "Opening";
-        if (errno != ENOENT) check_code();
         if (!(*flags & create_flag)) return nullptr;
 
         // Create file now.
