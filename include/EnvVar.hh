@@ -84,13 +84,13 @@ class EnvVarFilename
     filename_string var;
 
   public:
-    EnvVarString(const char* name, const char* fallback)
+    EnvVarFilename(const char* name, const char* fallback)
     {
         filename_string empty;
         const wchar_t* env =
-            _wgetenv(filename_append_c_str(empty, name).c_str());
+            _wgetenv(filename_concat_c_str(empty, name).c_str());
         if (env == nullptr) {
-            var = filename_append_c_str(empty, fallback);
+            var = filename_concat_c_str(empty, fallback);
         }
         else {
             var = env;
