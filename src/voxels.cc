@@ -15,11 +15,12 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "EnvVar.hh"
+
 #ifdef MYRICUBE_WINDOWS
 #include <windows.h>
 
 #else
-#include <arpa/inet.h> /* htonl needed for endian hack */
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -242,24 +243,19 @@ static inline bool maybe_fix_endian(
         return false;
     }
 
-#ifndef MYRICUBE_WINDOWS
-    thread_local long endian_fix_enabled;
-    if (!endian_fix_enabled) {
-        const char* env = getenv("myricube_endian_fix");
-        if (env != nullptr) {
-            char* endptr;
-            endian_fix_enabled = strtol(env, &endptr, 10);
-            if (*endptr != 0) {
-                throw std::runtime_error("Could not parse myricube_endian_fix "
-                    "environment variable as integer.");
-            }
-        }
-    }
+    thread_local EnvVar64 endian_fix_enabled("myricube_endian_fix", 0);
 
     if (!endian_fix_enabled) {
-        throw std::runtime_error("Incorrect endianness: " + filename
-            + "\nrun with environment variable myricube_endian_fix=1"
-              "\nto fix in-place (backup first!)");
+        #ifdef MYRICUBE_WINDOWS
+            fprintf(stderr, "Incorrect endianness: %ls\n", filename.c_str());
+            throw std::runtime_error("File had incorrect endianness"
+                "\nrun with environment variable myricube_endian_fix=1"
+                "\nto fix in-place (backup first!)");
+        #else
+            throw std::runtime_error("Incorrect endianness: " + filename
+                + "\nrun with environment variable myricube_endian_fix=1"
+                  "\nto fix in-place (backup first!)");
+        #endif
     }
 
     for (int zH = 0; zH < edge_chunks; ++zH) {
@@ -271,8 +267,13 @@ static inline bool maybe_fix_endian(
         for (int yL = 0; yL < chunk_size; ++yL) {
         for (int xL = 0; xL < chunk_size; ++xL) {
             uint32_t* p_voxel = &chunk.voxel_array[zL][yL][xL];
-            *p_voxel = htonl(*p_voxel);
-            // Just get rid of maybe_fix_endian on Windows.
+            uint32_t old_voxel = *p_voxel;
+            uint32_t new_voxel = 0;
+            new_voxel |= ((old_voxel >> 0) & 0xFF) << 24;
+            new_voxel |= ((old_voxel >> 8) & 0xFF) << 16;
+            new_voxel |= ((old_voxel >> 16) & 0xFF) << 8;
+            new_voxel |= ((old_voxel >> 24) & 0xFF) << 0;
+            *p_voxel = new_voxel;
         }
         }
         }
@@ -281,16 +282,12 @@ static inline bool maybe_fix_endian(
     }
 
     group.magic_number |= new_endian_magic;
-    fprintf(stderr, "Fixed endianness of %s\n", filename.c_str());
+    #ifdef MYRICUBE_WINDOWS
+        fprintf(stderr, "Fixed endianness of %ls\n", filename.c_str());
+    #else
+        fprintf(stderr, "Fixed endianness of %s\n", filename.c_str());
+    #endif
     return true;
-#else
-    fwprintf(stderr,
-        L"Incorrect endianness: %ls"
-        "\n(cannot fix on Windows, call me and complain if you need this).",
-        filename.c_str()
-    );
-    throw std::runtime_error("Incorrect endianness");
-#endif
 }
 
 UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
