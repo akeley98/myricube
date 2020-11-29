@@ -558,23 +558,17 @@ int Main(std::vector<filename_string> args)
             "(call through wrapper script).\n", args[0].c_str());
     }
 #endif
-    printf("Hello World 2\n");
     // Data directory (where shaders are stored) is the path of this
     // executable, with the -bin or .exe file extension replaced with
     // -data. Construct that directory name here.
     data_directory = args[0];
-    printf("Hello World 2.1\n");
     if (!ends_with_bin_or_exe(data_directory)) {
-        printf("Hello World 2.2\n");
         fprintf(stderr, WS " should end with '-bin' or '.exe'\n",
             args[0].c_str());
         return 1;
     }
-    printf("Hello World 2.3\n");
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
-    printf("Hello World 2.4\n");
     data_directory = filename_concat_c_str(data_directory, "-data/");
-    printf("Hello World 3\n");
 
     // Check if we are using OpenGL.
     bool use_OpenGL = false;
@@ -588,8 +582,6 @@ int Main(std::vector<filename_string> args)
                 api_name);
         }
     }
-
-    printf("Hello World 4\n");
 
     // Instantiate the shared camera (shared with the renderer).
     std::shared_ptr<SyncCamera> camera_ptr(new SyncCamera());
@@ -651,7 +643,6 @@ int Main(std::vector<filename_string> args)
 #ifdef MYRICUBE_WINDOWS
 int wmain(int argc, wchar_t** argv)
 {
-    printf("Hello World\n");
     std::vector<myricube::filename_string> args;
     for (int i = 0; i < argc; ++i) {
         args.emplace_back(argv[i]);
