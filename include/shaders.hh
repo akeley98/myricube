@@ -72,7 +72,7 @@ inline std::vector<std::string> get_preamble(std::string filename)
         "#define RED_SHIFT " + std::to_string(red_shift),
         "#define GREEN_SHIFT " + std::to_string(green_shift),
         "#define BLUE_SHIFT " + std::to_string(blue_shift),
-        "#define VISIBLE_BIT " + std::to_string(visible_bit),
+        "#define VISIBLE_BIT " + std::to_string(int32_t(visible_bit)),
         "#define X_SHIFT " + std::to_string(x_shift),
         "#define Y_SHIFT " + std::to_string(y_shift),
         "#define Z_SHIFT " + std::to_string(z_shift),
