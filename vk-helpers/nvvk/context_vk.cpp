@@ -704,11 +704,12 @@ bool Context::hasInstanceExtension(const char* name) const
 //
 ContextCreateInfo::ContextCreateInfo(bool bUseValidation)
 {
-#ifdef _DEBUG
+// Modified by David Akeley
+// #ifdef _DEBUG
   instanceExtensions.push_back({VK_EXT_DEBUG_UTILS_EXTENSION_NAME, true});
   if(bUseValidation)
     instanceLayers.push_back({"VK_LAYER_KHRONOS_validation", true});
-#endif
+// #endif
 }
 
 void ContextCreateInfo::addInstanceExtension(const char* name, bool optional)

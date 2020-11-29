@@ -28,6 +28,7 @@
 #include "error_vk.hpp"
 
 #include <nvh/nvprint.hpp>
+#include <stdexcept>
 
 namespace nvvk {
 
@@ -115,8 +116,14 @@ bool checkResult(VkResult result, const char* file, int32_t line)
 
   if(result < 0)
   {
+    // Modified by David Zhao Akeley
     LOGE("%s(%d): Vulkan Error : %s\n", file, line, getResultString(result));
-    assert(!"Critical Vulkan Error");
+    // assert(!"Critical Vulkan Error");
+    if (result == VK_ERROR_LAYER_NOT_PRESENT) {
+        throw std::runtime_error("Vulkan error: layer not present. NOTE: If you don't have the Vulkan SDK, run myricube with myricube_validation=0");
+    }
+    throw std::runtime_error(
+        file + std::string(":") + std::to_string(line) + " Vulkan Error: " + getResultString(result));
 
     return true;
   }
