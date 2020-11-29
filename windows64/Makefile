@@ -9,7 +9,7 @@ CFLAGS=  -Wall -Wextra -O3 -g -municode
 
 VK_LIB=~/.wine/drive_c/VulkanSDK/1.2.154.1/Lib/vulkan-1.lib
 
-default: myricube.exe
+default: myricube.exe myricube-gl.exe
 
 -include cckiss/Makefile
 -include ../OBJS-list
@@ -20,15 +20,24 @@ glfw-cmake:
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
-myricube.exe: myricube-gl-vk
+W64_OPTIONS=-municode -static -lgdi32
 
-W64_OPTIONS=-municode -static -o myricube.exe -lgdi32
+myricube.exe:  $(OBJS) $(GL_OBJS) $(VK_OBJS) vk-shaders
+	$(CXX) $(OBJS) $(GL_OBJS) $(VK_OBJS) $(VK_LIB) $(W64_OPTIONS) -o myricube.exe
 
-myricube-gl-vk: $(OBJS) $(GL_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX)  $(OBJS) $(GL_OBJS) $(VK_OBJS) $(VK_LIB) $(W64_OPTIONS) -lvulkan
+myricube-vk.exe: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) vk-shaders
+	$(CXX)   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) $(VK_LIB) $(W64_OPTIONS) -o myricube-vk.exe
 
-myricube-vk:   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX) $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) $(VK_LIB) $(W64_OPTIONS) -lvulkan
+myricube-gl.exe: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
+	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) $(W64_OPTIONS) -o myricube-gl.exe
 
-myricube-gl:   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
-	$(CXX) $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) $(W64_OPTIONS)
+
+# Rebuild vulkan shaders every time for now due to no method to track
+# include dependencies. TODO share this with other Makefile?
+vk-shaders:
+	glslangValidator myricube-data/vk/mesh.vert -V -o myricube-data/vk/mesh.vert.spv
+	glslangValidator myricube-data/vk/mesh.frag -V -o myricube-data/vk/mesh.frag.spv
+	glslangValidator myricube-data/vk/raycast.vert -V -o myricube-data/vk/raycast.vert.spv
+	glslangValidator myricube-data/vk/raycast.frag -V -o myricube-data/vk/raycast.frag.spv
+	glslangValidator myricube-data/vk/background.vert -V -o myricube-data/vk/background.vert.spv
+	glslangValidator myricube-data/vk/background.frag -V -o myricube-data/vk/background.frag.spv

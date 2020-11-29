@@ -81,6 +81,10 @@
 #include "window.hh"
 #include "voxels.hh"
 
+#ifdef MYRICUBE_WINDOWS
+#include <windows.h>
+#endif
+
 namespace myricube {
 
 // Absolute path of the executable, minus the -bin or .exe, plus -data/
@@ -568,10 +572,31 @@ int Main(std::vector<filename_string> args)
             args[0].c_str());
         return 1;
     }
+    // Remove -bin or .exe suffix.
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
+
+    // HACK remove -gl or -vk suffix.
+    if (data_directory.size() >= 3) {
+        filename_char suffix[4] = {
+            data_directory[data_directory.size() - 3],
+            data_directory[data_directory.size() - 2],
+            data_directory[data_directory.size() - 1] };
+
+        if (suffix[0] == '-') {
+            if (suffix[1] == 'g' and suffix[2] == 'l') {
+                fprintf(stderr, "Stripping -gl suffix from data_directory\n");
+                data_directory.erase(data_directory.size() - 3, 3);
+            }
+            else if (suffix[1] == 'v' and suffix[2] == 'k') {
+                fprintf(stderr, "Stripping -vk suffix from data_directory\n");
+                data_directory.erase(data_directory.size() - 3, 3);
+            }
+        }
+    }
+
     data_directory = filename_concat_c_str(data_directory, "-data/");
 
-    // Check if we are using OpenGL.
+    // Check if we are using OpenGL. Default to Vulkan.
     bool use_OpenGL;
     std::string api_name =
         EnvVarString("myricube_api", vulkan_compiled_in ? "vk" : "gl");
@@ -585,7 +610,7 @@ int Main(std::vector<filename_string> args)
     else {
         panic("myricube_api environment variable set to unknown value "
                 + api_name);
-        use_OpenGL = false; // Compiler warning
+        use_OpenGL = false; // Fix compiler warning
     }
 
     // Instantiate the shared camera (shared with the renderer).
@@ -639,8 +664,18 @@ int Main(std::vector<filename_string> args)
         set_window_title(window, renderer);
     }
 
-    // Stop renderer thread (RenderThread destructor implicit).
+    // Stop renderer thread (RenderThread destructor called here).
     return 0;
+}
+
+
+void panic(const std::string& reason)
+{
+    fprintf(stderr, "%s\n", reason.c_str());
+    #ifdef MYRICUBE_WINDOWS
+        MessageBoxA(NULL, reason.c_str(), "Oh shit", MB_OK);
+    #endif
+    exit(1);
 }
 
 } // end namespace
@@ -652,8 +687,15 @@ int wmain(int argc, wchar_t** argv)
     for (int i = 0; i < argc; ++i) {
         args.emplace_back(argv[i]);
     }
-    return myricube::Main(std::move(args));
+    try {
+        return myricube::Main(std::move(args));
+    }
+    catch (const std::exception& e) {
+        myricube::panic(e.what());
+        return 1;
+    }
 }
+
 #else
 int main(int argc, char** argv)
 {
@@ -661,6 +703,13 @@ int main(int argc, char** argv)
     for (int i = 0; i < argc; ++i) {
         args.emplace_back(argv[i]);
     }
-    return myricube::Main(std::move(args));
+    try {
+        return myricube::Main(std::move(args));
+    }
+    catch (const std::exception& e) {
+        myricube::panic(e.what());
+        return 1; // Fix compiler warning.
+    }
 }
+
 #endif

@@ -23,16 +23,14 @@ libmyricube-cvoxel.so: $(LIBOBJS)
 
 all: myricube-bin myricube-windows
 
-myricube-bin: myricube-gl-vk # Can substitute myricube-gl or myricube-vk
+myricube-bin:  $(OBJS) $(GL_OBJS) $(VK_OBJS) vk-shaders
+	$(CXX) $(OBJS) $(GL_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-bin
 
-myricube-gl-vk: $(OBJS) $(GL_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX)  $(OBJS) $(GL_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-bin
+myricube-vk-bin: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) vk-shaders
+	$(CXX)   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-vk-bin
 
-myricube-vk:   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX) $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-bin
-
-myricube-gl:   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
-	$(CXX) $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) -ldl -lpthread -o myricube-bin
+myricube-gl-bin: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
+	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) -ldl -lpthread -o myricube-gl-bin
 
 # Rebuild vulkan shaders every time for now due to no method to track
 # include dependencies.

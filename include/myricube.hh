@@ -135,11 +135,7 @@ inline bool is_real(glm::dvec3 v)
     return v - v == glm::dvec3(0, 0, 0);
 }
 
-inline void panic(const std::string& reason)
-{
-    fprintf(stderr, "%s\n", reason.c_str());
-    exit(1);
-}
+void panic(const std::string& reason);
 
 inline void panic(const char* a, const char* b)
 {
