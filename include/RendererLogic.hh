@@ -177,7 +177,7 @@ class RendererLogic : public RendererBase
     // WARNING: the BinChunkGroup pointer will become invalid as soon
     // as this function returns (be careful with asynchronous
     // transfers), and you need not clear the dirty flag of the chunk
-    // group. XXX TODO make sure I implement this correctly.
+    // group. TODO: If I replace the dirty flag, update this comment.
     virtual void worker_stage(MeshStaging*, const BinChunkGroup*) = 0;
 
     // Like the above, but for raycasting. Same warning applies.

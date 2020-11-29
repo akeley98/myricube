@@ -76,7 +76,7 @@ inline glm::ivec3 to_group_coord(glm::ivec3 voxel_coord)
                       voxel_coord.z >> group_shift);
 }
 
-// Windows uses UTF-16, sigh. (wstring is 16-bit on windows). TODO test.
+// Windows uses UTF-16, sigh. (wstring is 16-bit on windows).
 #if defined(__WIN32__) || defined(__WIN32) || defined(WIN32)
 #define MYRICUBE_WINDOWS 1
 using filename_string = std::wstring;
