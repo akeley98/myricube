@@ -9,10 +9,10 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
 
+#include <stdexcept>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-
 #include <string>
 #include <string.h>
 
@@ -95,7 +95,11 @@ inline filename_string filename_concat_c_str(
 
     for (size_t i = 0; i < len; ++i) {
         char c = c_str[i];
-        assert((int(c) & 0x7F) == 0x7F); // Must be ASCII
+        // Must be ASCII
+        if ((int(c) & 0x7F) != int(c)) {
+            throw std::runtime_error(
+                "filename_concat_c_str: c_str must be ASCII.\n");
+        }
         filename.push_back(static_cast<filename_char>(c));
     }
     return filename;
