@@ -125,7 +125,12 @@ void RendererBase::render_loop()
     // Draw frames in a loop until the renderer is ordered to stop,
     // calculating (CPU-side) FPS and frame time.
     while (!p_back->thread_exit_flag.load()) {
-        draw_frame();
+        try {
+            draw_frame();
+        }
+        catch (const std::exception& exc) {
+            panic("Exception in RendererBase::draw_frame:", exc.what());
+        }
 
         // Calculate (approximate) frame time. Require at least 2 ms
         // between frames (workaround to system freeze bug).

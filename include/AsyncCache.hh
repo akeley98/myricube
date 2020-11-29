@@ -264,7 +264,12 @@ class AsyncCache
 
     static void worker_loop(AsyncCache* self, size_t thread_idx)
     {
-        self->worker_loop_impl(thread_idx);
+        try {
+            self->worker_loop_impl(thread_idx);
+        }
+        catch (const std::exception& exc) {
+            panic("Exception in AsyncCache::worker_loop", exc.what());
+        }
     }
 
   public:
