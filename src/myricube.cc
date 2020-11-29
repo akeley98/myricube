@@ -84,22 +84,32 @@ namespace myricube {
 
 // Absolute path of the executable, minus the -bin or .exe, plus -data/
 // This is where shaders and stuff are stored.
-std::string data_directory;
+filename_string data_directory;
 
-std::string expand_filename(const std::string& in)
+filename_string expand_filename(const std::string& in)
 {
     if (data_directory.size() == 0) {
         throw std::logic_error("Cannot call expand_filename before main");
     }
-    return in[0] == '/' ? in : data_directory + in;
+    if (in.empty()) {
+        throw std::runtime_error("Empty expand_filename argument");
+    }
+    if (in[0] == '/') {
+        throw std::runtime_error("Forbid absolute path in expand_filename");
+    }
+    return filename_concat_c_str(data_directory, in.c_str());
 }
 
-bool ends_with_bin_or_exe(const std::string& in)
+bool ends_with_bin_or_exe(const filename_string& in)
 {
     auto sz = in.size();
     if (sz < 4) return false;
-    const char* suffix = &in[sz - 4];
+    const filename_char* suffix = &in[sz - 4];
+#ifdef MYRICUBE_WINDOWS
+    return wcscmp(suffix, L"-bin") == 0 or wcscmp(suffix, L".exe") == 0;
+#else
     return strcmp(suffix, "-bin") == 0 or strcmp(suffix, ".exe") == 0;
+#endif
 }
 
 bool paused = false;
@@ -355,11 +365,22 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
 // as comments, which go from a # character to the end of the line.
 //
 // Returns true iff successful (check errno on false).
-bool add_key_binds_from_file(Window& window, std::string filename) noexcept
+bool add_key_binds_from_file(Window& window, filename_string filename) noexcept
 {
+// Hack for printing 8/16-bit strings on Windows, 8-bit only on Linux.
+// Open with 16-bit filename on Windows, 8-bit on Linux.
+#ifdef MYRICUBE_WINDOWS
+    #define WS "%ls"
+    #define HS "%s"
+    FILE* file = _wfopen(filename.c_str(), L"r");
+#else
+    #define WS "%s"
+    #define HS "%s"
     FILE* file = fopen(filename.c_str(), "r");
+#endif
+
     if (file == nullptr) {
-        fprintf(stderr, "Could not open %s\n", filename.c_str());
+        fprintf(stderr, "Could not open " WS "\n", filename.c_str());
         return false;
     }
 
@@ -436,7 +457,7 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
             goto end_line;
         }
         else {
-            fprintf(stderr, "%s:%i unexpected third token"
+            fprintf(stderr, WS ":%i unexpected third token"
                 " starting with '%c'\n",
                 filename.c_str(), line_number, c);
             errno = EINVAL;
@@ -462,7 +483,7 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
 
         // Complain if only one token is provided on a line.
         if (target_name.size() == 0) {
-            fprintf(stderr, "%s:%i key name without target name.\n",
+            fprintf(stderr, WS ":%i key name without target name.\n",
                 filename.c_str(), line_number);
             errno = EINVAL;
             goto bad_eof;
@@ -470,19 +491,19 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
 
         auto keycode = keycode_from_name(key_name);
         if (keycode == 0) {
-            fprintf(stderr, "%s:%i unknown key name %s.\n",
+            fprintf(stderr, WS ":%i unknown key name " HS ".\n",
                 filename.c_str(), line_number, key_name.c_str());
             errno = EINVAL;
             goto bad_eof;
         }
 
-        fprintf(stderr, "Binding %s (%i) to %s\n",
+        fprintf(stderr, "Binding " HS " (%i) to " HS "\n",
             key_name.c_str(), keycode, target_name.c_str());
         window.bind_keycode(keycode, target_name);
     }
 
     if (fclose(file) != 0) {
-        fprintf(stderr, "Error closing %s\n", filename.c_str());
+        fprintf(stderr, "Error closing " WS "\n", filename.c_str());
         return false;
     }
     return true;
@@ -496,12 +517,12 @@ bool add_key_binds_from_file(Window& window, std::string filename) noexcept
 
 void bind_keys(Window& window)
 {
-    auto default_file = expand_filename("default-keybinds.txt");
-    auto user_file = expand_filename("keybinds.txt");
+    filename_string default_file = expand_filename("default-keybinds.txt");
+    filename_string user_file = expand_filename("keybinds.txt");
 
     bool default_okay = add_key_binds_from_file(window, default_file);
     if (!default_okay) {
-        fprintf(stderr, "Failed to parse %s\n", default_file.c_str());
+        fprintf(stderr, "Failed to parse " WS "\n", default_file.c_str());
         fprintf(stderr, "%s (%i)\n", strerror(errno), errno);
         exit(2);
     }
@@ -509,11 +530,11 @@ void bind_keys(Window& window)
     bool user_okay = add_key_binds_from_file(window, user_file);
     if (!user_okay) {
         if (errno == ENOENT) {
-            fprintf(stderr, "Custom keybinds file %s not found.\n",
+            fprintf(stderr, "Custom keybinds file " WS " not found.\n",
                 user_file.c_str());
         }
         else {
-            fprintf(stderr, "Failed to parse %s\n", user_file.c_str());
+            fprintf(stderr, "Failed to parse " WS "\n", user_file.c_str());
             fprintf(stderr, "%s (%i)\n", strerror(errno), errno);
             exit(2);
         }
@@ -529,23 +550,25 @@ void set_window_title(Window& window, const RenderThread& renderer)
     window.set_title(title);
 }
 
-int Main(std::vector<std::string> args)
+int Main(std::vector<filename_string> args)
 {
+#ifndef MYRICUBE_WINDOWS
     if (args.at(0)[0] != '/') {
         fprintf(stderr, "Warning: %s expected to be absolute path\n"
             "(call through wrapper script).\n", args[0].c_str());
     }
+#endif
     // Data directory (where shaders are stored) is the path of this
     // executable, with the -bin or .exe file extension replaced with
     // -data. Construct that directory name here.
     data_directory = args[0];
     if (!ends_with_bin_or_exe(data_directory)) {
-        fprintf(stderr, "%s should end with '-bin' or '.exe'\n",
+        fprintf(stderr, WS " should end with '-bin' or '.exe'\n",
             args[0].c_str());
         return 1;
     }
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
-    data_directory += "-data/";
+    data_directory = filename_concat_c_str(data_directory, "-data/");
 
     // Check if we are using OpenGL.
     bool use_OpenGL = false;
@@ -617,6 +640,16 @@ int Main(std::vector<std::string> args)
 
 } // end namespace
 
+#ifdef MYRICUBE_WINDOWS
+int WinMain(int argc, wchar_t** argv)
+{
+    std::vector<myricube::filename_string> args;
+    for (int i = 0; i < argc; ++i) {
+        args.emplace_back(argv[i]);
+    }
+    return myricube::Main(std::move(args));
+}
+#else
 int main(int argc, char** argv)
 {
     std::vector<std::string> args;
@@ -625,3 +658,4 @@ int main(int argc, char** argv)
     }
     return myricube::Main(std::move(args));
 }
+#endif

@@ -29,6 +29,7 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
 #include "GLFW/glfw3.h"
 
 #include <cassert>
+#include <errno.h>
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
@@ -372,12 +373,34 @@ struct ScopedRenderPass
 // camelCase functions copied with some modifications from
 // vulkan-tutorial.com; they're mostly exempt from my 80-column limit
 // for now.
-std::vector<char> readFile(const std::string& filename)
+std::vector<char> readFile(const filename_string& filename)
 {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+#ifdef MYRICUBE_WINDOWS
+    std::string ascii_filename;
+    ascii_filename.reserve(filename.size());
+    for (filename_char c : filename) {
+        if (c <= 127) ascii_filename.push_back(char(c));
+        else throw std::runtime_error(
+            "TODO: support non-ASCII Vulkan shader path"
+            " (call me and complain)");
+        // I should just switch to _wfopen.
+    }
+#else
+    const std::string& ascii_filename = filename;
+#endif
+
+    std::ifstream file(ascii_filename, std::ios::ate | std::ios::binary);
 
     if (!file.is_open()) {
-        throw std::runtime_error("failed to open file: " + filename);
+        const char* err = strerror(errno);
+        #ifdef MYRICUBE_WINDOWS
+            fprintf(stderr,
+                "Failed to open file: %ls (%s)\n", filename.c_str(), err);
+            throw std::runtime_error("Failed to open file");
+        #else
+            throw std::runtime_error("failed to open file: " + filename
+                + " (" + err + ")");
+        #endif
     }
 
     size_t fileSize = (size_t) file.tellg();
@@ -2185,7 +2208,9 @@ struct RendererVk :
         for (int y = 0; y < edge_chunks; ++y) {
         for (int x = 0; x < edge_chunks; ++x) {
             VkBufferImageCopy region;
-            region.bufferOffset = offsetof(MappedChunks, chunks[z][y][x]);
+            region.bufferOffset =
+                reinterpret_cast<char*>(&staging->chunk_map->chunks[z][y][x])
+              - reinterpret_cast<char*>(&staging->chunk_map->chunks[0][0][0]);
             region.bufferRowLength = chunk_size;
             region.bufferImageHeight = chunk_size;
             region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };

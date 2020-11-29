@@ -4,7 +4,6 @@
 
 #include "voxels.hh"
 
-#include <arpa/inet.h> /* htonl needed for endian hack */
 #include <errno.h>
 #include <mutex>
 #include <new>
@@ -19,6 +18,7 @@
 #ifdef MYRICUBE_WINDOWS
 // todo
 #else
+#include <arpa/inet.h> /* htonl needed for endian hack */
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -98,6 +98,16 @@ template <typename T> T* map_file(const filename_string& filename, int* flags)
     return static_cast<T*>(ptr);
 }
 
+#ifdef MYRICUBE_WINDOWS
+template <typename T> void unmap_if_disk_file(const T* ptr)
+{
+    // Only unmap actual on-disk files.
+    std::lock_guard guard(in_memory_filesystem_mutex);
+    if (in_memory_file_ptrs.count(uintptr_t(ptr))) return;
+
+    throw std::runtime_error("Todo: implement unmap_if_disk_file");
+}
+#else
 template <typename T> void unmap_if_disk_file(const T* ptr)
 {
     // fprintf(stderr, "unmap_file of size %ld\n", long(sizeof(T)));
@@ -109,6 +119,7 @@ template <typename T> void unmap_if_disk_file(const T* ptr)
     auto code = munmap((void*)ptr, sizeof(T));
     assert(code == 0); // Seems like munmap only fails due to logic errors.
 }
+#endif
 
 void unmap_mut_bin_chunk_group(BinChunkGroup* ptr)
 {
@@ -171,8 +182,15 @@ WorldHandle::WorldHandle(const filename_string& arg)
     // Ignore the endian bit as that will be checked later.
     auto xord = bin_world->magic_number ^ bin_world->expected_magic;
     if ((xord & ~new_endian_magic) != 0) {
-        throw std::runtime_error("Incorrect magic number: "
-            + bin_world_filename);
+        #ifdef MYRICUBE_WINDOWS
+            fwprintf(stderr,
+                L"Incorrect magic number: %ls",
+                bin_world_filename.c_str());
+            throw std::runtime_error("Incorrect magic number");
+        #else
+            throw std::runtime_error("Incorrect magic number: "
+                + bin_world_filename);
+        #endif
     }
 }
 
@@ -217,6 +235,7 @@ static inline bool maybe_fix_endian(
         return false;
     }
 
+#ifndef MYRICUBE_WINDOWS
     thread_local long endian_fix_enabled;
     if (!endian_fix_enabled) {
         const char* env = getenv("myricube_endian_fix");
@@ -257,6 +276,14 @@ static inline bool maybe_fix_endian(
     group.magic_number |= new_endian_magic;
     fprintf(stderr, "Fixed endianness of %s\n", filename.c_str());
     return true;
+#else
+    fwprintf(stderr,
+        L"Incorrect endianness: %ls"
+        "\n(cannot fix on Windows, call me and complain if you need this).",
+        filename.c_str()
+    );
+    throw std::runtime_error("Incorrect endianness");
+#endif
 }
 
 UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
@@ -279,7 +306,14 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
     if (result->magic_number != result->expected_magic) {
         bool okay = maybe_fix_endian(filename, *result);
         if (okay) goto its_okay;
-        throw std::runtime_error("Incorrect magic number: " + filename);
+        #ifdef MYRICUBE_WINDOWS
+            fwprintf(stderr,
+                L"Incorrect magic number: %ls",
+                filename.c_str());
+            throw std::runtime_error("Incorrect magic number");
+        #else
+            throw std::runtime_error("Incorrect magic number: " + filename);
+        #endif
     }
   its_okay:
     return result;
@@ -297,7 +331,13 @@ UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
     if (result->magic_number != result->expected_magic) {
         bool okay = maybe_fix_endian(filename, *result);
         if (okay) goto its_okay;
-        throw std::runtime_error("Incorrect magic number: " + filename);
+        #ifdef MYRICUBE_WINDOWS
+            fwprintf(stderr,
+                L"Incorrect magic number: %ls\n", filename.c_str());
+            throw std::runtime_error("Incorrect magic number");
+        #else
+            throw std::runtime_error("Incorrect magic number: " + filename);
+        #endif
     }
   its_okay:
     return result;
@@ -322,7 +362,58 @@ WorldHandle::bitfield_for_chunk_group(glm::ivec3 group_coord) const
 
 
 #ifdef MYRICUBE_WINDOWS
-// todo
+
+// Map an actual on-disk file.
+void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
+{
+    throw std::runtime_error("TODO: Implement map_disk_file_impl on Windows");
+}
+
+// Map an ephemeral in-memory file.
+void* map_mem_file_impl(const filename_string& filename, size_t sz, int* flags)
+{
+    assert(starts_with_in_memory_prefix(filename));
+
+    std::lock_guard lock(in_memory_filesystem_mutex);
+
+    auto iter = in_memory_filesystem.find(filename);
+
+    // Such an in-memory file exists: check size and return.
+    if (iter != in_memory_filesystem.end()) {
+        InMemoryFile in_memory_file = iter->second;
+        if (in_memory_file.size != sz) {
+            fprintf(stderr, "%ls: Incorrect size\n", filename.c_str());
+            throw std::runtime_error("In memory file: incorrect size");
+        }
+        assert(in_memory_file.ptr);
+        return in_memory_file.ptr;
+    }
+
+    // No such in-memory file exists: either create or return nullptr.
+    if ((*flags & create_flag) == 0) {
+        return nullptr;
+    }
+    void* mapping = nullptr;
+    try {
+        mapping = malloc(sz);
+        in_memory_file_ptrs.emplace(uintptr_t(mapping));
+
+        if (mapping == nullptr) throw std::bad_alloc();
+
+        InMemoryFile in_memory_file { mapping, sz };
+        in_memory_filesystem.emplace(filename, in_memory_file);
+        *flags |= file_created_flag;
+    }
+    catch (...) {
+        if (mapping) {
+            free(mapping);
+            in_memory_file_ptrs.erase(uintptr_t(mapping));
+        }
+        throw;
+    }
+    return mapping;
+}
+
 #else
 // Map an actual on-disk file.
 void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)

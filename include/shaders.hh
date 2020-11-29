@@ -105,8 +105,18 @@ inline GLuint make_program(std::initializer_list<const char*> filenames)
 // a comment indicating its filename.
 inline std::string read_shader_source(const char* raw_filename) noexcept
 {
+#ifdef MYRICUBE_WINDOWS
+    filename_string actual_filename = expand_filename(raw_filename);
+    FILE* file = _wfopen(actual_filename.c_str(), L"r");
+    std::string filename;
+    for (filename_char c : actual_filename) {
+        filename.push_back(c <= 127 ? c : '?'); // IDGAF Windows is annoying
+    }
+#else
     std::string filename = expand_filename(raw_filename);
     FILE* file = fopen(filename.c_str(), "r");
+#endif
+
     if (file == nullptr) {
         panic("Could not open " + filename + " (" + std::to_string(errno)
             + ") " + strerror(errno));

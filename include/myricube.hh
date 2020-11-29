@@ -95,17 +95,17 @@ inline filename_string filename_concat_c_str(
 
     for (size_t i = 0; i < len; ++i) {
         char c = c_str[i];
-        assert(0 < c and c <= 127); // Must be ASCII.
+        assert((int(c) & 0x7F) == 0x7F); // Must be ASCII
         filename.push_back(static_cast<filename_char>(c));
     }
     return filename;
 }
 
-// Name a file that is in the data directory, and return its absolute path.
-// Filenames that are already absolute paths (start with /) are unchanged.
-//
-// TODO replace std::string with filename_string
-std::string expand_filename(const std::string& in);
+// Name a file that is in the data directory, and return its absolute
+// path.  CHANGED BEHAVIOR: no longer detect absolute paths (start
+// with /) and leave them unchanged. Arguments now must not be
+// absolute paths; they must name a file to be found in the data dir.
+filename_string expand_filename(const std::string& in);
 
 inline bool is_real(float v)
 {
