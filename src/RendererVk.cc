@@ -2094,7 +2094,7 @@ struct RendererVk :
         }
 
         // Otherwise, we have to allocate a new block of buffers.
-        constexpr size_t block_size = 4096;
+        constexpr size_t block_size = 24;
         memory_to_free.push_back(VK_NULL_HANDLE);
         unused_chunk_buffers.reserve(unused_chunk_buffers.size() + block_size);
 
