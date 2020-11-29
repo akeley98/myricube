@@ -563,12 +563,16 @@ int Main(std::vector<filename_string> args)
     // executable, with the -bin or .exe file extension replaced with
     // -data. Construct that directory name here.
     data_directory = args[0];
+    printf("Hello World 2.1\n");
     if (!ends_with_bin_or_exe(data_directory)) {
+        printf("Hello World 2.2\n");
         fprintf(stderr, WS " should end with '-bin' or '.exe'\n",
             args[0].c_str());
         return 1;
     }
+    printf("Hello World 2.3\n");
     for (int i = 0; i < 4; ++i) data_directory.pop_back();
+    printf("Hello World 2.4\n");
     data_directory = filename_concat_c_str(data_directory, "-data/");
     printf("Hello World 3\n");
 
