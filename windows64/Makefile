@@ -4,8 +4,8 @@
 CC=x86_64-w64-mingw32-gcc
 CXX=x86_64-w64-mingw32-g++
 CPPFLAGS=-I ../glfw/include -I ../glad/include -I ../include -I ../glm -I ./vk-include -I ../vk-helpers
-CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17 -Wno-missing-field-initializers
-CFLAGS=  -Wall -Wextra -O3 -g
+CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17 -Wno-missing-field-initializers -municode
+CFLAGS=  -Wall -Wextra -O3 -g -municode
 
 default: myricube.exe
 
@@ -19,4 +19,4 @@ glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
 myricube.exe: $(OBJS)
-	$(CXX) $(OBJS) ~/.wine/drive_c/VulkanSDK/1.2.154.1/Lib/vulkan-1.lib -static -o myricube.exe -lgdi32
+	$(CXX) $(OBJS) ~/.wine/drive_c/VulkanSDK/1.2.154.1/Lib/vulkan-1.lib -municode -static -o myricube.exe -lgdi32

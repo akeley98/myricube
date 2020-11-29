@@ -641,7 +641,7 @@ int Main(std::vector<filename_string> args)
 } // end namespace
 
 #ifdef MYRICUBE_WINDOWS
-int WinMain(int argc, wchar_t** argv)
+int wmain(int argc, wchar_t** argv)
 {
     std::vector<myricube::filename_string> args;
     for (int i = 0; i < argc; ++i) {
