@@ -112,7 +112,7 @@ template <typename T> void unmap_if_disk_file(const T* ptr)
     bool okay = UnmapViewOfFile(ptr);
     if (!okay) {
         fprintf(stderr, "UnmapViewOfFile: %i\n", int(GetLastError()));
-        panic("UnmapViewOfFile failed");
+        throw std::runtime_error("UnmapViewOfFile failed");
     }
 }
 #else

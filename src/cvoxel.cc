@@ -1,5 +1,5 @@
 // Hacked-together C interface for writing to voxel worlds, for Python
-// Ctypes. Not even going to think of Window's existence for now.
+// Ctypes.
 
 #include "voxels.hh"
 
@@ -11,19 +11,27 @@
 static std::unique_ptr<myricube::VoxelWorld> p_world;
 
 // Set the current world to modify by passing in the path to its
-// world.myricube file.
-extern "C" int myricube_select_world(const char* world_filename)
+// world.myricube file. For Windows, world_filename must be passed
+// as array of wchar_t, for Linux, array of char.
+extern "C" int myricube_select_world(const void* pv_world_filename)
 {
+    #ifdef MYRICUBE_WINDOWS
+        auto* world_filename = static_cast<const wchar_t*>(pv_world_filename);
+        #define WS "%ls"
+    #else
+        auto* world_filename = static_cast<const char*>(pv_world_filename);
+        #define WS "%s"
+    #endif
     try {
         p_world.reset(new myricube::VoxelWorld(world_filename));
         return 0;
     }
     catch (const std::runtime_error& e) {
-        fprintf(stderr, "Opening '%s': %s\n", world_filename, e.what());
+        fprintf(stderr, "Opening '" WS "': %s\n", world_filename, e.what());
         return 1;
     }
     catch (...) {
-        fprintf(stderr, "Unknown error opening '%s'\n", world_filename);
+        fprintf(stderr, "Unknown error opening '" WS "'\n", world_filename);
         return 1;
     }
 }

@@ -43,3 +43,6 @@ VK_OBJS=cckiss/src/RendererVk.cc.o \
 
 # Objects only needed for Vulkan when OpenGL not used.
 GL_DUMMY_OBJS=cckiss/src/DummyGL.cc.o
+
+# Objects needed to build the ctypes library for iMyricube.py
+LIBOBJS=cckiss/src/cvoxel.cc.o cckiss/src/voxels.cc.o

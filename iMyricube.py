@@ -17,7 +17,8 @@ lib = ctypes.cdll.LoadLibrary(os.path.join(file_dir, lib_name))
 if len(sys.argv) != 2: raise Exception("Need 1 cmd line arg: world filename")
 world_filename = sys.argv[1]
 
-code = lib.myricube_select_world(bytes(world_filename, "utf-8"))
+encoding = "utf-16le" if os.name == "nt" else "utf-8"
+code = lib.myricube_select_world(bytes(world_filename, encoding))
 if code != 0: raise Exception("myricube_select_world failed")
 sys.stderr.write("Opened world '%s'\n" % world_filename)
 
