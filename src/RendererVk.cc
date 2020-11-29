@@ -37,6 +37,7 @@ std::shared_ptr<RendererBase> RendererVk_Factory(
 #include <vulkan/vulkan.h>
 
 #include "nvvk/context_vk.hpp"
+#include "EnvVar.hh"
 #include "FrameManager.hpp"
 
 #include "../myricube-data/vk/PushConstant.glsl"
@@ -47,6 +48,8 @@ using namespace vkdo;
 namespace myricube { struct RendererVk; }
 
 namespace {
+
+EnvVar64 validation_enabled("myricube_validation", 0);
 
 // Set by RendererVk constructor so other constructors/destructors can
 // access it. (But note this only occurs after RendererVk is fully
@@ -222,9 +225,12 @@ struct ScopedContext : nvvk::Context
     ScopedContext()
     {
         // Add the swapchain extensions.
-        nvvk::ContextCreateInfo deviceInfo;
-        deviceInfo.apiMajor = 1;
-        deviceInfo.apiMinor = 1;
+        nvvk::ContextCreateInfo context_info(validation_enabled);
+        context_info.verboseCompatibleDevices = false;
+        context_info.verboseUsed = true;
+        context_info.verboseAvailable = false;
+        context_info.apiMajor = 1;
+        context_info.apiMinor = 1;
         uint32_t extension_count;
         const char** extensions =
             glfwGetRequiredInstanceExtensions(&extension_count);
@@ -232,12 +238,26 @@ struct ScopedContext : nvvk::Context
             throw std::runtime_error("Could not get glfw vk extensions.");
         }
         for (uint32_t i = 0; i < extension_count; ++i) {
-            deviceInfo.addInstanceExtension(extensions[i]);
+            context_info.addInstanceExtension(extensions[i]);
         }
-        deviceInfo.addDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        context_info.addDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
         // Initialize the nvvk context.
-        init(deviceInfo);
+        init(context_info);
+
+        // Warn if validation disabled.
+        if (!validation_enabled) {
+            fprintf(stderr,
+            #if !defined(MYRICUBE_WINDOWS)
+                "\x1b[35m\x1b[1m"
+            #endif
+                "Note for developers: Vulkan Validation Layers disabled!\n"
+            #if !defined(MYRICUBE_WINDOWS)
+                "\x1b[0m"
+            #endif
+                "(enable with environment variable myricube_validation=1)\n"
+            );
+        }
     }
 
     ScopedContext(ScopedContext&&) = delete;

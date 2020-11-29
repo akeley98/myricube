@@ -20,6 +20,21 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
 #else
 
 #include "myricube.hh"
+#include "EnvVar.hh"
+
+namespace {
+myricube::EnvVar64 validation_enabled("myricube_validation", 0);
+}
+
+#define PANIC_IF_GL_ERROR do { \
+    if (validation_enabled) { \
+        if (GLenum PANIC_error = glGetError()) { \
+            char PANIC_msg[160]; \
+            snprintf(PANIC_msg, sizeof PANIC_msg, "line %i: code %u", __LINE__, (unsigned)PANIC_error); \
+            panic("OpenGL error", PANIC_msg); \
+        } \
+    } \
+} while (0)
 
 #include "glad/glad.h"
 #include "RendererLogic.hh"
@@ -252,6 +267,20 @@ struct RendererGL :
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
         glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
         glFrontFace(GL_CW);
+
+        // Warn if validation disabled.
+        if (!validation_enabled) {
+            fprintf(stderr,
+            #if !defined(MYRICUBE_WINDOWS)
+                "\x1b[35m\x1b[1m"
+            #endif
+                "Note for developers: OpenGL glGetError checks disabled!\n"
+            #if !defined(MYRICUBE_WINDOWS)
+                "\x1b[0m"
+            #endif
+                "(enable with environment variable myricube_validation=1)\n"
+            );
+        }
     }
 
     void begin_frame() override

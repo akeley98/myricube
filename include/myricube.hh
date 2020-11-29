@@ -5,6 +5,10 @@
 #ifndef MYRICUBE_MYRICUBE_HH_
 #define MYRICUBE_MYRICUBE_HH_
 
+// Windows compatibility hacks
+#define NOMINMAX
+#include <ciso646>
+
 #define GLM_FORCE_RADIANS
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
@@ -142,14 +146,6 @@ inline void panic(const char* a, const char* b)
     std::string reason = a + std::string("\n") + b;
     panic(reason);
 }
-
-#define PANIC_IF_GL_ERROR do { \
-    if (GLenum PANIC_error = glGetError()) { \
-        char PANIC_msg[160]; \
-        snprintf(PANIC_msg, sizeof PANIC_msg, "line %i: code %u", __LINE__, (unsigned)PANIC_error); \
-        panic("OpenGL error", PANIC_msg); \
-    } \
-} while (0)
 
 } // end namespace
 

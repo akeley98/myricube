@@ -211,6 +211,8 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
     // Load each shader file, compile, and place into the correct vector.
     for (size_t i = 0; i < filename_count; ++i) {
         const char* f = filenames[i];
+        fprintf(stderr, "Loading shader %s\n", f);
+
         std::string source = read_shader_source(f);
         const char* source_c_str = source.c_str();
         GLuint id = 0;
@@ -236,7 +238,6 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
             panic(f + std::string(" should end in .frag or .geom or .vert or .comp"));
         }
         glShaderSource(id, 1, &source_c_str, nullptr);
-        fprintf(stderr, "shader id=%i\n", int(id));
 
         PANIC_IF_GL_ERROR;
 
@@ -292,6 +293,7 @@ inline GLuint make_program(const char* const* filenames, size_t filename_count)
         panic("Shader link error");
     }
     PANIC_IF_GL_ERROR;
+    fprintf(stderr, "program id=%i\n", int(program_id));
     return program_id;
 }
 

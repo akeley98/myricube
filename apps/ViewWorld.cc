@@ -3,31 +3,24 @@
 
 #include <stdlib.h>
 
+#include "EnvVar.hh"
+
 namespace myricube {
 
 class ViewWorld : public App
 {
     VoxelWorld world { get_world_filename() };
 
-#ifdef MYRICUBE_WINDOWS
-    static const wchar_t* get_world_filename()
+    static const filename_string get_world_filename()
     {
-        const wchar_t* result = _wgetenv(L"myricube_world");
-        if (!result) {
-            panic("Missing myricube_world environment variable.");
+        EnvVarFilename env("myricube_world", "");
+        filename_string result = env;
+        if (result.empty()) {
+            throw std::runtime_error(
+                "Empty or missing myricube_world environment variable");
         }
         return result;
     }
-#else
-    static const char* get_world_filename()
-    {
-        const char* result = getenv("myricube_world");
-        if (!result) {
-            panic("Missing myricube_world environment variable.");
-        }
-        return result;
-    }
-#endif
 
   public:
     VoxelWorld& update(float) override
