@@ -4,8 +4,15 @@
 import sys
 import os
 import ctypes
+import subprocess
+
 file_dir = os.path.split(__file__)[0]
-lib = ctypes.cdll.LoadLibrary(os.path.join(file_dir, "./libmyricube-cvoxel.so"))
+
+if os.name == "nt":
+    lib_name = "./windows64/myricube-cvoxel.dll"
+else:
+    lib_name = "./libmyricube-cvoxel.so"
+lib = ctypes.cdll.LoadLibrary(os.path.join(file_dir, lib_name))
 
 if len(sys.argv) != 2: raise Exception("Need 1 cmd line arg: world filename")
 world_filename = sys.argv[1]
@@ -48,10 +55,11 @@ def zholes(x0, y0, z0, x1, y1, z1, voxel32_0, voxel32_1):
 # Launch myricube to view the current world.
 os.environ["myricube_app"] = "ViewWorld"
 os.environ["myricube_world"] = world_filename
-pid = os.fork()
-if pid == 0:
-    myricube_bin = os.path.join(file_dir, "./myricube-bin")
-    os.execvp(myricube_bin, (myricube_bin,))
+if os.name == "nt":
+    myricube_bin = os.path.join(file_dir, "./windows64/myricube.exe")
+else:
+    myricube_bin = os.path.join(file_dir, "./myricube")
+proc = subprocess.Popen([myricube_bin])
 
 # Launch demo if myricube_py_demo environment variable is set to nonzero value.
 do_demo = False
@@ -138,5 +146,5 @@ if do_demo:
                     # You don't have to worry about this.  This is
                     # just to get the demo to exit cleanly when the
                     # myricube window is closed.
-                    pid, status = os.waitpid(pid, os.WNOHANG)
-                    if pid != 0: sys.exit(0)
+                    if proc.poll() is not None:
+                        sys.exit(0)
