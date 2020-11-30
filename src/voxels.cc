@@ -148,6 +148,12 @@ WorldHandle::WorldHandle(const filename_string& arg)
 {
     auto on_bad_filename = [&arg]
     {
+#ifdef MYRICUBE_WINDOWS
+        fprintf(stderr, "Got bad filename: '%ls'\n", arg.c_str());
+        for (size_t i = 0; i < arg.size(); ++i) {
+            fprintf(stderr, "%i: %c\n", int(i), int(arg[i]));
+        }
+#endif
         throw std::runtime_error("Expected world file name to be "
             + std::string(world_filename) + " or end in /"
 #ifndef MYRICUBE_WINDOWS
