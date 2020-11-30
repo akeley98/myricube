@@ -23,7 +23,7 @@
 #include "../myricube-data/vk/PushConstant.glsl"
 
 #ifdef MYRICUBE_WINDOWS
-#include <Synchapi.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
