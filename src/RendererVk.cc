@@ -726,6 +726,19 @@ struct Framebuffers
 
 
 
+// My lord, such a ridiculous amount of pointers just to specify
+// dynamic viewport/scissors.
+std::array<VkDynamicState, 2> dynamic_state_array {
+    VK_DYNAMIC_STATE_VIEWPORT,
+    VK_DYNAMIC_STATE_SCISSOR };
+
+const VkPipelineDynamicStateCreateInfo dynamic_state {
+    VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+    nullptr,
+    0,
+    dynamic_state_array.size(),
+    dynamic_state_array.data() };
+
 // Dynamic viewport/scissor pipeline for mesh rendering. All we really
 // have to do here is load the vert/frag shader and hook up the
 // instanced voxels array. Everything else is just endless
@@ -868,7 +881,7 @@ struct MeshPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
+        pipelineInfo.flags = 0;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -878,6 +891,7 @@ struct MeshPipeline
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamic_state;
         pipelineInfo.layout = layout;
         pipelineInfo.renderPass = render_pass;
         pipelineInfo.subpass = 0;
@@ -1083,7 +1097,7 @@ struct RaycastPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
+        pipelineInfo.flags = 0;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -1093,6 +1107,7 @@ struct RaycastPipeline
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamic_state;
         pipelineInfo.layout = pipeline_layout;
         pipelineInfo.renderPass = render_pass;
         pipelineInfo.subpass = 0;
@@ -1246,7 +1261,7 @@ struct BackgroundPipeline
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.flags = VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
+        pipelineInfo.flags = 0;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -1256,6 +1271,7 @@ struct BackgroundPipeline
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamic_state;
         pipelineInfo.layout = layout;
         pipelineInfo.renderPass = render_pass;
         pipelineInfo.subpass = 0;
