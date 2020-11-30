@@ -220,7 +220,7 @@ class SyncCamera
         frame_y = y;
     }
 
-    void get_window_size(int* x=nullptr, int* y=nullptr)
+    void get_framebuffer_size(int* x=nullptr, int* y=nullptr)
     {
         std::lock_guard guard(camera_mutex);
         if (x) *x = frame_x;
@@ -316,17 +316,28 @@ class SyncCamera
                                             t.eye_residue + forward_normal_vector,
                                             glm::vec3(0, 1, 0));
 
+        // HACK: frame_x, frame_y may be 0 if minimized on Windows,
+        // avoid NaN poisoning (fires assert in glm). Really, this
+        // should not be called when minimized, but, for now fixing
+        // this is too much work. (This is caused by mucky callback
+        // design from ye olden days of Myricube).
+        //
+        // TODO see if this can be improved.
+        const float xy_ratio =
+            float(frame_x == 0 ? 1 : frame_x) /
+            float(frame_y == 0 ? 1 : frame_y);
+
         if (OpenGL) {
             t.projection_matrix = glm::perspectiveRH_NO(
                 float(fovy_radians),
-                float(frame_x) / frame_y,
+                xy_ratio,
                 float(near_plane),
                 float(far_plane));
         }
         else {
             t.projection_matrix = glm::perspectiveRH_ZO(
                 float(fovy_radians),
-                float(frame_x) / frame_y,
+                xy_ratio,
                 float(near_plane),
                 float(far_plane));
             t.projection_matrix[1][1] *= -1.0f;

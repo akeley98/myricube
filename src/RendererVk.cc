@@ -22,6 +22,12 @@
 
 #include "../myricube-data/vk/PushConstant.glsl"
 
+#ifdef MYRICUBE_WINDOWS
+#include <Synchapi.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace myricube;
 using namespace vkdo;
 
@@ -1632,17 +1638,34 @@ struct RendererVk :
     void begin_frame() override
     {
         // Begin the frame, recreating the swap chain (hidden in
-        // beginFrame) and framebuffers if needed. This converts the
-        // GLFW window size to the actual framebuffer size (might
-        // differ due to lag, etc.)
+        // beginFrame) and framebuffers if needed. Pause until
+        // glfw gives nonzero framebuffer size (i.e. not minimized).
+        //
+        // The &width/&height converts the GLFW framebuffer size to
+        // the actual framebuffer size (might differ due to lag, etc.)
+        // THIS DOES HAPPEN _rarely_ IN PRACTICE; hard to debug!
         int glfw_width, glfw_height;
-        glfwGetFramebufferSize(glfw_surface.p_window, &glfw_width, &glfw_height);
+        while (1) {
+            glfwGetFramebufferSize(
+                glfw_surface.p_window, &glfw_width, &glfw_height);
+            if (glfw_width != 0 and glfw_height != 0) break;
+            #ifdef MYRICUBE_WINDOWS
+                Sleep(20);
+            #else
+                usleep(20000);
+            #endif
+        }
         width = uint32_t(glfw_width), height = uint32_t(glfw_height);
         frame_manager.beginFrame(
             &frame_cmd_buffer,
             &current_swap_image,
             &width, &height);
         framebuffers.recreate_now_if_needed(frame_manager.getSwapChain());
+
+        // TODO Camera perspective transform is computed from the
+        // frame_x/frame_y of SyncCamera, may be out-of-date by now.
+        // This is hard to fix in light of shared code with the OpenGL
+        // implementation; fortunately, this is only a cosmetic bug.
 
         VkClearColorValue clear_color;
         clear_color.float32[0] = 0.0f;
