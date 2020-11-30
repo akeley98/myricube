@@ -32,7 +32,7 @@ myricube-gl.exe: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
 	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) $(W64_OPTIONS) -o myricube-gl.exe
 
 myricube-cvoxel.dll: $(LIBOBJS)
-	$(CXX) $(LIBOBJS) -shared -o myricube-cvoxel.dll
+	$(CXX) $(LIBOBJS) -municode -static -shared -o myricube-cvoxel.dll
 
 # Rebuild vulkan shaders every time for now due to no method to track
 # include dependencies. TODO share this with other Makefile?
