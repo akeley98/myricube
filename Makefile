@@ -1,7 +1,7 @@
 default: myricube-bin
 	./myricube
 
-CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm -I vk-helpers
+CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm -I vk-helpers -I vk-shaders
 CFLAGS=  -Wall -Wextra -Wno-missing-field-initializers -O3 -g -fPIC
 CXXFLAGS=$(CFLAGS) -std=c++17
 
@@ -14,33 +14,38 @@ glfw-cmake:
 glfw-build/src/libglfw3.a: glfw-cmake
 	cd glfw-build && $(MAKE)
 
-myricube-windows:
-	cd windows64 && $(MAKE)
-
-LIBOBJS=cckiss/src/cvoxel.cc.o cckiss/src/voxels.cc.o
 libmyricube-cvoxel.so: $(LIBOBJS)
 	$(CXX) $(LIBOBJS) -shared -o libmyricube-cvoxel.so
 
 all: myricube-bin myricube-windows
 
-myricube-bin:  $(OBJS) $(GL_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX) $(OBJS) $(GL_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-bin
+# A bit of a hack: to make distribution easier, I generate a C++
+# source file that embeds the compiled SPIR-V shaders. This has to
+# happen strictly before the main C++ compiler runs. The binaries that
+# use Vulkan have this compile-vk-shaders as a dependency, and split
+# actual C++ compiling to a separate subsequent step.
+compile-vk-shaders:
+	cd vk-shaders && $(MAKE)
 
-myricube-vk-bin: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) vk-shaders
-	$(CXX)   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-vk-bin
+myricube-bin: compile-vk-shaders
+	$(MAKE) link-myricube-bin
+
+link-myricube-bin:  $(OBJS) $(GL_OBJS) $(VK_OBJS)
+	$(CXX)      $(OBJS) $(GL_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-bin
+
+myricube-vk-bin: compile-vk-shaders
+	$(MAKE) link-myricube-vk-bin
+
+link-myricube-vk-bin: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS)
+	$(CXX)        $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) -ldl -lpthread -lvulkan -o myricube-vk-bin
 
 myricube-gl-bin: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
 	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) -ldl -lpthread -o myricube-gl-bin
 
-# Rebuild vulkan shaders every time for now due to no method to track
-# include dependencies.
-vk-shaders:
-	glslangValidator myricube-data/vk/mesh.vert -V -o myricube-data/vk/mesh.vert.spv
-	glslangValidator myricube-data/vk/mesh.frag -V -o myricube-data/vk/mesh.frag.spv
-	glslangValidator myricube-data/vk/raycast.vert -V -o myricube-data/vk/raycast.vert.spv
-	glslangValidator myricube-data/vk/raycast.frag -V -o myricube-data/vk/raycast.frag.spv
-	glslangValidator myricube-data/vk/background.vert -V -o myricube-data/vk/background.vert.spv
-	glslangValidator myricube-data/vk/background.frag -V -o myricube-data/vk/background.frag.spv
+myricube-windows: compile-vk-shaders
+	cd windows64 && $(MAKE)
+
+
 
 py: libmyricube-cvoxel.so myricube-bin
 	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"

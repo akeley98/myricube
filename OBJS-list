@@ -33,6 +33,7 @@ VK_DUMMY_OBJS=cckiss/src/DummyVk.cc.o
 
 # Objects only needed for Vulkan.
 VK_OBJS=cckiss/src/RendererVk.cc.o \
+        cckiss/vk-shaders/vk-shaders.cc.o \
         cckiss/vk-helpers/nvh/nvprint.cpp.o \
         cckiss/vk-helpers/nvvk/context_vk.cpp.o \
         cckiss/vk-helpers/nvvk/debug_util_vk.cpp.o \

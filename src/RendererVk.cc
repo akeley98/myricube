@@ -19,8 +19,9 @@
 #include "nvvk/context_vk.hpp"
 #include "EnvVar.hh"
 #include "FrameManager.hpp"
+#include "vk-shaders.hh"
 
-#include "../myricube-data/vk/PushConstant.glsl"
+#include "PushConstant.glsl"
 
 #ifdef MYRICUBE_WINDOWS
 #include <windows.h>
@@ -379,51 +380,7 @@ struct ScopedRenderPass
 
 
 
-// camelCase functions copied with some modifications from
-// vulkan-tutorial.com; they're mostly exempt from my 80-column limit
-// for now.
-std::vector<char> readFile(const filename_string& filename)
-{
-#ifdef MYRICUBE_WINDOWS
-    std::string ascii_filename;
-    ascii_filename.reserve(filename.size());
-    for (filename_char c : filename) {
-        if (c <= 127) ascii_filename.push_back(char(c));
-        else throw std::runtime_error(
-            "TODO: support non-ASCII Vulkan shader path"
-            " (call me and complain)");
-        // I should just switch to _wfopen.
-    }
-#else
-    const std::string& ascii_filename = filename;
-#endif
-
-    std::ifstream file(ascii_filename, std::ios::ate | std::ios::binary);
-
-    if (!file.is_open()) {
-        const char* err = strerror(errno);
-        #ifdef MYRICUBE_WINDOWS
-            fprintf(stderr,
-                "Failed to open file: %ls (%s)\n", filename.c_str(), err);
-            throw std::runtime_error("Failed to open file");
-        #else
-            throw std::runtime_error("failed to open file: " + filename
-                + " (" + err + ")");
-        #endif
-    }
-
-    size_t fileSize = (size_t) file.tellg();
-    std::vector<char> buffer(fileSize);
-
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-
-    file.close();
-
-    return buffer;
-}
-
-VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code)
+VkShaderModule createShaderModule(VkDevice device, const std::vector<unsigned char>& code)
 {
     VkShaderModuleCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -801,8 +758,8 @@ struct MeshPipeline
 
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
-        auto vertShaderCode = readFile(expand_filename("vk/mesh.vert.spv"));
-        auto fragShaderCode = readFile(expand_filename("vk/mesh.frag.spv"));
+        const std::vector<unsigned char>& vertShaderCode = mesh_vert_spv;
+        const std::vector<unsigned char>& fragShaderCode = mesh_frag_spv;
 
         VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
@@ -1016,8 +973,8 @@ struct RaycastPipeline
         NVVK_CHECK(vkCreatePipelineLayout(
             device, &pipelineLayoutInfo, nullptr, &pipeline_layout));
 
-        auto vertShaderCode = readFile(expand_filename("vk/raycast.vert.spv"));
-        auto fragShaderCode = readFile(expand_filename("vk/raycast.frag.spv"));
+        const std::vector<unsigned char>& vertShaderCode = raycast_vert_spv;
+        const std::vector<unsigned char>& fragShaderCode = raycast_frag_spv;
 
         VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
@@ -1196,8 +1153,8 @@ struct BackgroundPipeline
 
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
-        auto vertShaderCode = readFile(expand_filename("vk/background.vert.spv"));
-        auto fragShaderCode = readFile(expand_filename("vk/background.frag.spv"));
+        const std::vector<unsigned char>& vertShaderCode = background_vert_spv;
+        const std::vector<unsigned char>& fragShaderCode = background_frag_spv;
 
         VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
