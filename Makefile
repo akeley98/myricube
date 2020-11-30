@@ -1,4 +1,4 @@
-default: myricube-bin
+default: myricube-gl-bin
 	./myricube
 
 CPPFLAGS=-I glfw/include -I ./glad/include -I include -I glm -I vk-helpers -I vk-shaders
@@ -47,9 +47,9 @@ myricube-windows: compile-vk-shaders
 
 
 
-py: libmyricube-cvoxel.so myricube-bin
+py: libmyricube-cvoxel.so myricube-gl-bin
 	echo "NOTE: run './iMyricube.py [your-directory]' to change which world"
 	python3 -i iMyricube.py myricube-data/PyWorld/
 
-py-demo: libmyricube-cvoxel.so myricube-bin
+py-demo: libmyricube-cvoxel.so myricube-gl-bin
 	myricube_py_demo=1 python3 iMyricube.py myricube-data/PyDemoWorld/

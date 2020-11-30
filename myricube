@@ -4,4 +4,13 @@ FILE=$(readlink -fv "$0")
 export vblank_mode=${vblank_mode:-00}
 export __GL_SYNC_TO_VBLANK=${__GL_SYNC_TO_VBLANK:-0}
 
-"${FILE}-bin" "$@" || sleep 1000000
+# Prefer main myricube build
+if test -e "${FILE}-bin"; then
+    "${FILE}-bin" "$@" || sleep 1000000
+# Then Vulkan-only build
+elif test -e "${FILE}-vk-bin"; then
+    "${FILE}-vk-bin" "$@" || sleep 1000000
+# Then OpenGL-only build
+else
+    "${FILE}-gl-bin" "$@" || sleep 1000000
+fi

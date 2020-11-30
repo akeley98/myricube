@@ -57,7 +57,10 @@ def zholes(x0, y0, z0, x1, y1, z1, voxel32_0, voxel32_1):
 os.environ["myricube_app"] = "ViewWorld"
 os.environ["myricube_world"] = world_filename
 if os.name == "nt":
-    myricube_bin = os.path.join(file_dir, "./windows64/myricube.exe")
+    if os.environ.get("myricube_api", "vk") == "vk":
+        myricube_bin = os.path.join(file_dir, "./windows64/myricube.exe")
+    else:
+        myricube_bin = os.path.join(file_dir, "./windows64/myricube-gl.exe")
 else:
     myricube_bin = os.path.join(file_dir, "./myricube")
 proc = subprocess.Popen([myricube_bin])
