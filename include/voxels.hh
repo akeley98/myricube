@@ -44,9 +44,6 @@ const char world_filename[] = "world.myricube";
 
 constexpr uint64_t chunk_group_base_magic_number = 587569177;
 
-constexpr uint64_t renderer_mesh_dirty_flag = uint64_t(1) << 63;
-constexpr uint64_t renderer_raycast_dirty_flag = uint64_t(1) << 62;
-
 // I changed the voxel endianness (red_shift, green_shift, blue_shift)
 // partway through development, so I need this bit in the magic number
 // to detect files in the old endianness.
@@ -179,19 +176,22 @@ struct BinChunkGroupT
         new_endian_magic;
 
     uint64_t magic_number = expected_magic;
-    uint64_t reserved[510] = { 0 };
+    uint64_t reserved[509] = { 0 };
 
-    // Set to ~uint64_t(0) _after_ making modifications, or call
-    // mark_dirty(). You can also set it periodically while doing
-    // modifications to speed-up the renderer's view of it.
+    // Increment _after_ making modifications, or call
+    // mark_dirty(). You can also increment it periodically while
+    // doing modifications to speed-up the renderer's view of it.
     //
     // If this chunk group is newly created on disk, remember to set
     // the corresponding BinGroupBitfield bit as well.
-    mutable std::atomic<uint64_t> dirty_flags = { 0 };
+    mutable std::atomic<uint64_t> revision_number = { 0 };
+
+    // Legacy binary compatibility, may be modified by old versions.
+    uint64_t unused_dirty_flags = { 0 };
 
     void mark_dirty() const
     {
-        dirty_flags.store(~uint64_t(0));
+        revision_number++;
     }
 
     // Chunks within this chunk group, in [z][y][x] order.

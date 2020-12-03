@@ -369,7 +369,16 @@ class RendererLogic : public RendererBase
   private:
     // 3D cache of mesh/raycast entries (one entry per chunk group).
     // Really all this is just to dispatch the real work to the
-    // abstract functions: see AsyncCache for actual implementation details.
+    // abstract functions: see AsyncCache for actual implementation
+    // details.
+    //
+    // Each entry needs to be paired with a revision number so we can
+    // detect out-of-date entries (that need to be re-copied from disk
+    // due to changes). These revision numbers are automatically
+    // filled-in here BEFORE the copy is done (this ensures an
+    // out-of-date condition will be detected if the data is modified
+    // while being copied-in, as long as the mutator correctly
+    // increments revision_number _after_ making changes).
     template <typename StagingT, typename EntryT>
     struct StoreT : public AsyncCache<StagingT, EntryT>
     {
@@ -385,9 +394,11 @@ class RendererLogic : public RendererBase
         }
 
         // Read from disk/memory data for the given chunk group and
-        // pass it to the function filling a staging buffer.
-        // We promised to fix the dirty flag.
-        bool stage(StagingT* staging, glm::ivec3 group_coord) override
+        // pass it to the function filling a staging buffer. We also
+        // report the revision number before the load, as specified.
+        bool stage(StagingT* p_staging,
+                   glm::ivec3 group_coord,
+                   uint64_t* p_revision) override
         {
             thread_local std::unique_ptr<ViewWorldCache> world_cache_ptr;
             if (world_cache_ptr == nullptr) {
@@ -398,7 +409,8 @@ class RendererLogic : public RendererBase
             const BinChunkGroup* group_ptr = entry.chunk_group_ptr.get();
             if (group_ptr == nullptr) return false;
 
-            owner->worker_stage(staging, group_ptr);
+            *p_revision = group_ptr->revision_number.load();
+            owner->worker_stage(p_staging, group_ptr);
             return true;
         }
 
@@ -466,18 +478,19 @@ class RendererLogic : public RendererBase
             // using the mesh renderer.
             if (cull or min_squared_dist >= squared_thresh) continue;
 
-            // Lookup the needed entry; scheduling if missing or dirty.
-            // Draw the group if an entry for it is found.
-            MeshEntry* entry = store.request_entry(group_coord);
+            // Lookup the needed entry; schedule loading it in if
+            // missing or out-of-date.  Draw the group if an entry for
+            // it is found.
+            uint64_t revision;
+            MeshEntry* entry = store.request_entry(group_coord, &revision);
 
             if (entry == nullptr) {
                 store.enqueue(group_coord);
             }
             else {
-                auto bit = renderer_mesh_dirty_flag;
-                if (current_chunk_group->dirty_flags.load() & bit) {
+                auto latest = current_chunk_group->revision_number.load();
+                if (revision != latest) {
                     store.enqueue(group_coord);
-                    current_chunk_group->dirty_flags &= ~bit;
                 }
                 entries.emplace_back(entry, group_coord);
             }
@@ -564,11 +577,13 @@ class RendererLogic : public RendererBase
         raycast_store->swap_in_from_staging(80);
 
         // Now collect all the RaycastEntry objects we will draw,
-        // scheduling loading new/dirty entries as we go along.
+        // scheduling loading new/out-of-date entries as we go along.
         std::vector<std::pair<RaycastEntry*, glm::ivec3>> entries;
         for (auto pair : group_coord_by_depth) {
             glm::ivec3 group_coord = pair.second;
-            RaycastEntry* entry = raycast_store->request_entry(group_coord);
+            uint64_t revision;
+            RaycastEntry* entry =
+                raycast_store->request_entry(group_coord, &revision);
 
             if (entry == nullptr) {
                 if (remaining_new_chunk_groups_allowed-- > 0) {
@@ -580,10 +595,11 @@ class RendererLogic : public RendererBase
 
                 set_current_chunk_group(group_coord);
                 assert(current_chunk_group != nullptr);
-                auto bit = renderer_raycast_dirty_flag;
-                if ((current_chunk_group->dirty_flags.load() & bit)) {
+
+                auto latest = current_chunk_group->revision_number.load();
+                if (revision != latest) {
                     store.enqueue(group_coord);
-                    current_chunk_group->dirty_flags &= ~bit;
+                    // TODO: This is O(n^2), enqueue has linear search.
                 }
             }
         }

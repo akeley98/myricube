@@ -10,10 +10,12 @@
 //    the cache (or updated). The queue prevents starvation if there
 //    is heavy pressure to add new entries. [enqueue]
 //
-// 3. Loading new requested entries in the background using worker
-//    threads.  This requires "staging buffers" separate from the
-//    main cache, so that partially-loaded entries are not visible.
-//    [StagingT]
+// 3. Loading new requested chunk group entries in the background
+//    using worker threads.  This requires "staging buffers" separate
+//    from the main cache, so that partially-loaded entries are not
+//    visible.  [StagingT]. The worker threads must report the
+//    revision number of loaded chunk group, which is eventually
+//    stored in the loaded entry.
 //
 // 4. Tracking the number of frames elapsed, and recording the last
 //    frame in which an entry was used. [Call begin_frame at the start
@@ -70,12 +72,20 @@ struct AsyncCacheArgs
 // However, this is not usable on its own: the user must derive and
 // implement the stage and swap_in functions.
 //
-// bool stage(StagingT*, glm::ivec3)
+// bool stage(StagingT*, glm::ivec3, uint64_t*)
 //
 //    Function run on the worker threads. Takes an ivec3 coordinate
 //    and fills in the given StagingT with the data corresponding to
-//    said coordinate. Returns a success flag; the entry is silently
-//    discarded if failure is reported.
+//    said coordinate. Returns a success bool, and, if successful,
+//    stores the loaded chunk group's revision number through the
+//    uint64_t* pointer. The entry is silently discarded if failure is
+//    reported.
+//
+//    NOTE: The stored revision number must be the number the chunk
+//    group had _before_ the actual load was done; this ensures
+//    modifications performed concurrently with the load will
+//    eventually be detected (as long as the modifier is also updating
+//    the revision number _after_ making modifications).
 //
 // bool swap_in(StagingT*, std::unique_ptr<EntryT>*)
 //
@@ -101,6 +111,7 @@ class AsyncCache
         StagingT data;
         glm::ivec3 coord;
         std::atomic<int> state = { staging_unused };
+        uint64_t revision_number;
     };
     std::unique_ptr<StagingBuffer[]> staging_buffers;
     size_t staging_buffer_count;
@@ -133,6 +144,8 @@ class AsyncCache
 
         // Consider exception safety before replacing unique_ptr.
         std::unique_ptr<EntryT> entry_ptr = nullptr;
+
+        uint64_t revision_number;
 
         bool matches_coord(glm::ivec3 coord_arg) const
         {
@@ -245,7 +258,11 @@ class AsyncCache
                 if (buffer->state == staging_unprocessed) {
                     if (thread_exit_flag) return;
 
-                    bool success = stage(&buffer->data, buffer->coord);
+                    bool success = stage(
+                        &buffer->data,
+                        buffer->coord,
+                        &buffer->revision_number);
+                    // Next line makes staging buffer visible to main thread!
                     buffer->state = success
                                   ? staging_ready_to_swap : staging_unused;
                     ++processed_count;
@@ -482,6 +499,7 @@ class AsyncCache
                 }
                 else {
                     buffer.state = staging_unused;
+                    extra_slot.revision_number = buffer.revision_number;
 
                     // This shouldn't emit any exceptions.
                     // Mark the slot with the coordinate and frame number,
@@ -517,10 +535,16 @@ class AsyncCache
     // Search for the cache entry with the given 3D
     // coordinate. Returns nullptr if not in the cache, or the entry
     // stores a null pointer.
-    EntryT* request_entry(glm::ivec3 coord)
+    //
+    // If the entry is found, return its revision number through *out_revision.
+    EntryT* request_entry(glm::ivec3 coord, uint64_t* out_revision=nullptr)
     {
         CacheSlot* cache_slot = read_access_slot(coord);
-        return cache_slot ? cache_slot->entry_ptr.get() : nullptr;
+        EntryT* entry = cache_slot ? cache_slot->entry_ptr.get() : nullptr;
+        if (entry != nullptr and out_revision != nullptr) {
+            *out_revision = cache_slot->revision_number;
+        }
+        return entry;
     };
 
     void debug_dump()
@@ -553,7 +577,7 @@ class AsyncCache
     }
 
   protected:
-    virtual bool stage(StagingT*, glm::ivec3) = 0;
+    virtual bool stage(StagingT*, glm::ivec3, uint64_t*) = 0;
     virtual bool swap_in(StagingT*, std::unique_ptr<EntryT>*) = 0;
 };
 
