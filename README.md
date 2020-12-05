@@ -147,3 +147,5 @@ a nonzero value enables auto-fixing the old format to new.
 
 `myricube_world` determines the file to load for the `ViewWorld` app.
 You probably don't have to worry about this.
+
+![Myricube Congestion app](./screenshots/Congestion.png)
