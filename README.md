@@ -104,7 +104,8 @@ Run this demo with `make py-demo` (Linux) or `windows64/pipes.bat`
 The older way to play with Myricube is to write C++ apps, which are
 bits of code that generate an alien planet or simulate cars looping on
 the surface of a cube forever or otherwise mess around with the voxel
-world. This doesn't work so good on Windows.
+world. This doesn't work so good on Windows (existing apps work,
+but there's no system to compile new apps natively on Windows).
 
 Look at `include/app.hh` and `OBJS-list` to start. You can select an
 app using the `myricube_app` environment variable,
