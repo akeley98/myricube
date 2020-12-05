@@ -17,7 +17,7 @@ glfw-build/src/libglfw3.a: glfw-cmake
 libmyricube-cvoxel.so: $(LIBOBJS)
 	$(CXX) $(LIBOBJS) -shared -o libmyricube-cvoxel.so
 
-all: myricube-bin myricube-windows
+all: myricube-bin myricube-windows libmyricube-cvoxel.so
 
 # A bit of a hack: to make distribution easier, I generate a C++
 # source file that embeds the compiled SPIR-V shaders. This has to
