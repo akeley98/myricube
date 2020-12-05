@@ -67,7 +67,7 @@ and `f`,`b` to toggle fog/fog color.
 Myricube supports loading and storing voxel models (worlds) from disk.
 To do this, run `./myricube` (Linux) or one of the myricube `.exe` files
 with the name of a directory as the argument. Make sure the directory
-name ends with a trailing `/` (or `\\` on Windows). This creates a
+name ends with a trailing `/` (or `\` on Windows). This creates a
 `world.myricube` file in the directory (if it already exists, it must
 either be empty or have been created earlier by Myricube).
 
