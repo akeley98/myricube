@@ -3,9 +3,9 @@
 ## Myricube – Hybrid Mesh/Raycasting Voxel Renderer
 
 This project is a work-in-progress. I'm just trying to render as many
-voxels as I can, and learning modern graphics APIs along the way.  A
-technical essay on my strategy for this project is in
-`src/myricube.cc`.
+voxels as I can (maximize render distance), and learn modern graphics
+APIs along the way.  A technical essay on my strategy for this project
+is in `src/myricube.cc`.
 
 ## Windows 64-bit
 
