@@ -631,8 +631,27 @@ int Main(std::vector<filename_string> args)
 
     // Instantiate the app (which owns the VoxelWorld to render) based
     // on the user's myricube_app environment variable, if any.
+    // If no app is provided, either load the RandomWalk app if no
+    // command line arguments were provided, or the ViewWorld app
+    // with the specified world file if one argument was provided.
     const char* app_name = getenv("myricube_app");
-    if (app_name == nullptr) app_name = "RandomWalk";
+    if (app_name == nullptr) {
+        if (args.size() == 1) {
+            app_name = "RandomWalk";
+        }
+        else if (args.size() == 2) {
+            app_name = "ViewWorld";
+            #ifdef MYRICUBE_WINDOWS
+                _wputenv((L"myricube_world=" + args[1]).c_str());
+            #else
+                setenv("myricube_world", args[1].c_str(), true);
+            #endif
+        }
+        else {
+            throw std::runtime_error("If myricube_app is not defined, "
+                "then 0 or 1 command line arguments expected.");
+        }
+    }
     std::unique_ptr<App> app(new_named_app(app_name));
     if (app == nullptr) {
         fprintf(stderr, "Known app names:\n");
