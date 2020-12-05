@@ -13,10 +13,10 @@ You need OpenGL 4.5+ or Vulkan 1.1+ graphics drivers for this to
 work. Download the project as a zip, unzip it, and run the precompiled
 exe file, either
 
-`myricube-master/myricube-master/windows64/myricube.exe` for Vulkan 1.1
+`windows64/myricube.exe` for Vulkan 1.1
 (recommended) or
 
-`myricube-master/myricube-master/windows64/myricube.exe` for OpenGL 4.5
+`windows64/myricube-gl.exe` for OpenGL 4.5
 
 I have basically zero experience with Windows programming, so if the
 exe doesn't work and you feel nice, file an issue giving a description
