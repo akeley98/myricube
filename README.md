@@ -1,4 +1,4 @@
-![myricube screenshot](./screenshot.png)
+![myricube screenshot](./screenshots/RandomWalk.png)
 
 ## Myricube – Hybrid Mesh/Raycasting Voxel Renderer
 
@@ -40,6 +40,9 @@ as the Windows version just has the shaders baked into the executable,
 but, since I'm doing actual development on Linux, I don't want
 intermediate files polluting the repository so too bad.
 
+Note that `./myricube` automatically prefers the Vulkan version if it
+has been built.
+
 ## Controls
 
 If you don't like these controls, look at `myricube-data/default-keybinds.txt`.
@@ -66,14 +69,17 @@ name ends with a trailing `/` (or `\\` on Windows). This creates a
 `world.myricube` file in the directory (if it already exists, it must
 either be empty or have been created earlier by Myricube).
 
-On Windows, you can also associate `.myricube` files with `myricube.exe`.
-Create new worlds by creating a new folder with an empty `world.myricube`.
+On Windows, you can also associate `.myricube` files with
+`myricube.exe` in explorer. Create new worlds by creating a new
+folder with an empty `world.myricube`.
 
 This is a little underwhelming for now as I haven't added a UI for
-Myricube. For now, I have a Python API (up next); you can use
+Myricube. Currently, I have a Python API (up next); you can use
 `./iMyricube.py` with a directory argument in order to open a world
 with a Python command line to edit them and a Myricube window to view
 them.
+
+![castle screenshot](./screenshots/StolenFromMarlon.png)
 
 ## Python API
 
@@ -86,6 +92,10 @@ line of `iMyricube.py` to see an example of this.
 
 Run this demo with `make py-demo` (Linux) or `windows64/pipes.bat`
 (Windows). This demo is inspired by the old Windows pipes screensaver.
+
+![iMyricube.py screenshot](./screenshots/iMyricube.png)
+
+![Pipes screensaver in Myricube](./screenshots/pipes.png)
 
 ## C++ Apps
 
@@ -100,6 +110,8 @@ e.g. `myricube_app=MarloPlanet ./myricube` generates my <!--
 brilliant, knockout GORGEOUS --> roommate Marlon's awesome Perlin
 noise cave planet. Look in the `apps` directory for more choices.
 
+![Marlon's Planet](./screenshots/MarloPlanet.png)
+
 ## Environment Variables
 
 For now you can change the behavior of Myricube with environment
@@ -110,23 +122,24 @@ documentation.
 core profile or `vk` for Vulkan 1.1. The Vulkan version seems to run
 faster but it's not 100% production quality, e.g. it falls flat on its
 face if an image format is missing, or if it runs out of GPU
-memory. Try the OpenGL version if the Vulkan version doesn't work.
+memory. Try the OpenGL version if the Vulkan version doesn't work
+or if you have low graphics memory.
 
-`myricube_app` selects which C++ app to run. By default, it runs the
-random walk app if no command line argument to Myricube is provided,
-or the `ViewWorld` app if one command line argument is provided.
-Interesting choices include `MarloPlanet`, Marlon's cave planet, which
-is generated in a background thread so you can see it built in real
-time it's SO COOL! Also `Congestion` is neat, it's a cellular automata
-game run on the surface of a 3D cube based on the
-Biham–Middleton–Levine traffic model.
+`myricube_app` selects which C++ app to run. If not specified,
+Myricube runs the `RandomWalk` app if no command line argument to
+Myricube is provided, or the `ViewWorld` app if one command line
+argument is provided.  Interesting choices include `MarloPlanet`,
+Marlon's cave planet, which is generated in a background thread so you
+can see it built in real time it's SO COOL! Also `Congestion` is neat,
+it's a cellular automata game run on the surface of a 3D cube based on
+the Biham–Middleton–Levine traffic model.
 
 `myricube_validation` determines whether Vulkan Validation Layers or
 OpenGL `glGetError` is enabled. `0` disables (default), nonzero
 enables.
 
 `myricube_endian_fix` is a real hack. The file format for worlds changed
-endian-ness through development, setting this environment variable to
+endian-ness through development. Setting this environment variable to
 a nonzero value enables auto-fixing the old format to new.
 
 `myricube_world` determines the file to load for the `ViewWorld` app.
