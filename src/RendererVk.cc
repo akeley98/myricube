@@ -932,7 +932,7 @@ struct RaycastPipeline
     // Borrowed pointer.
     VkDevice device;
 
-    static constexpr uint32_t pool_sets = 1024;
+    static constexpr uint32_t pool_sets = 59;
     static constexpr VkDescriptorPoolSize pool_size {
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         pool_sets };
@@ -1807,7 +1807,7 @@ struct RendererVk :
         }
 
         // Otherwise, we have to allocate a new block of buffers.
-        constexpr size_t block_size = 80;
+        constexpr size_t block_size = 23;
         memory_to_free.push_back(VK_NULL_HANDLE);
         unused_mesh_buffers.reserve(unused_mesh_buffers.size() + block_size);
 
@@ -1969,7 +1969,7 @@ struct RendererVk :
         }
         // Otherwise, we have to allocate a new block of buffers.
         else {
-            constexpr size_t block_size = 4096;
+            constexpr size_t block_size = 149;
             memory_to_free.push_back(VK_NULL_HANDLE);
             unused_aabb_buffers.reserve(
                 unused_aabb_buffers.size() + block_size);
@@ -1997,7 +1997,7 @@ struct RendererVk :
             unused_voxel_images.pop_back();
         }
         else {
-            constexpr size_t block_size = 256;
+            constexpr size_t block_size = 41;
             memory_to_free.push_back(VK_NULL_HANDLE);
             unused_voxel_images.reserve(
                 unused_voxel_images.size() + block_size);

@@ -24,12 +24,12 @@ class RenderThread;
 // Non-templatized base class for RendererLogic.
 class RendererBase
 {
+  protected:
     // Back pointer to the RenderThread that instantiated this
     // RendererLogic.
     RenderThread* const p_back = nullptr;
     friend class RenderThread;
 
-  protected:
     RendererBase(RenderThread* p_back_) : p_back(p_back_) { }
     virtual void draw_frame() = 0;
     virtual void destroy_stores() = 0;
@@ -55,6 +55,10 @@ class RenderThread
 {
     // Set to true when the render thread should exit its main loop.
     std::atomic<bool> thread_exit_flag{false};
+
+    // Set to true to request that the chunk group storage caches are
+    // invalidated. This flag is auto-reset when this is done.
+    std::atomic<bool> invalidate_storage_flag{false};
 
     // Atomically set by the renderer thread to report stats.
     std::atomic<double> atomic_fps{0};
@@ -112,6 +116,18 @@ class RenderThread
     double get_frame_time() const
     {
         return atomic_frame_time.load();
+    }
+
+    // Command the controlled render thread to discard and reload all
+    // chunk groups into its caches.
+    void invalidate_storage()
+    {
+        invalidate_storage_flag.store(true);
+    }
+
+    bool check_reset_invalidate_storage_flag()
+    {
+        return invalidate_storage_flag.exchange(false);
     }
 };
 

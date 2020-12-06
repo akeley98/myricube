@@ -576,6 +576,14 @@ class AsyncCache
         fprintf(stderr, "---------------\n");
     }
 
+    // Mark every cache slot as invalid.
+    void invalidate()
+    {
+        for (auto& slot : cache_slots) {
+            slot.valid = false;
+        }
+    }
+
   protected:
     virtual bool stage(StagingT*, glm::ivec3, uint64_t*) = 0;
     virtual bool swap_in(StagingT*, std::unique_ptr<EntryT>*) = 0;

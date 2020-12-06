@@ -119,6 +119,10 @@ bool ends_with_bin_or_exe(const filename_string& in)
 
 bool paused = false;
 
+// Used to allow a key command to cause MeshStore/RaycastStore in the
+// renderer to be reloaded.
+static RenderThread* p_render_thread = nullptr;
+
 void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
 {
     static std::shared_ptr<SyncCamera> camera = std::move(camera_arg);
@@ -330,6 +334,7 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
     };
     window.add_key_target("decrease_far_plane", decrease_far_plane);
 
+    // Target fragments feature not implemented at the moment.
     KeyTarget increase_target_fragments, decrease_target_fragments;
     constexpr int min_nonzero_fragments = 250000;
 
@@ -359,6 +364,21 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
     };
     window.add_key_target(
         "decrease_target_fragments", decrease_target_fragments);
+
+    KeyTarget unload_gpu_storage;
+    unload_gpu_storage.down = [&] (KeyArg arg) -> bool
+    {
+        if (!arg.repeat) {
+            if (p_render_thread == nullptr) {
+                fprintf(stderr, "p_render_thread NULL\n");
+            }
+            else {
+                p_render_thread->invalidate_storage();
+            }
+        }
+        return !arg.repeat;
+    };
+    window.add_key_target("unload_gpu_storage", unload_gpu_storage);
 }
 
 // Given the full path of a key binds file, parse it for key bindings
@@ -669,6 +689,7 @@ int Main(std::vector<filename_string> args)
     RenderArgs render_args { window_ptr, camera_ptr, handle };
     RenderThread renderer(
         use_OpenGL ? RendererGL_Factory : RendererVk_Factory, render_args);
+    p_render_thread = &renderer;
     camera_ptr->set_max_frame_new_chunk_groups(32);
 
     // Meanwhile main thread handles user input and runs the demonstration app.
