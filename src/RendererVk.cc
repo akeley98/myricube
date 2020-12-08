@@ -1334,6 +1334,10 @@ struct RendererVk :
 
     // Transfer-only queue. Command buffers submitted to are recorded
     // and submitted on the main thread.
+    //
+    // HACK: May be the same as main_queue on hardware without
+    // transfer-only or compute-only queue. Keep this in mind if I try
+    // to switch back to using a worker thread.
     VkQueue transfer_queue;
     uint32_t transfer_queue_family;
 
@@ -1447,11 +1451,29 @@ struct RendererVk :
         transfer_queue =        ctx.m_queueT;
         transfer_queue_family = ctx.m_queueT;
 
+        if (transfer_queue == VK_NULL_HANDLE) {
+            transfer_queue =        ctx.m_queueC;
+            transfer_queue_family = ctx.m_queueC;
+            fprintf(stderr, "Could not find transfer-only (DMA) queue\n");
+            fprintf(stderr, "Falling back on compute queue\n");
+        }
+
+        // HACK this means that transfer_queue and main_queue can be
+        // the same, which I warn in the transfer_queue declaration
+        // comment.
+        if (transfer_queue == VK_NULL_HANDLE) {
+            transfer_queue =        ctx.m_queueGCT;
+            transfer_queue_family = ctx.m_queueGCT;
+            fprintf(stderr, "That failed too (Intel you suck)\n");
+            fprintf(stderr, "Falling back on GCT queue\n");
+        }
+
         if (main_queue == VK_NULL_HANDLE) {
             throw std::runtime_error("Failed to find graphics+present queue");
         }
         if (transfer_queue == VK_NULL_HANDLE) {
-            throw std::runtime_error("Failed to find transfer-only queue");
+            throw std::runtime_error(
+                "Failed to find transfer-only queue");
         }
 
         // Since in principle the pre_frame_buffer could have commands
@@ -2168,6 +2190,9 @@ struct RendererVk :
         }
     }
 
+    static constexpr auto RaycastEntry_stage_bits =
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
     // Possibility 1 of swap_in RaycastStaging.
     void record_cmd(RaycastStaging* staging)
     {
@@ -2229,7 +2254,9 @@ struct RendererVk :
 
         // Transition layout to general layout and transfer ownership
         // to the main queue family (used for graphics and swap chain
-        // present).
+        // present). NOTE: might not be ownership transfer if
+        // transfer_queue is the same queue, hence I still need
+        // accurate usage bits.
         barrier = VkImageMemoryBarrier {
             VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             nullptr,
@@ -2244,7 +2271,7 @@ struct RendererVk :
         vkCmdPipelineBarrier(
             p_transfer_cmd_buffer->buffer,
             VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            RaycastEntry_stage_bits,
             0,
             0, nullptr,
             0, nullptr,
@@ -2287,25 +2314,29 @@ struct RendererVk :
         RaycastEntry& staged_entry = *staging->entry;
 
         // Transfer ownership from the transfer queue to the main queue.
-        VkImageMemoryBarrier barrier = VkImageMemoryBarrier {
-            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            nullptr,
-            VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_ACCESS_MEMORY_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_GENERAL,
-            transfer_queue_family,
-            main_queue_family,
-            staged_entry.voxels_image,
-            color_range };
-        vkCmdPipelineBarrier(
-            pre_frame_buffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-            0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier);
+        // Skip if the two queues are the same family (then exactly one
+        // queue barrier, the one in record_cmd, is needed).
+        if (transfer_queue_family != main_queue_family) {
+            VkImageMemoryBarrier barrier = VkImageMemoryBarrier {
+                VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                nullptr,
+                VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_ACCESS_MEMORY_READ_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_GENERAL,
+                transfer_queue_family,
+                main_queue_family,
+                staged_entry.voxels_image,
+                color_range };
+            vkCmdPipelineBarrier(
+                pre_frame_buffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                RaycastEntry_stage_bits,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier);
+        }
 
         // Swap into the main cache.
         std::swap(staging->entry, *p_uptr_entry);
