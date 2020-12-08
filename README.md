@@ -121,13 +121,6 @@ For now you can change the behavior of Myricube with environment
 variables. This is kinda hacky and subject to change and out-of-date
 documentation.
 
-`myricube_api` selects the graphics API, either `gl` for OpenGL 4.5
-core profile or `vk` for Vulkan 1.1. The Vulkan version seems to run
-faster but it's not 100% production quality, e.g. it falls flat on its
-face if an image format is missing, or if it runs out of GPU
-memory. Try the OpenGL version if the Vulkan version doesn't work
-or if you have low graphics memory.
-
 `myricube_app` selects which C++ app to run. If not specified,
 Myricube runs the `RandomWalk` app if no command line argument to
 Myricube is provided, or the `ViewWorld` app if one command line
@@ -136,6 +129,22 @@ Marlon's cave planet, which is generated in a background thread so you
 can see it built in real time it's SO COOL! Also `Congestion` is neat,
 it's a cellular automata game run on the surface of a 3D cube based on
 the Biham–Middleton–Levine traffic model.
+
+`myricube_api` selects the graphics API, either `gl` for OpenGL 4.5
+core profile or `vk` for Vulkan 1.1. The Vulkan version seems to run
+faster but it's not 100% production quality, e.g. it falls flat on its
+face if an image format is missing, or if it runs out of GPU
+memory. Try the OpenGL version if the Vulkan version doesn't work
+or if you have low graphics memory.
+
+Furthermore there are two OpenGL sub-versions, `glComp`, which uses
+compute shaders to upload voxel data, or `glTex`, which uses
+old-fashioned `glTexSubImage3D` and PBOs to upload data. The
+performance of `glTex` is pretty abysmal, unfortunately, it's the
+default on Windows due to bugs in Intel and AMD compute
+shaders. `glComp` is default on Linux when `gl` is chosen, where,
+fortunately, Mesa implements OpenGL drivers on behalf of AMD and
+Intel's lobotomised driver teams.
 
 `myricube_validation` determines whether Vulkan Validation Layers or
 OpenGL `glGetError` is enabled. `0` disables (default), nonzero

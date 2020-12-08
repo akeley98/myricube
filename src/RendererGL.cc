@@ -123,19 +123,19 @@ struct RaycastEntry
     AABBs* mapped_aabb = nullptr;
 
     // OpenGL name for the 3D voxels texture. 0 when not yet allocated.
-    GLuint texture_name_ = 0;
+    GLuint texture_name = 0;
 
     void bind_texture()
     {
-        assert(texture_name_ != 0);
-        glBindTexture(GL_TEXTURE_3D, texture_name_);
+        assert(texture_name != 0);
+        glBindTexture(GL_TEXTURE_3D, texture_name);
     }
 
     RaycastEntry()
     {
-        glCreateTextures(GL_TEXTURE_3D, 1, &texture_name_);
+        glCreateTextures(GL_TEXTURE_3D, 1, &texture_name);
 
-        glBindTexture(GL_TEXTURE_3D, texture_name_);
+        glBindTexture(GL_TEXTURE_3D, texture_name);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -165,8 +165,8 @@ struct RaycastEntry
         glDeleteBuffers(1, buffers);
         vbo_name = 0;
         mapped_aabb = nullptr;
-        glDeleteTextures(1, &texture_name_);
-        texture_name_ = 0;
+        glDeleteTextures(1, &texture_name);
+        texture_name = 0;
     }
 
     RaycastEntry(RaycastEntry&& other) = delete;
@@ -230,6 +230,7 @@ struct RaycastStaging
 
 namespace myricube {
 
+template <bool UseCompute = true> // See Raycast Renderer Implementation
 struct RendererGL :
     RendererLogic<MeshEntry, MeshStaging, RaycastEntry, RaycastStaging>
 {
@@ -468,6 +469,13 @@ struct RendererGL :
     // worker_stage, itself triggered by swap_in_from_staging in
     // RendererLogic) to give the compute shader time to finish. See
     // RaycastStaging::sync at time of writing.
+    //
+    // After-the-fact-hack: due to the incompetence of Intel and AMD,
+    // I can't use the Compute Shader method on their hardware and
+    // need to support an alternative path using old-fashioned
+    // glTexSubImage3D. This occurs if !UseCompute, in this case, the
+    // SSBO is instead a PBO. I'm implementing this while grumpy so
+    // I'm not correcting all documentation on this.
 
     GLuint raycast_program = 0;
     GLuint raycast_vao = 0;
@@ -644,67 +652,131 @@ struct RendererGL :
 
     // Swapping into the cache is done in two steps:
     //
+    // COMPUTE SHADER STRATEGY [UseCompute true]
+    //
     // 1. Dispatch the compute shader to transfer data from SSBO in
-    // the staging buffer to the texture in the cache entry.
+    //    the staging buffer to the texture in the cache entry.
     //
     // 2. Wait for that compute shader to finish, then swap into
-    // the cache.
+    //    the cache.
+    //
+    // glTexSubImage3D STRATEGY [UseCompute false]
+    //
+    // 1. Bind the "SSBO" as a PBO and use glTexSubImage3D to transfer
+    //    the PBO contents to the texture.
+    //
+    // 2. Still need to wait for glTex to finish to avoid race condition
+    //    on the persistent-mapped
     bool swap_in(RaycastStaging* staging,
                  std::unique_ptr<RaycastEntry>* p_uptr_entry) override
     {
-        if (raycast_staging_program_id == 0) {
-            raycast_staging_program_id = make_program( { "staging.comp" } );
-        }
-
         // Step 1
         if (staging->sync == nullptr) {
-            glUseProgram(raycast_staging_program_id);
-            // Hook up the SSBO binding to the SSBO index that will
-            // be used to deliver voxel data.
-            glShaderStorageBlockBinding(
-                raycast_staging_program_id,
-                chunk_group_voxels_program_index,
-                chunk_group_voxels_binding_index);
-            // Hook up the out_image to the correct image unit.
-            glUniform1i(staging_image_program_index, staging_image_unit);
-
-            // Bind the correct texture image.
-            RaycastEntry& entry = *staging->entry;
-
-            glBindBufferBase(
-                GL_SHADER_STORAGE_BUFFER,
-                chunk_group_voxels_binding_index,
-                staging->ssbo_name);
-            glBindImageTexture(
-                staging_image_unit,
-                entry.texture_name_,
-                0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
-
-            glDispatchCompute(1, 2, 2);
-            staging->sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-            assert(staging->sync != nullptr);
-            return false; // Not yet done.
+            // glTexSubImage3D STRATEGY
+            if (!UseCompute) {
+                return pbo_to_texture(staging);
+            }
+            // COMPUTE SHADER STRATEGY
+            else {
+                return dispatch_compute(staging);
+            }
         }
         // Step 2
         else {
-            // Wait for compute shader to finish.
-            // I *think* I need the client wait too because the client
-            // writes to the staging SSBO.
-            glWaitSync(staging->sync, 0, GL_TIMEOUT_IGNORED);
-            glClientWaitSync(staging->sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
-            glDeleteSync(staging->sync);
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT
-                          | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-            staging->sync = nullptr;
-
-            // Ready. Swap into the cache.
-            std::swap(staging->entry, *p_uptr_entry);
-            staging->re_init();
-            return true;
+            return wait_swap_in(staging, p_uptr_entry);
         }
         assert(0);
     }
 
+    bool pbo_to_texture(RaycastStaging* staging)
+    {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, staging->ssbo_name);
+        glBindTexture(GL_TEXTURE_3D, staging->entry->texture_name);
+        auto& mapped_pbo = *staging->mapped_ssbo;
+
+        for (int x = 0; x < edge_chunks; ++x) {
+        for (int y = 0; y < edge_chunks; ++y) {
+        for (int z = 0; z < edge_chunks; ++z) {
+            auto offset =
+                reinterpret_cast<char*>(&mapped_pbo.voxel_colors[z][y][x])
+              - reinterpret_cast<char*>(&mapped_pbo.voxel_colors[0][0][0]);
+            glTexSubImage3D(
+                GL_TEXTURE_3D,
+                0,
+                x * chunk_size, y * chunk_size, z * chunk_size,
+                chunk_size, chunk_size, chunk_size,
+                GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                (void*) offset);
+        }
+        }
+        }
+
+        static_assert(red_shift == 0, "fix GL_UNSIGNED_INT_8_8_8_8_REV");
+        static_assert(green_shift == 8, "fix GL_UNSIGNED_INT_8_8_8_8_REV");
+        static_assert(blue_shift == 16, "fix GL_UNSIGNED_INT_8_8_8_8_REV");
+
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        staging->sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        assert(staging->sync != nullptr);
+        return false;
+    }
+
+    bool dispatch_compute(RaycastStaging* staging)
+    {
+        if (raycast_staging_program_id == 0) {
+            raycast_staging_program_id = make_program( { "staging.comp" } );
+        }
+        glUseProgram(raycast_staging_program_id);
+        // Hook up the SSBO binding to the SSBO index that will
+        // be used to deliver voxel data.
+        glShaderStorageBlockBinding(
+            raycast_staging_program_id,
+            chunk_group_voxels_program_index,
+            chunk_group_voxels_binding_index);
+        // Hook up the out_image to the correct image unit.
+        glUniform1i(staging_image_program_index, staging_image_unit);
+
+        // Bind the correct texture image.
+        RaycastEntry& entry = *staging->entry;
+
+        glBindBufferBase(
+            GL_SHADER_STORAGE_BUFFER,
+            chunk_group_voxels_binding_index,
+            staging->ssbo_name);
+        glBindImageTexture(
+            staging_image_unit,
+            entry.texture_name,
+            0, false, 0, GL_WRITE_ONLY, GL_RGBA8UI);
+
+        glDispatchCompute(1, 2, 2);
+        staging->sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        assert(staging->sync != nullptr);
+        return false; // Not yet done.
+    }
+
+    bool wait_swap_in(RaycastStaging* staging,
+                      std::unique_ptr<RaycastEntry>* p_uptr_entry)
+    {
+        // Wait for compute shader to finish.  I need the client
+        // wait too because the client writes to the staging
+        // SSBO. Hence, I must make sure the compute shader is
+        // done reading from it before releasing the staging
+        // buffer for re-use.
+        glWaitSync(staging->sync, 0, GL_TIMEOUT_IGNORED);
+        glClientWaitSync(
+            staging->sync, GL_SYNC_FLUSH_COMMANDS_BIT, UINT64_MAX);
+        glDeleteSync(staging->sync);
+        if (UseCompute) {
+            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT
+                          | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
+        staging->sync = nullptr;
+
+        // Ready. Swap into the cache.
+        std::swap(staging->entry, *p_uptr_entry);
+        staging->re_init();
+        return true;
+    }
 
 
     /* BACKGROUND RENDERING */
@@ -772,7 +844,15 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
     RenderThread* thread,
     RenderArgs args)
 {
-    return std::shared_ptr<RendererBase>(new RendererGL(thread, args));
+    return std::shared_ptr<RendererBase>(new RendererGL<true>(thread, args));
 }
+
+std::shared_ptr<RendererBase> RendererGL_Factory_glTex(
+    RenderThread* thread,
+    RenderArgs args)
+{
+    return std::shared_ptr<RendererBase>(new RendererGL<false>(thread, args));
+}
+
 
 } // end namespace myricube

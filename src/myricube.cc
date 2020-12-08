@@ -616,13 +616,24 @@ int Main(std::vector<filename_string> args)
 
     data_directory = filename_concat_c_str(data_directory, "-data/");
 
-    // Check if we are using OpenGL. Default to Vulkan.
-    bool use_OpenGL;
+    // Check if we are using OpenGL. Default to Vulkan. If we are
+    // using OpenGL, we also need to check whether we will be using
+    // the no-compute-shader workaround. Default to using the
+    // workaround on Windows, no workaround on Linux.
+    bool use_OpenGL = true, use_glTex = false;
     std::string api_name =
         EnvVarString("myricube_api", vulkan_compiled_in ? "vk" : "gl");
 
     if (api_name == "gl") {
-        use_OpenGL = true;
+        #ifdef MYRICUBE_WINDOWS
+            use_glTex = true;
+        #endif
+    }
+    else if (api_name == "glTex") {
+        use_glTex = true;
+    }
+    else if (api_name == "glComp") {
+
     }
     else if (api_name == "vk") {
         use_OpenGL = false;
@@ -630,7 +641,6 @@ int Main(std::vector<filename_string> args)
     else {
         panic("myricube_api environment variable set to unknown value "
                 + api_name);
-        use_OpenGL = false; // Fix compiler warning
     }
 
     // Instantiate the shared camera (shared with the renderer).
@@ -687,8 +697,10 @@ int Main(std::vector<filename_string> args)
 
     // Start renderer thread.
     RenderArgs render_args { window_ptr, camera_ptr, handle };
-    RenderThread renderer(
-        use_OpenGL ? RendererGL_Factory : RendererVk_Factory, render_args);
+    auto factory = !use_OpenGL ?
+        RendererVk_Factory :
+        use_glTex ? RendererGL_Factory_glTex : RendererGL_Factory;
+    RenderThread renderer(factory, render_args);
     p_render_thread = &renderer;
     camera_ptr->set_max_frame_new_chunk_groups(32);
 
