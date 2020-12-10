@@ -53,6 +53,9 @@ constexpr float min_depth = 0.0f, max_depth = 1.0f;
 struct MeshEntry;
 void constructor(MeshEntry*);
 void destructor(MeshEntry*);
+struct MeshStagingHalf;
+void constructor(MeshStagingHalf*);
+void destructor(MeshStagingHalf*);
 struct RaycastEntry;
 void constructor(RaycastEntry*);
 void destructor(RaycastEntry*);
@@ -84,9 +87,6 @@ struct MeshEntry
     // Buffer for the voxel instance list.
     VkBuffer buffer = VK_NULL_HANDLE;
 
-    // Persistent coherent mapping of buffer.
-    MappedGroupMesh* map = nullptr;
-
     // Data needed to draw chunk[z][y][x] within this chunk group.
     ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
 
@@ -116,12 +116,6 @@ struct MeshEntry
 
     MeshEntry() { constructor(this); }
 
-    MeshEntry(VkBuffer buffer_, MappedGroupMesh* map_)
-    {
-        buffer = buffer_;
-        map = map_;
-    }
-
     MeshEntry(MeshEntry&& other) = delete;
 
     ~MeshEntry() { destructor(this); }
@@ -131,13 +125,38 @@ void swap(MeshEntry& left, MeshEntry& right) noexcept
 {
     using std::swap;
     swap(left.buffer, right.buffer);
-    swap(left.map, right.map);
     swap(left.draw_data, right.draw_data);
 }
 
+struct MeshStagingHalf
+{
+    // Filled by worker thread; to be copied to entry.buffer
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+
+    // Persistent coherent mapping of staging_buffer.
+    MappedGroupMesh* map = nullptr;
+};
+
+// MeshEntry plus two staging buffers.
 struct MeshStaging
 {
+    MeshStagingHalf odd;
+    MeshStagingHalf even;
+    bool use_odd = false;
+
+    // MeshEntry being prepared.
     MeshEntry entry;
+
+    MeshStaging()
+    {
+        constructor(&odd);
+        constructor(&even);
+    }
+
+    ~MeshStaging() {
+        destructor(&even);
+        destructor(&odd);
+    }
 };
 
 
@@ -468,6 +487,55 @@ std::vector<MappedBuffer<T>> create_mapped_buffer_array(
         NVVK_CHECK(vkBindBufferMemory(device, array[i].buffer, memory, off));
         array[i].map = reinterpret_cast<T*>(memory_mapping + off);
     }
+    return array;
+}
+
+// Create buffer_count many device-local buffers, of buffer_bytes
+// bytes each, that all share one VK memory allocation, which is
+// returned through *p_buffer_memory.
+std::vector<VkBuffer> create_device_buffer_array(
+    VkPhysicalDevice physical_device,
+    VkDevice device,
+    VkDeviceSize buffer_bytes,
+    size_t buffer_count,
+    VkBufferUsageFlags usage,
+    VkDeviceMemory* p_buffer_memory) noexcept
+{
+    assert(buffer_count != 0);
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = buffer_bytes;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    std::vector<VkBuffer> array(buffer_count);
+    for (auto& buffer : array) {
+        NVVK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer));
+    }
+
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(device, array[0], &requirements);
+    VkDeviceSize stride = (requirements.size + requirements.alignment - 1)
+                        & ~(requirements.alignment - 1);
+
+    VkMemoryAllocateInfo allocInfo{};
+    VkDeviceSize alloc_size = stride * buffer_count;
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = alloc_size;
+    allocInfo.memoryTypeIndex = findMemoryType(
+        physical_device,
+        requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    NVVK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, p_buffer_memory));
+    VkDeviceMemory memory = *p_buffer_memory;
+
+    for (size_t i = 0; i < buffer_count; ++i) {
+        VkDeviceSize off = stride * i;
+        NVVK_CHECK(vkBindBufferMemory(device, array[i], memory, off));
+    }
+
     return array;
 }
 
@@ -1392,7 +1460,8 @@ struct RendererVk :
     // after the stores are destroyed, as only at that point will all
     // MeshEntry/RaycastEntry destructors be called (fully filling out
     // the list). This is ensured by RenderThread::destroy_stores.
-    std::vector<MappedBuffer<MappedGroupMesh>>  unused_mesh_buffers;
+    std::vector<MappedBuffer<MappedGroupMesh>>  unused_mesh_staging_buffers;
+    std::vector<VkBuffer>                       unused_mesh_buffers;
     std::vector<MappedBuffer<MappedChunks>>     unused_chunk_buffers;
     std::vector<MappedBuffer<AABBs>>            unused_aabb_buffers;
     std::vector<std::pair<VkImage, VkImageView>>unused_voxel_images;
@@ -1516,7 +1585,10 @@ struct RendererVk :
         // threads.
         vkDestroyCommandPool(dev, transfer_cmd_pool, nullptr);
 
-        for (auto mapped_buffer : unused_mesh_buffers) {
+        for (VkBuffer buffer : unused_mesh_buffers) {
+            vkDestroyBuffer(dev, buffer, nullptr);
+        }
+        for (auto mapped_buffer : unused_mesh_staging_buffers) {
             vkDestroyBuffer(dev, mapped_buffer.buffer, nullptr);
         }
         for (auto mapped_buffer : unused_chunk_buffers) {
@@ -1809,12 +1881,13 @@ struct RendererVk :
         }
     }
 
-    // Implement the constructor and destructor for MeshEntry
-    // (basically just a host-mapped buffer of MeshVoxelVertex).  My
-    // plan is to allocate big blocks of buffers (block = shared
-    // vulkan device memory) and only release the memory at the very
-    // end. Hence, I need to recycle buffers (in unused_mesh_buffers)
-    // to avoid an unbounded memory leak.
+    // Implement the constructor and destructor for MeshEntry and
+    // MeshStaging (basically just a device buffer of MeshVoxelVertex,
+    // plus a host-mapped buffer for MeshStaging).  My plan is to
+    // allocate big blocks of buffers (block = shared vulkan device
+    // memory) and only release the memory at the very end. Hence, I
+    // need to recycle buffers (in unused_mesh_buffers and
+    // unused_mesh_staging_buffers) to avoid an unbounded memory leak.
 
     // Construct the given MeshEntry. Only called by main thread.
     void constructor(MeshEntry* entry)
@@ -1822,8 +1895,7 @@ struct RendererVk :
       restart:
         // Recycle if possible.
         if (!unused_mesh_buffers.empty()) {
-            entry->buffer = unused_mesh_buffers.back().buffer;
-            entry->map = unused_mesh_buffers.back().map;
+            entry->buffer = unused_mesh_buffers.back();
             unused_mesh_buffers.pop_back();
             return;
         }
@@ -1833,14 +1905,13 @@ struct RendererVk :
         memory_to_free.push_back(VK_NULL_HANDLE);
         unused_mesh_buffers.reserve(unused_mesh_buffers.size() + block_size);
 
-        auto buffers = create_mapped_buffer_array<MappedGroupMesh>(
+        auto buffers = create_device_buffer_array(
             ctx.m_physicalDevice,
             dev,
             sizeof(MappedGroupMesh),
             block_size,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+              | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             &memory_to_free.back());
 
         for (auto buffer : buffers) {
@@ -1852,19 +1923,63 @@ struct RendererVk :
     // Release resources of MeshEntry.  Only called by main thread.
     void destructor(MeshEntry* entry) noexcept
     {
-        unused_mesh_buffers.push_back( { entry->buffer, entry->map } );
+        unused_mesh_buffers.push_back( entry->buffer );
+    }
+
+    // Construct the given half of MeshStaging. Only called by main thread.
+    void constructor(MeshStagingHalf* staging)
+    {
+      restart:
+        // Recycle if possible.
+        if (!unused_mesh_staging_buffers.empty()) {
+            staging->staging_buffer = unused_mesh_staging_buffers.back().buffer;
+            staging->map = unused_mesh_staging_buffers.back().map;
+            unused_mesh_staging_buffers.pop_back();
+            return;
+        }
+
+        // Otherwise, we have to allocate a new block of buffers.
+        constexpr size_t block_size = 64;
+        memory_to_free.push_back(VK_NULL_HANDLE);
+        unused_mesh_staging_buffers.reserve(
+            unused_mesh_staging_buffers.size() + block_size);
+
+        auto buffers = create_mapped_buffer_array<MappedGroupMesh>(
+            ctx.m_physicalDevice,
+            dev,
+            sizeof(MappedGroupMesh),
+            block_size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &memory_to_free.back());
+
+        for (auto buffer : buffers) {
+            unused_mesh_staging_buffers.push_back(buffer);
+        }
+        goto restart;
+    }
+
+    // Release resources of MeshStaging. Only called by main thread.
+    void destructor(MeshStagingHalf* staging) noexcept
+    {
+        unused_mesh_staging_buffers.push_back( {
+            staging->staging_buffer,
+            staging->map } );
     }
 
     // Convert chunk group's chunks to meshes and pack into the
-    // memory-mapped array of chunks.
+    // memory-mapped array of chunks in staging buffer.
     void worker_stage(
         MeshStaging* staging, const BinChunkGroup* group_ptr) override
     {
+        MeshStagingHalf* b = staging->use_odd ? &staging->odd : &staging->even;
+
         MeshEntry* entry = &staging->entry;
         for (int zL = 0; zL < edge_chunks; ++zL) {
         for (int yL = 0; yL < edge_chunks; ++yL) {
         for (int xL = 0; xL < edge_chunks; ++xL) {
-            fill_chunk_mesh(&entry->map->chunks[zL][yL][xL],
+            fill_chunk_mesh(&b->map->chunks[zL][yL][xL],
                             &entry->draw_data[zL][yL][xL],
                             group_ptr->chunk_array[zL][yL][xL],
                             glm::ivec3(xL, yL, zL) * chunk_size);
@@ -1873,12 +1988,58 @@ struct RendererVk :
         }
     }
 
+    // Use the pre_frame_buffer to copy the staging vertex buffer to
+    // the device vertex buffer, and add a pipeline barrier to ensure
+    // visibility. Unlike RaycastStaging, I really want to keep
+    // latency to a bare minimum (mesh rendering is used for nearby
+    // chunks) so I'm using the barrier instead of a fence.
     bool swap_in(
         MeshStaging* staging,
         std::unique_ptr<MeshEntry>* p_uptr_entry) override
     {
+        MeshStagingHalf* b = staging->use_odd ? &staging->odd : &staging->even;
+        VkBuffer src_buffer = b->staging_buffer;
+        VkBuffer dst_buffer = staging->entry.buffer;
+
+        VkBufferCopy region { 0, 0, sizeof(MappedGroupMesh) };
+        vkCmdCopyBuffer(
+            pre_frame_buffer,
+            src_buffer,
+            dst_buffer,
+            1, &region);
+
+        VkBufferMemoryBarrier barrier {
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            dst_buffer,
+            region.dstOffset, region.size };
+
+        vkCmdPipelineBarrier(
+            pre_frame_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+            0,
+            0, nullptr,
+            1, &barrier,
+            0, nullptr);
+
+        // Swap "finished" entry into the cache (pipeline barrier)
+        // ensures visibility by the time it's actually used.
         if (*p_uptr_entry == nullptr) p_uptr_entry->reset(new MeshEntry());
         swap(staging->entry, **p_uptr_entry);
+
+        // Use the other staging buffer the next time MeshStaging is
+        // re-used.  With the double buffering scheme of FrameManager,
+        // this ensures worker threads don't overwrite the staging
+        // buffer until we're done using it (2 frames from now). This
+        // technically relies on RendererLogic's implementation
+        // details (I made a note of it in render_world_mesh_step).
+        staging->use_odd = !staging->use_odd;
+
         return true;
     }
 
@@ -2415,6 +2576,16 @@ void constructor(MeshEntry* entry)
 }
 
 void destructor(MeshEntry* entry)
+{
+    thread_local_renderer->destructor(entry);
+}
+
+void constructor(MeshStagingHalf* entry)
+{
+    thread_local_renderer->constructor(entry);
+}
+
+void destructor(MeshStagingHalf* entry)
 {
     thread_local_renderer->destructor(entry);
 }

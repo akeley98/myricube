@@ -502,6 +502,10 @@ class RendererLogic : public RendererBase
         // Handle requests for new chunk groups.
         store.stage_from_queue(8, get_cull_acceptor());
         store.swap_in_from_staging(8);
+        // NOTE: In
+        // RendererVk::swap_in(MeshStaging*, std::unique_ptr<MeshEntry>*),
+        // I rely on the fact that mesh_store.swap_in_from_staging
+        // is only called once per-frame, exactly here.
     }
 
     // Collect a list of chunk groups (RaycastEntry) that are within
