@@ -13,4 +13,12 @@ std::shared_ptr<RendererBase> RendererGL_Factory(
     return nullptr;
 }
 
+std::shared_ptr<RendererBase> RendererGL_Factory_glTex(
+    RenderThread*,
+    RenderArgs)
+{
+    panic("OpenGL renderer not compiled in (see src/DummyGL.cc)");
+    return nullptr;
+}
+
 }

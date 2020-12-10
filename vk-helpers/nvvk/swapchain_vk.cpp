@@ -312,28 +312,38 @@ void SwapChain::deinit()
   m_changeID       = 0;
 }
 
-bool SwapChain::acquire(SwapChainImage* pOut)
+bool SwapChain::acquire(bool* pRecreated, SwapChainImage* pOut)
 {
-  return acquireCustom(VK_NULL_HANDLE, m_updateWidth, m_updateHeight, pOut);
+  return acquireCustom(VK_NULL_HANDLE, m_updateWidth, m_updateHeight, pRecreated, pOut);
 }
 
-bool SwapChain::acquire(int width, int height, SwapChainImage* pOut)
+bool SwapChain::acquireAutoResize(
+  int width, int height, bool* pRecreated, SwapChainImage* pOut)
 {
-  return acquireCustom(VK_NULL_HANDLE, width, height, pOut);
+  return acquireCustom(VK_NULL_HANDLE, width, height, pRecreated, pOut);
 }
 
-bool SwapChain::acquireCustom(VkSemaphore argSemaphore, SwapChainImage* pOut)
+bool SwapChain::acquireCustom(VkSemaphore argSemaphore, bool* pRecreated, SwapChainImage* pOut)
 {
-  return acquireCustom(argSemaphore, m_updateWidth, m_updateHeight, pOut);
+  return acquireCustom(argSemaphore, m_updateWidth, m_updateHeight, pRecreated, pOut);
 }
 
-bool SwapChain::acquireCustom(VkSemaphore argSemaphore, int width, int height, SwapChainImage* pOut)
+bool SwapChain::acquireCustom(
+  VkSemaphore argSemaphore,
+  int width, int height, bool* pRecreated,
+  SwapChainImage* pOut)
 {
+  bool didRecreate = false;
+
   if (width != m_updateWidth || height != m_updateHeight) {
     deinitResources();
     update(width, height);
     m_updateWidth = width;
     m_updateHeight = height;
+    didRecreate = true;
+  }
+  if (pRecreated != nullptr) {
+    *pRecreated = didRecreate;
   }
 
   // try recreation a few times

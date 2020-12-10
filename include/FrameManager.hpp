@@ -47,7 +47,58 @@ class FrameManager;
 
 using FrameGarbageCallback = std::function<void(const FrameManager&)>;
 
-// TODO document
+
+// This class provides a higher-level abstraction around a Vulkan swap
+// chain and command pool, and assists in setting up a simple
+// double-buffer scheme for
+//
+// * synchronizing resources between the host and the presentation queue,
+//
+// * managing freeing resources used for drawing a frame, and
+//
+// * allocating and auto-freeing single-use command buffers submitted
+//   to the presentation queue.
+//
+// This class is not designed to handle resources used or shared with
+// queues besides the presentation queue used to initialize this
+// class; however, this class is cooperative in that it never blocks
+// any queue other than its own presentation queue (i.e. no
+// vkDeviceWaitIdle).
+//
+// To use this class, instantiate it with the nvvk::Context, surface
+// to draw to, and the surface's width and height. This adapts and
+// uses the GCT queue of the context for presentation (an alternate
+// constructor is provided that doesn't use nvvk::Context and allows a
+// manual queue choice).
+//
+// Then, make 2 copies of every resource you want to synchronize; call
+// one set the even set and one the odd set. This class ensures at
+// most 2 consecutive frames are in-flight at once, so, all
+// odd-numbered frames safely re-use the same odd resource set (and
+// same for the even set).
+//
+// A frame starts with a call to beginFrame, which returns a primary
+// command buffer (among other things) and ends with endFrame, which
+// submits said command buffer to the presentation queue. Within a
+// beginFrame/endFrame pair, you may:
+//
+// * Use evenOdd() to select between resources in the even set or odd
+//   set, as appropriate for this frame.
+//
+//   Within the beginFrame/endFrame pair, only 1 frame is in flight
+//   (of opposite parity as the currently recorded frame), so the
+//   returned object can safely be manipulated by the host.
+//
+// * Use addFrameGarbage() to schedule stuff for destruction, which
+//   will occur only once the currently-recorded frame finishes
+//   execution (i.e. 2 frames from now, or when the class destructor runs).
+//
+//   TODO consider writing easier/more efficient versions for common resources.
+//
+// Finally, as an exception to double-buffering, the class destructor,
+// and beginFrame() IF it recreates the swap chain, block the
+// presentation queue entirely. This simplifies tasks like cleanup and
+// recreating frame buffers.
 class FrameManager
 {
     // Number of frames started since construction (so first frame is frame 1).
@@ -117,8 +168,8 @@ class FrameManager
     //
     // A surface to render to and its dimensions
     //
-    // A queue (plus its queue family index) that is capable of
-    // drawing to the surface, and graphics compute transfer operations.
+    // A queue (plus its queue family index) that MUST be capable of
+    // drawing to the surface, and graphics, compute, and transfer operations.
     FrameManager(
         VkInstance instance,
         VkPhysicalDevice physicalDevice, VkDevice device,
@@ -169,7 +220,11 @@ class FrameManager
             m_presentQueue, queueFamilyIndex,
             surface,
             VK_FORMAT_B8G8R8A8_UNORM); // Document format?
+
+        // This is needed as we promised we wouldn't block the whole
+        // device (thread safety). No vkDeviceWaitIdle.
         m_swapChain.setWaitQueue(m_presentQueue);
+
         m_swapChain.update(m_width, m_height);
 
         // Initialize fences in signalled state as specified.
@@ -208,7 +263,7 @@ class FrameManager
     }
 
     // Select one reference arg or the other depending on the parity
-    // of the current frame. The one not returned should not be
+    // of the current frame. The one NOT returned must not be
     // modified or destroyed by the host, as it can be in-use by the
     // device.
     template <typename T>
@@ -236,6 +291,7 @@ class FrameManager
     // is even or odd.
     int evenOdd() const
     {
+        assert(inBeginEndPair());
         return int(m_frameNumber & 1);
     }
 
@@ -271,15 +327,41 @@ class FrameManager
 
     // TODO secondary command buffers.
 
-    // Start a new frame. TODO document.
+
+    // Start a new frame.
+    //
+    // * Increment the current frame number.
+    //
+    // * Wait for the frame 2 frames ago to finish, and clean up
+    //   garbage registered that frame. Now the even (odd) resource
+    //   set is safe to modify if the current frame number is even (odd).
+    //
+    // * Allocate a one-time command buffer for the presentation queue
+    //   and return it through *pCmdBuffer.
+    //
+    // * Acquire a new swap chain image, and return it through
+    //   *pSwapChainImage.
+    //
+    // * Read the requested swap chain width/height from *pWidth and
+    //   *pHeight (this should be window framebuffer size; I use
+    //   glfwGetFramebufferSize), and overwrite *pWidth and *pHeight
+    //   with the actual swap image size (which may be different!!!)
+    //
+    // * Re-create the swap chain if needed (typically due to screen
+    //   size change, but could happen unexpectedly); if so,
+    //   vkQueueWaitIdle is called for the presentation queue. Return
+    //   through *pSwapChainRecreated whether this re-create happened.
+    //
+    // Except for pSwapChainRecreated, all pointers must be non-nullptr.
     void beginFrame(
         VkCommandBuffer* pCmdBuffer,
         nvvk::SwapChainImage* pSwapChainImage,
-        uint32_t* p_width, uint32_t* p_height)
+        uint32_t* pWidth, uint32_t* pHeight,
+        bool* pSwapChainRecreated=nullptr) noexcept
     {
         // Increment frame counter.
         assert(!inBeginEndPair());
-        ++m_frameNumber; // Exception safety?
+        ++m_frameNumber; // Exception safety? set noexcept for now
 
         // Record a new command buffer for this frame.
         assert(pCmdBuffer != nullptr);
@@ -294,14 +376,17 @@ class FrameManager
 
         // Get the next swap chain image.
         assert(pSwapChainImage != nullptr);
-        m_swapChain.acquire(*p_width, *p_height, pSwapChainImage);
+        assert(pWidth != nullptr);
+        assert(pHeight != nullptr);
+        m_swapChain.acquireAutoResize(
+            *pWidth, *pHeight, pSwapChainRecreated, pSwapChainImage);
 
         // Return the actual swap chain image size.
         VkExtent2D extent = m_swapChain.getExtent();
-        *p_width = extent.width;
+        *pWidth  = extent.width;
         m_width  = extent.width;
-        *p_height = extent.height;
-        m_height  = extent.height;
+        *pHeight = extent.height;
+        m_height = extent.height;
     }
 
     // Record a command for transitioning the layout of the current
@@ -342,10 +427,16 @@ class FrameManager
             1, &imageLayoutBarrier);
     }
 
-    // End the started frame. TODO document.
+    // End the started frame. Submits the command buffer returned by
+    // beginFrame to the presentation queue, schedules it to be freed
+    // later, and present the swap chain image acquired in beginFrame.
+    //
+    // userCommandBuffer must be the same command buffer that the last
+    // call to beginFrame returned. You must NOT free this command
+    // buffer manually.
     void endFrame(VkCommandBuffer userCommandBuffer)
     {
-        // Finish recording the command buffer, which should be the
+        // Finish recording the command buffer, which must be the
         // one beginFrame gave out.
         assert(userCommandBuffer == m_userCommandBuffer);
         assert(inBeginEndPair());
@@ -383,12 +474,13 @@ class FrameManager
     // finished on the device. This can be used to do arbitrary work,
     // but the design case was for dealing with garbage (single use
     // command buffers, etc.)
+    // Must be called only in beginFrame/endFrame pairs.
     //
     // Garbage callbacks are called in reverse-order of their
     // registration, matching typically expected behavior (C++
     // destructors, atexit, etc.)
     //
-    // If you don't like the fancy C++ callback, use the next
+    // If you want to write a fancy C++ callback, use the next
     // function, which just takes an object and a function pointer.
     void addFrameGarbage(FrameGarbageCallback garbage)
     {

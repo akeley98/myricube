@@ -3,7 +3,7 @@
 # to work on my own machine only.
 CC=x86_64-w64-mingw32-gcc
 CXX=x86_64-w64-mingw32-g++
-CPPFLAGS=-I ../glfw/include -I ../glad/include -I ../include -I ../glm -I ./vk-include -I ../vk-helpers -I vk-shaders
+CPPFLAGS=-I /usr/local/include -I ../glfw/include -I ../glad/include -I ../include -I ../glm -I ./vk-include -I ../vk-helpers -I vk-shaders
 CXXFLAGS=-Wall -Wextra -O3 -g -std=c++17 -Wno-missing-field-initializers -municode
 CFLAGS=  -Wall -Wextra -O3 -g -municode
 

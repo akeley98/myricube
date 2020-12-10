@@ -117,8 +117,9 @@ A typical renderloop would look as follows:
   // handles vkAcquireNextImageKHR and setting the active image
   // w,h only needed if update(w,h) not called reliably.
   int w, h;
+  bool recreated;
   glfwGetFramebufferSize(window, &w, &h);
-  if(!m_swapChain.acquire(w, h [, optional SwapChainImage ptr]))
+  if(!m_swapChain.acquire(w, h, &recreated, [, optional SwapChainImage ptr]))
   {
     ... handle acquire error (shouldn't happen)
   }
@@ -126,6 +127,8 @@ A typical renderloop would look as follows:
   VkCommandBuffer cmd = ...
 
   // acquire might have recreated the swap chain: respond if needed here.
+  // NOTE: you can also check the recreated variable above, but this
+  // only works if the swap chain was recreated this frame.
   if (m_swapChain.getChangeID() != lastChangeID){
     // after init or resize you have to setup the image layouts
     m_swapChain.cmdUpdateBarriers(cmd);
@@ -137,7 +140,9 @@ A typical renderloop would look as follows:
   VkImageView swapImageView = m_swapChain.getActiveImageView();
 
   // or you may always render offline int your own framebuffer
-  // and then simply blit into the backbuffer
+  // and then simply blit into the backbuffer. NOTE: use
+  // m_swapChain.getWidth() / getHeight() to get blit dimensions,
+  // actual swap chain image size may differ from requested width/height.
   VkImage swapImage = m_swapChain.getActiveImage();
   vkCmdBlitImage(cmd, ... swapImage ...);
 
@@ -271,17 +276,27 @@ public:
   // Sets active index to the next swap chain image to draw to.
   // The handles and semaphores for this image are optionally written to *pOut.
   //
-  // Acquire uses getActiveReadSemaphore(); acquireCustom allows you
-  // to provide your own semaphore.
+  // `acquire` and `acquireAutoResize` use getActiveReadSemaphore();
+  // `acquireCustom` allows you to provide your own semaphore.
   //
   // If the swap chain was invalidated (window resized, etc.), the
-  // swap chain will be recreated, which triggers queue/device wait idle.
-  // If you are not calling `update` manually on window resize, you
-  // must pass the new framebuffer size explicitly.
-  bool acquire(SwapChainImage* pOut = nullptr);
-  bool acquire(int width, int height, SwapChainImage* pOut = nullptr);
-  bool acquireCustom(VkSemaphore semaphore, SwapChainImage* pOut = nullptr);
-  bool acquireCustom(VkSemaphore semaphore, int width, int height, SwapChainImage* pOut = nullptr);
+  // swap chain will be recreated, which triggers queue/device wait
+  // idle.  If you are not calling `update` manually on window resize,
+  // you must pass the new swap image size explicitly.
+  //
+  // WARNING: The actual swap image size might not match what is
+  // requested; use getWidth/getHeight to check actual swap image
+  // size.
+  //
+  // If the swap chain was recreated, *pRecreated is set to true (if
+  // pRecreated != nullptr); otherwise, set to false.
+  //
+  // WARNING the swap chain could be spontaneously recreated, even if
+  // you are calling `update` whenever the window is resized.
+  bool acquire(bool* pRecreated=nullptr, SwapChainImage* pOut = nullptr);
+  bool acquireAutoResize(int width, int height, bool* pRecreated, SwapChainImage* pOut = nullptr);
+  bool acquireCustom(VkSemaphore semaphore, bool* pRecreated=nullptr, SwapChainImage* pOut = nullptr);
+  bool acquireCustom(VkSemaphore semaphore, int width, int height, bool* pRecreated, SwapChainImage* pOut = nullptr);
 
   // all present functions bump semaphore cycle
 
@@ -306,11 +321,16 @@ public:
   VkImage        getImage(uint32_t i) const;
   VkImageView    getImageView(uint32_t i) const;
   VkFormat       getFormat() const { return m_surfaceFormat; }
+
+  // Get the actual size of the swap chain images.
   uint32_t       getWidth() const { return m_extent.width; }
   uint32_t       getHeight() const { return m_extent.height; }
   VkExtent2D     getExtent() const { return m_extent; }
+
+  // Get the requested size of the swap chain images. THIS IS RARELY USEFUL.
   uint32_t       getUpdateWidth() const { return m_updateWidth; }
   uint32_t       getUpdateHeight() const { return m_updateHeight; }
+
   bool           getVsync() const { return m_vsync; }
   VkSwapchainKHR getSwapchain() const { return m_swapchain; }
 
