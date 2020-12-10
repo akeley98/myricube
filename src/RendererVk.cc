@@ -1520,7 +1520,13 @@ struct RendererVk :
         transfer_queue =        ctx.m_queueT;
         transfer_queue_family = ctx.m_queueT;
 
-        if (transfer_queue == VK_NULL_HANDLE) {
+        EnvVar64 force_single_queue("myricube_single_queue", 0);
+        if (force_single_queue) {
+            fprintf(stderr,
+                "Ignoring transfer-only-queue: myricube_single_queue\n");
+        }
+
+        if (transfer_queue == VK_NULL_HANDLE or force_single_queue) {
             transfer_queue =        ctx.m_queueC;
             transfer_queue_family = ctx.m_queueC;
             fprintf(stderr, "Could not find transfer-only (DMA) queue\n");
@@ -1530,7 +1536,7 @@ struct RendererVk :
         // HACK this means that transfer_queue and main_queue can be
         // the same, which I warn in the transfer_queue declaration
         // comment.
-        if (transfer_queue == VK_NULL_HANDLE) {
+        if (transfer_queue == VK_NULL_HANDLE or force_single_queue) {
             transfer_queue =        ctx.m_queueGCT;
             transfer_queue_family = ctx.m_queueGCT;
             fprintf(stderr, "That failed too (Intel you suck)\n");

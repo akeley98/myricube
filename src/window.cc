@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <unordered_map>
 
+#include "EnvVar.hh"
 #include "glad/glad.h"
 
 namespace myricube {
@@ -51,6 +52,12 @@ Window::Window(OnWindowResize on_window_resize_, bool OpenGL)
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+        auto validation = EnvVar64("myricube_validation", 0);
+        glfwWindowHint(GLFW_CONTEXT_NO_ERROR, !validation);
+        if (!validation) {
+            fprintf(stderr, "Requesting no-error OpenGL context\n");
+        }
     }
     else {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
