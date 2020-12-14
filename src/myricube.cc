@@ -311,7 +311,14 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
     KeyTarget increase_far_plane, decrease_far_plane;
     increase_far_plane.down = [&] (KeyArg arg) -> bool
     {
+        int max_far_plane = int(group_size * 31 / 2);
         auto new_far_plane = 64 + camera->get_far_plane();
+        if (new_far_plane > max_far_plane) {
+            new_far_plane = max_far_plane;
+            fprintf(stderr,
+                "Far plane limited to %i (voxels.hh:WorldCache::modulus)\n",
+                max_far_plane);
+        }
 
         if (!arg.repeat) {
             camera->set_far_plane(new_far_plane);

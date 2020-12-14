@@ -69,11 +69,7 @@ static std::mutex in_memory_filesystem_mutex;
 template <typename T> T* map_file(const filename_string& filename, int* flags);
 template <typename T> T* map_file(const filename_string& filename, int flags)
 {
-#ifndef MYRICUBE_WINDOWS
-    // fprintf(stderr, "Mapping %s\n", filename.c_str());
-#endif
     auto ptr = map_file<T>(filename, &flags);
-    if (!ptr) fprintf(stderr, "map_file returned nullptr.\n");
     return ptr;
 }
 

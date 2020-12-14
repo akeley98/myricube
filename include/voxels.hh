@@ -252,13 +252,22 @@ struct BinGroupBitfield
         return (x_bitfield_zy[z][y].load() >> x) & 1u;
     }
 
-    // Set the bit corresponding to the above.
-    void set_chunk_group_on_disk(glm::ivec3 group_coord)
+    // Set the bit corresponding to the above to the specified value.
+    // Returns the old value.
+    bool set_chunk_group_on_disk(glm::ivec3 group_coord, bool value=true)
     {
         auto x = group_coord.x & (modulus - 1);
         auto y = group_coord.y & (modulus - 1);
         auto z = group_coord.z & (modulus - 1);
-        x_bitfield_zy[z][y] |= uint64_t(1) << x;
+        // Branch needed to ensure just one atomic operation.
+        uint64_t shifted_bit = uint64_t(1) << x, old_value;
+        if (value) {
+            old_value = x_bitfield_zy[z][y].fetch_or(shifted_bit);
+        }
+        else {
+            old_value = x_bitfield_zy[z][y].fetch_and(~(uint64_t(1) << x));
+        }
+        return old_value & shifted_bit;
     }
 
     // Return the group coordinate of the lower-left chunk group
@@ -455,6 +464,8 @@ class WorldCache
 {
     WorldHandle world;
 
+    // This limits the view distance to (31 * group_size) / 2
+    // otherwise we'll get horrible thrashing.
     static constexpr int32_t modulus = 32;
 
     // First, we need to store the bitfields corresponding to the
@@ -558,17 +569,21 @@ class WorldCache
             { canonical, world.bitfield_for_chunk_group(canonical) } );
 
       found:
-        // Now check the bitfield (if required) to see if the chunk
-        // group is on disk and if so load it in.
-        bool lookup = true;
-        if (CheckBitfield) {
-            lookup = bitfield_vector.at(new_entry.bitfield_index)
-                    .bitfield_ptr->chunk_group_on_disk(group_coord);
+        // The first time, we'll look up the chunk group on disk regardless
+        // of what the bitfield says, in case it was corrupted externally.
+        world.get_chunk_group_uptr(group_coord, new_entry.chunk_group_ptr);
+        bool exists = new_entry.chunk_group_ptr != nullptr;
+        bool old_bit =
+            bitfield_vector.at(new_entry.bitfield_index)
+            .bitfield_ptr->set_chunk_group_on_disk(group_coord, exists);
+        if (old_bit != exists) {
+            fprintf(stderr, "Corrected incorrect bitfield value for chunk group"
+                " (%i,%i,%i)\n%s\n",
+                int(group_coord.x), int(group_coord.y), int(group_coord.z),
+                exists ?
+                    "Bit not set, but chunk group file exists on disk"
+                  : "Bit set, but chunk group file not found on disk");
         }
-        if (lookup) {
-            world.get_chunk_group_uptr(group_coord, new_entry.chunk_group_ptr);
-        }
-
         // No exceptions thrown: can safely overwrite evicted entry.
         entry = std::move(new_entry);
         return entry;
