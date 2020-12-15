@@ -467,12 +467,7 @@ void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
         file_size = size_t(low) | size_t(high) << 32;
     }
 
-    if (file_size != sz) {
-        fprintf(stderr, "Incorrect file size: %ls\n", filename.c_str());
-        throw std::runtime_error(
-            "Incorrect file size (consider removing file manually)");
-    }
-    else if (file_size == 0) {
+    if (file_size == 0) {
         if (*flags & create_flag) {
             *flags |= file_created_flag;
 
@@ -490,6 +485,14 @@ void* map_disk_file_impl(const filename_string& filename, size_t sz, int* flags)
             SetEndOfFile(handle);
             check_last_error();
         }
+        else {
+            return nullptr;
+        }
+    }
+    else if (file_size != sz) {
+        fprintf(stderr, "Incorrect file size: %ls\n", filename.c_str());
+        throw std::runtime_error(
+            "Incorrect file size (consider removing file manually)");
     }
 
     // Now I need to create a "file-mapping object". There seems to be
