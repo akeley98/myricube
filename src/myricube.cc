@@ -646,8 +646,8 @@ int Main(std::vector<filename_string> args)
         use_OpenGL = false;
     }
     else {
-        panic("myricube_api environment variable set to unknown value "
-                + api_name);
+        panic("myricube_api environment variable set to unknown value '"
+                + api_name + "'");
     }
 
     // Instantiate the shared camera (shared with the renderer).

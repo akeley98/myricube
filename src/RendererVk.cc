@@ -2395,10 +2395,12 @@ struct RendererVk :
             1, &barrier);
 
         // Copy chunk-by-chunk from staging buffer to image.
+        VkBufferImageCopy regions[edge_chunks * edge_chunks * edge_chunks];
+        VkBufferImageCopy* pRegions = &regions[0];
         for (int z = 0; z < edge_chunks; ++z) {
         for (int y = 0; y < edge_chunks; ++y) {
         for (int x = 0; x < edge_chunks; ++x) {
-            VkBufferImageCopy region;
+            VkBufferImageCopy& region = *pRegions++;
             region.bufferOffset =
                 reinterpret_cast<char*>(&staging->chunk_map->chunks[z][y][x])
               - reinterpret_cast<char*>(&staging->chunk_map->chunks[0][0][0]);
@@ -2407,17 +2409,16 @@ struct RendererVk :
             region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
             region.imageOffset = { x*chunk_size, y*chunk_size, z*chunk_size };
             region.imageExtent = { chunk_size, chunk_size, chunk_size };
-
-            vkCmdCopyBufferToImage(
-                p_transfer_cmd_buffer->buffer,
-                staging->chunk_buffer,
-                staged_entry.voxels_image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1,
-                &region);
         }
         }
         }
+        vkCmdCopyBufferToImage(
+            p_transfer_cmd_buffer->buffer,
+            staging->chunk_buffer,
+            staged_entry.voxels_image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            edge_chunks * edge_chunks * edge_chunks,
+            &regions[0]);
 
         // Transition layout to general layout and transfer ownership
         // to the main queue family (used for graphics and swap chain
