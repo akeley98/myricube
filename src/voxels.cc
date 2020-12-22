@@ -257,6 +257,18 @@ static inline bool maybe_fix_endian(
         #endif
     }
 
+    // I just realized the horrible things this function can do if run
+    // concurrently, so fix this here. This won't protect in case
+    // multiple myricube instances are running, but it's better than
+    // nothing (this function truly is a HORRIBLE hack, but I kinda
+    // need it now for bug-for-bug compatibility).
+    static std::mutex the_mutex;
+    std::lock_guard guard(the_mutex);
+    if (group.magic_number != old_magic_number) {
+        fprintf(stderr, "maybe_fix_endian: fixed by another thread\n");
+        return false;
+    }
+
     for (int zH = 0; zH < edge_chunks; ++zH) {
     for (int yH = 0; yH < edge_chunks; ++yH) {
     for (int xH = 0; xH < edge_chunks; ++xH) {
