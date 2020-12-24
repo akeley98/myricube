@@ -524,7 +524,7 @@ retry:
         fprintf(stderr, "Could not open \"%s\": %s.\n", pathname, msg);
         exit(1);
     }
-    
+
     // Use C/C++ compiler for C/C++ files, glsl compiler for glsl.
     assert(args.source_file_type != FileType::zero);
     const char* compiler =
@@ -807,18 +807,145 @@ retry_rename:
     }
 }
 
+// Run the glsl compiler, converting the preprocessed glsl file to
+// a C array of SPIR-V byte code.
+//
+// The C file's name is just the glsl preprocessed file name + ".c"
+// This also generates an included C file (.inc extension).
+//
+// The array's name is the original glsl source file, with non
+// alphanumeric characters converted to underscores.
+//
+// We also append a size_t to the source file that is the size of
+// the array in bytes. This is "sizeof_" + array variable name.
+void compile_glsl_to_c(Args& args)
+{
+    assert(args.source_file_type == FileType::glsl);
+
+    const char* compiler = args.glslc.c_str();
+    std::vector<const char*> argv = { compiler };
+
+    for (const auto& arg : args.glslargs) {
+        argv.push_back(arg.c_str()); // Note arg by-reference
+    }
+
+    // -V
+    const char V[] = "-V";
+    argv.push_back(V);
+
+    // --vn [array variable name]
+    const char vn[] = "--vn";
+    argv.push_back(vn);
+    std::string variable_name = args.source_file_name;
+    for (char& c : variable_name) if (!isalnum(c)) c = '_';
+    argv.push_back(variable_name.c_str());
+
+    // -o [output .inc file name]
+    const char o[] = "-o";
+    argv.push_back(o);
+    std::string inc_file_name = args.preprocessed_file_name + ".inc";
+    argv.push_back(inc_file_name.c_str());
+
+    // Input file name
+    argv.push_back(args.preprocessed_file_name.c_str());
+
+    // Print command and add terminating null pointer.
+    const char* fmt = "%s";
+    for (const char* arg : argv) {
+        printf(fmt, arg);
+        fmt = " %s";
+    }
+    printf("\n");
+    argv.push_back(nullptr);
+
+    auto pid = fork();
+
+    // Error
+    if (pid < 0) {
+        const char* msg = strerror(errno);
+        printf("fork failed: %s.\n", msg);
+        fprintf(stderr, "fork failed: %s.\n", msg);
+        exit(1);
+    }
+    // Child
+    else if (pid == 0) {
+        char** argv_ptr = const_cast<char**>(argv.data());
+        execvp(compiler, argv_ptr);
+        const char* msg = strerror(errno);
+        printf("Execute %s failed: %s.\n", compiler, msg);
+        fprintf(stderr, "Execute %s failed: %s.\n", compiler, msg);
+        _exit(2);
+    }
+
+    // While the compiler runs, output the .c file. This just includes
+    // headers for uint32_t and size_t, includes the SPIR-V array
+    // (strip away directory names), and adds the sizeof.
+    std::string c_file_name = args.preprocessed_file_name + ".c";
+
+    size_t split_idx = 0;
+    for (size_t i = 0; i < inc_file_name.size(); ++i) {
+        if (inc_file_name[i] == '/') split_idx = i+1;
+        #ifdef _WIN32
+            if (inc_file_name[i] == '\\') split_idx = i+1;
+        #endif
+    }
+
+    std::ofstream stream(c_file_name);
+    stream << "#include <stddef.h>\n"
+           << "#include <stdint.h>\n"
+           << "#include \"" << &inc_file_name[split_idx] << "\"\n"
+           << "size_t sizeof_" << variable_name
+           << " = sizeof("<< variable_name << ");\n";
+    if (!stream.is_open() || stream.bad() || stream.fail()) {
+        const char* reason = strerror(errno);
+        printf(
+            "Could not write \"%s\": %s.\n",
+            c_file_name.c_str(), reason);
+        fprintf(
+            stderr,
+            "Could not write \"%s\": %s.\n",
+            c_file_name.c_str(), reason);
+        exit(1);
+    }
+
+    // Parent: wait for glsl compiler.
+    int wstatus;
+    auto waitpid_code = waitpid(pid, &wstatus, 0);
+    if (waitpid_code < 0) {
+        const char* msg = strerror(errno);
+        printf("waitpid failed: %s.\n", msg);
+        fprintf(stderr, "waitpid failed: %s.\n", msg);
+        exit(1);
+    }
+    if (wstatus != 0) {
+        printf("GLSL compiler failed: status %i.\n", wstatus);
+        fprintf(stderr, "GLSL compiler failed: status %i.\n", wstatus);
+        exit(WEXITSTATUS(wstatus) || 1);
+    }
+}
+
 // Use execvp (replaces current process) to compile the preprocessed
 // source file to the target file. Detect assembly or object file
 // based on extension, and add -S or -c argument as appropriate.
+//
+// This is just one step for C/C++ files; for glsl, we have to use the
+// glsl compiler to convert from glsl to C, then invoke the C
+// compiler with the intermediate C file.
 void exec_compile_to_target(Args& args)
 {
+    std::string c_input_filename = args.preprocessed_file_name;
+    if (args.source_file_type == FileType::glsl) {
+        c_input_filename += ".c";
+        compile_glsl_to_c(args);
+    }
+
     const char* cxx_arg = args.cxx.c_str();
     std::vector<const char*> argv;
     argv.push_back(cxx_arg);
     for (const auto& arg : args.cxxflags) {
         argv.push_back(arg.c_str());
     }
-    argv.push_back(args.preprocessed_file_name.c_str());
+    argv.push_back(c_input_filename.c_str());
 
     // Just check the last character -- more thorough checking was
     // done during arg parsing.
@@ -989,24 +1116,14 @@ int main(int argc, char** argv)
         }
     }
 
-    if (args.cxx == "") {
-        printf(
-            "%s: Blank CC or CXX arg (delim with %s).\n",
-            argv[0], cxx_delim.c_str());
-        fprintf(
-            stderr,
-            "%s: Blank CC or CXX arg (delim with %s).\n",
-            argv[0], cxx_delim.c_str());
-        exit(1);
-    }
-
+    // Initialize args struct from command line arguments.
     args.source_file_name = source_file_name_from_target(args.target_file_name);
 
     // This should be the one place where we determine the source file type
     // from file extension.
     const std::string& src_name = args.source_file_name;
-    const auto sz = src_name.size();
 
+    const auto sz = src_name.size();
     if (sz >= 5 && strcmp(&src_name[sz - 5], ".glsl") == 0) {
         args.source_file_type = FileType::glsl;
     }
@@ -1021,6 +1138,28 @@ int main(int argc, char** argv)
     args.preprocessed_file_name = preprocessed_file_name_for_source(
         args.source_file_name,
         args.source_file_type);
+
+    // Check for missing args.
+    if (args.cxx == "") {
+        printf(
+            "%s: Blank CC or CXX arg (delim with %s).\n",
+            argv[0], cxx_delim.c_str());
+        fprintf(
+            stderr,
+            "%s: Blank CC or CXX arg (delim with %s).\n",
+            argv[0], cxx_delim.c_str());
+        exit(1);
+    }
+    if (args.glslc == "" && args.source_file_type == FileType::glsl) {
+        printf(
+            "%s: Blank GLSLC arg (delim with %s).\n",
+            argv[0], glslc_delim.c_str());
+        fprintf(
+            stderr,
+            "%s: Blank GLSLC arg (delim with %s).\n",
+            argv[0], glslc_delim.c_str());
+        exit(1);
+    }
 
     if (getenv("CCKISS_RTAGS_PRINT")) {
         if (args.verbose) {

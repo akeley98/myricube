@@ -19,7 +19,6 @@
 #include "nvvk/context_vk.hpp"
 #include "EnvVar.hh"
 #include "FrameManager.hpp"
-#include "vk-shaders.hh"
 
 #include "PushConstant.glsl"
 
@@ -36,6 +35,20 @@ namespace myricube {
     struct RendererVk;
     bool vulkan_compiled_in = true;
 }
+
+// Shaders compiled by cckiss.
+extern uint32_t vk_shaders_mesh_vert_glsl[];
+extern size_t sizeof_vk_shaders_mesh_vert_glsl;
+extern uint32_t vk_shaders_mesh_frag_glsl[];
+extern size_t sizeof_vk_shaders_mesh_frag_glsl;
+extern uint32_t vk_shaders_raycast_vert_glsl[];
+extern size_t sizeof_vk_shaders_raycast_vert_glsl;
+extern uint32_t vk_shaders_raycast_frag_glsl[];
+extern size_t sizeof_vk_shaders_raycast_frag_glsl;
+extern uint32_t vk_shaders_background_vert_glsl[];
+extern size_t sizeof_vk_shaders_background_vert_glsl;
+extern uint32_t vk_shaders_background_frag_glsl[];
+extern size_t sizeof_vk_shaders_background_frag_glsl;
 
 namespace {
 
@@ -399,12 +412,15 @@ struct ScopedRenderPass
 
 
 
-VkShaderModule createShaderModule(VkDevice device, const std::vector<unsigned char>& code)
+VkShaderModule createShaderModule(
+    VkDevice device,
+    const uint32_t* code,
+    size_t sizeof_code)
 {
     VkShaderModuleCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+    createInfo.codeSize = sizeof_code;
+    createInfo.pCode = code;
 
     VkShaderModule shaderModule;
     NVVK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
@@ -839,11 +855,14 @@ struct MeshPipeline
 
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
-        const std::vector<unsigned char>& vertShaderCode = mesh_vert_spv;
-        const std::vector<unsigned char>& fragShaderCode = mesh_frag_spv;
-
-        VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
-        VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
+        VkShaderModule vertShaderModule = createShaderModule(
+            device,
+            vk_shaders_mesh_vert_glsl,
+            sizeof_vk_shaders_mesh_vert_glsl);
+        VkShaderModule fragShaderModule = createShaderModule(
+            device,
+            vk_shaders_mesh_frag_glsl,
+            sizeof_vk_shaders_mesh_frag_glsl);
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1055,11 +1074,14 @@ struct RaycastPipeline
         NVVK_CHECK(vkCreatePipelineLayout(
             device, &pipelineLayoutInfo, nullptr, &pipeline_layout));
 
-        const std::vector<unsigned char>& vertShaderCode = raycast_vert_spv;
-        const std::vector<unsigned char>& fragShaderCode = raycast_frag_spv;
-
-        VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
-        VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
+        VkShaderModule vertShaderModule = createShaderModule(
+            device,
+            vk_shaders_raycast_vert_glsl,
+            sizeof_vk_shaders_raycast_vert_glsl);
+        VkShaderModule fragShaderModule = createShaderModule(
+            device,
+            vk_shaders_raycast_frag_glsl,
+            sizeof_vk_shaders_raycast_frag_glsl);
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1236,11 +1258,14 @@ struct BackgroundPipeline
 
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
-        const std::vector<unsigned char>& vertShaderCode = background_vert_spv;
-        const std::vector<unsigned char>& fragShaderCode = background_frag_spv;
-
-        VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
-        VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);
+        VkShaderModule vertShaderModule = createShaderModule(
+            device,
+            vk_shaders_background_vert_glsl,
+            sizeof_vk_shaders_background_vert_glsl);
+        VkShaderModule fragShaderModule = createShaderModule(
+            device,
+            vk_shaders_background_frag_glsl,
+            sizeof_vk_shaders_background_frag_glsl);
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

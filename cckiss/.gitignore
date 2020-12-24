@@ -3,12 +3,14 @@
 *\#
 
 # cckiss compiler intermediate files
+*.c
+*.glsl
 *.i
 *.ii
+*.inc
 *-deps.txt
-*.s
 *.o
-*.glsl
+*.s
 
 # cckiss executables
 cckiss
