@@ -88,9 +88,10 @@ want.
 
 cckiss requires a Unix-ey environment, and that the C/C++ preprocessor
 create directives of the form `# [line number] "included file"`
-whenever it includes a file. cckiss scans for these directives in
-order to know the included dependencies of each source file. As far as
-I know, both `gcc` and `clang` do this correctly.
+whenever it includes a file (`#line` is also acceptable). cckiss scans
+for these directives in order to know the included dependencies of
+each source file. As far as I know, both `gcc` and `clang` do this
+correctly.
 
 # Motivation
 
@@ -140,8 +141,9 @@ the `cckiss/` prefix and `.o` (or `.s`) suffix to recover the path to
 the source file to be compiled. It then
 
 1. Preprocesses the source file, storing it in
-`cckiss/[path-to-source].i` (or `.ii`, for C++ files). This step uses the
-makefile variables `CPPFLAGS` and `CC` (or `CXX` for C++ files).
+`cckiss/[path-to-source].i` (or `.ii`, for C++ files). This step uses
+the makefile variables `CPPFLAGS`, `CC`, and `CFLAGS` for C;
+`CPPFLAGS`, `CXX`, and `CXXFLAGS` for C++ files.
 
 2. Scans the preprocessed file for a list of dependency files (using the
 `# [line-number] [file-name]` directives). This list of dependency

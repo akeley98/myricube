@@ -11,9 +11,9 @@
 // 1. This program takes as its first argument the name of a target
 // file to compile. The target file name should be of the form
 // "cckiss/[source file].[s|o]", where [source file] is the path to
-// the C or C++ file that compiles to the target. Anything with a .c
-// extension is assumed to be C; all others C++. Further arguments
-// control:
+// the C, C++, or GLSL file that compiles to the target. Anything with
+// a .glsl extension is assumed GLSL, .c extension is assumed to be C;
+// all others C++. Further arguments control:
 //
 //     a. The C/C++ compiler name (prefix with ".cckiss.CXX", or first
 //     argument after target filename).
@@ -21,21 +21,26 @@
 //     b. Arguments for invoking the compiler as a preprocessor
 //     (prefix with ".cckiss.CPPFLAGS")
 //
-//     c. Arguments for invoking the compiler (prefix with
+//     c. Arguments for invoking the C/C++ compiler (prefix with
 //     ".cckiss.CXXFLAGS", even if we are using a C compiler). Note:
 //     '-c' or '-S' need not be included: it will be added
 //     automatically depending on whether the target file is an object
 //     (.o) or assembly (.s) file.
+//
+//     d. The GLSL compiler (prefix with .cckiss.GLSLC), if needed.
+//
+//     e. Arguments for the GLSL compiler (prefix with .cckiss.GLSLARGS).
 //
 // 2. If the target need not be recompiled, the program terminates. Otherwise,
 //
 // 3. The source file is preprocessed, with the preprocessor output stored in
 // "cckiss/[source file].[i|ii]" (extension differs for C/C++).
 //
-// 4. The preprocessed file is scanned for preprocessor directives of the
-// form "# [line number] "[included file name]"". This gives us a list of
-// all dependency files, which is stored in "cckiss/[source file]-deps.txt".
-// Exactly one newline separates each file listed.
+// 4. The preprocessed file is scanned for preprocessor directives of
+// the form "#{line} [line number] "[included file name]"". This gives
+// us a list of all dependency files, which is stored in
+// "cckiss/[source file]-deps.txt".  Exactly one newline separates
+// each file listed.
 //
 // 5. Future invokations of cckiss can check that list of dependency files,
 // and skip recompilation if all dependency files' modification times are
@@ -69,6 +74,14 @@
 
 namespace {
 
+std::string cxxflags_delim = ".cckiss.CXXFLAGS";
+std::string cppflags_delim = ".cckiss.CPPFLAGS";
+std::string cxx_delim = ".cckiss.CXX";
+std::string glslc_delim = ".cckiss.GLSLC";
+std::string glslargs_delim = ".cckiss.GLSLARGS";
+
+enum class FileType { zero, c, cxx, glsl };
+
 struct Args
 {
     // Name of compiled file.
@@ -96,6 +109,14 @@ struct Args
 
     // Makefile CFLAGS or CXXFLAGS
     std::vector<std::string> cxxflags;
+
+    // Makefile GLSLC
+    std::string glslc;
+
+    // Makefile GLSLARGS
+    std::vector<std::string> glslargs;
+
+    FileType source_file_type = FileType::zero;
 
     bool verbose = false;
     bool always_make = false;
@@ -205,20 +226,27 @@ std::string deps_file_name_for_source(
     return "cckiss/" + source_file_name + "-deps.txt";
 }
 
-// Given the name of a source file, return the expected filename of
-// its corresponding preprocessed file.
+// Given the name and type of a source file, return the expected
+// filename of its corresponding preprocessed file.
 std::string preprocessed_file_name_for_source(
-    const std::string& source_file_name)
+    const std::string& source_file_name, FileType file_type)
 {
     // C files must become .i files -- the only file extension I know
-    // of for C is lowercase '.c'. All others are assumed to be C++,
-    // with .ii extension once preprocessed.
-    auto sz = source_file_name.size();
-    bool is_c = false;
-    if (sz >= 2 && source_file_name[sz-2]=='.' && source_file_name[sz-1]=='c') {
-        is_c = true;
+    // of for C is lowercase '.c'.
+
+    // GLSL files remain .glsl; only difference is the preprocessed file
+    // is in the cckiss directory.
+
+    // All others are assumed to be C++, with .ii extension once
+    // preprocessed.
+    const char* extension = "";
+    switch (file_type) {
+        default: assert(0); break;
+        case FileType::c: extension = ".i"; break;
+        case FileType::cxx: extension = ".ii"; break;
+        case FileType::glsl: extension = ""; break; // has .glsl already.
     }
-    return "cckiss/" + source_file_name + (is_c ? ".i" : ".ii");
+    return "cckiss/" + source_file_name + extension;
 }
 
 // The cckiss/ directory contains a replica of the source directory
@@ -483,7 +511,8 @@ void preprocess_and_make_deps_file(Args& args)
 // the file descriptor of the preprocessed file. Assumes that CXX can
 // be run as a preprocessor with '-E' argument, and that it writes the
 // output to stdout (fd 1).
-int preprocess_source_to_fd(Args& args) {
+int preprocess_source_to_fd(Args& args)
+{
     // First, open the preprocessor output file.
     const char* pathname = args.preprocessed_file_name.c_str();
 retry:
@@ -495,15 +524,27 @@ retry:
         fprintf(stderr, "Could not open \"%s\": %s.\n", pathname, msg);
         exit(1);
     }
+    
+    // Use C/C++ compiler for C/C++ files, glsl compiler for glsl.
+    assert(args.source_file_type != FileType::zero);
+    const char* compiler =
+        args.source_file_type == FileType::glsl ?
+        args.glslc.c_str() : args.cxx.c_str();
+    const std::vector<std::string>& cxxflags =
+        args.source_file_type == FileType::glsl ?
+        std::vector<std::string>{} : args.cxxflags;
+    const std::vector<std::string>& cppflags =
+        args.source_file_type == FileType::glsl ?
+        args.glslargs : args.cppflags;
 
     // Convert the std::string args into a list of char pointers.
     std::vector<const char*> argv;
-    argv.push_back(args.cxx.c_str());
-    for (const auto& arg_string : args.cxxflags) {
+    argv.push_back(compiler);
+    for (const auto& arg_string : cxxflags) {
         // Vitally important that arg_string is by-reference here.
         argv.push_back(arg_string.c_str());
     }
-    for (const auto& arg_string : args.cppflags) {
+    for (const auto& arg_string : cppflags) {
         argv.push_back(arg_string.c_str());
     }
     static const char _e[] = "-E";
@@ -542,10 +583,10 @@ retry:
         }
 
         char** argv_ptr = const_cast<char**>(argv.data());
-        execvp(args.cxx.c_str(), argv_ptr);
+        execvp(compiler, argv_ptr);
         const char* msg = strerror(errno);
-        printf("Execute %s failed: %s.\n", args.cxx.c_str(), msg);
-        fprintf(stderr, "Execute %s failed: %s.\n", args.cxx.c_str(), msg);
+        printf("Execute %s failed: %s.\n", compiler, msg);
+        fprintf(stderr, "Execute %s failed: %s.\n", compiler, msg);
         _exit(2);
     }
     // Parent
@@ -560,12 +601,6 @@ retry:
     if (wstatus != 0) {
         printf("Preprocessing failed: status %i.\n", wstatus);
         fprintf(stderr, "Preprocessing failed: status %i.\n", wstatus);
-        if (args.cppflags.size() == 0) {
-            fprintf(stderr,
-                "The " RED "CPPFLAGS" END " variable was empty.\n"
-                "Did you forget to specify include directories (-I)?\n"
-                "(Or did you put them in CFLAGS or CXXFLAGS instead?)\n");
-        }
         exit(WEXITSTATUS(wstatus) || 1);
     }
     return fd;
@@ -574,6 +609,10 @@ retry:
 // Return true iff the given line_text is a string of the form:
 //
 //     [whitespace]#[whitespace][number] "[filename(any str)]"[crud]
+//
+// or
+//
+//     [whitespace]#line[whitespace][number] "[filename(any str)]"[crud]
 //
 // I could use a regex, but I didn't for now (I don't trust myself to
 // use them correctly). If it is of the correct form, write to
@@ -588,10 +627,13 @@ bool interpret_as_file_directive(
     const char* ptr = line_text.c_str();
     char c = '\0';
 
-    // Expect [whitespace]#[whitespace]. One or both whitespaces may be empty.
-    // The magic do loop skips ptr to point to the first non-whitespace char.
+    // Expect [whitespace]#[whitespace] or
+    // [whitespace]#line[whitespace]. One or both whitespaces may be
+    // empty. The magic do loop skips ptr to point to the first
+    // non-whitespace char.
     do { c = *ptr; } while (isspace(c) && ++ptr);
     if ( *ptr++ != '#') return false;
+    if (const char* skipped = skip_prefix(ptr, "line")) ptr = skipped;
     do { c = *ptr; } while (isspace(c) && ++ptr);
 
     // Expect number + optional whitespace, and at least one digit.
@@ -864,10 +906,9 @@ int cckiss_rtags_main(Args& args)
 
 int main(int argc, char** argv)
 {
-    std::string cxxflags_delim = ".cckiss.CXXFLAGS";
-    std::string cppflags_delim = ".cckiss.CPPFLAGS";
-    std::string cxx_delim = ".cckiss.CXX";
-    std::string delims = cxxflags_delim + " " + cppflags_delim + " " + cxx_delim;
+    std::string delims =
+        cxx_delim + ' ' + cxxflags_delim + ' ' + cppflags_delim
+      + ' ' + glslc_delim + ' ' + glslargs_delim;
 
     Args args;
 
@@ -884,7 +925,8 @@ int main(int argc, char** argv)
     }
   end_makeargs:
 
-    constexpr int cxxflags_mode = 0, cppflags_mode = 1, cxx_mode = 2;
+    constexpr int cxxflags_mode = 0, cppflags_mode = 1, cxx_mode = 2,
+                  glslc_mode = 3, glslargs_mode = 4;
     int mode = cxx_mode;
 
     if (argc >= 2) {
@@ -910,27 +952,40 @@ int main(int argc, char** argv)
             mode = cxx_mode;
             continue;
         }
+        else if (arg == glslc_delim) {
+            mode = glslc_mode;
+            continue;
+        }
+        else if (arg == glslargs_delim) {
+            mode = glslargs_mode;
+            continue;
+        }
         else if (skip_prefix(arg.c_str(), ".cckiss.") != nullptr) {
             printf(
-                "%s: Arg \"%s\" should not start with '.cckiss.', "
+                "%s: Arg \"%s\" shall not start with '.cckiss.', "
                 "unless it is a delimeter (%s).\n",
                 argv[0], argv[i], delims.c_str());
             fprintf(
                 stderr,
-                "%s: Arg \"%s\" should not start with '.cckiss.', "
+                "%s: Arg \"%s\" shall not start with '.cckiss.', "
                 "unless it is a delimeter (%s).\n",
                 argv[0], argv[i], delims.c_str());
             exit(1);
         }
 
-        if (mode == cxxflags_mode) {
+        switch (mode) {
+          default:
+            assert(!"Unhandled mode in cckiss arg parsing");
+          break; case cxxflags_mode:
             args.cxxflags.push_back(std::move(arg));
-        }
-        else if (mode == cppflags_mode) {
+          break; case cppflags_mode:
             args.cppflags.push_back(std::move(arg));
-        }
-        else if (mode == cxx_mode) {
+          break; case cxx_mode:
             args.cxx = std::move(arg);
+          break; case glslc_mode:
+            args.glslc = std::move(arg);
+          break; case glslargs_mode:
+            args.glslargs.push_back(std::move(arg));
         }
     }
 
@@ -946,9 +1001,26 @@ int main(int argc, char** argv)
     }
 
     args.source_file_name = source_file_name_from_target(args.target_file_name);
+
+    // This should be the one place where we determine the source file type
+    // from file extension.
+    const std::string& src_name = args.source_file_name;
+    const auto sz = src_name.size();
+
+    if (sz >= 5 && strcmp(&src_name[sz - 5], ".glsl") == 0) {
+        args.source_file_type = FileType::glsl;
+    }
+    else if (sz >= 2 && strcmp(&src_name[sz - 2], ".c") == 0) {
+        args.source_file_type = FileType::c;
+    }
+    else {
+        args.source_file_type = FileType::cxx;
+    }
+
     args.deps_file_name = deps_file_name_for_source(args.source_file_name);
-    args.preprocessed_file_name =
-        preprocessed_file_name_for_source(args.source_file_name);
+    args.preprocessed_file_name = preprocessed_file_name_for_source(
+        args.source_file_name,
+        args.source_file_type);
 
     if (getenv("CCKISS_RTAGS_PRINT")) {
         if (args.verbose) {
