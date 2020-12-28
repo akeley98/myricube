@@ -1,8 +1,8 @@
-# Keep It Simple Stupid C/C++ build dependency tool
+# Keep It Simple Stupid C/C++/GLSL build dependency tool
 
-cckiss is a tool that automatically tracks the dependencies of C and
-C++ files and recompiles them if any source or dependency changes are
-detected. cckiss is designed to supplement a Unix makefile, rather
+cckiss is a tool that automatically tracks the dependencies of C, C++,
+and GLSL files and recompiles them if any source or dependency changes
+are detected. cckiss is designed to supplement a Unix makefile, rather
 than replace `make` entirely. cckiss provides patterns that automate
 away the task of writing these kinds of makefile entries:
 
@@ -14,6 +14,7 @@ forgetting a (possibly indirectly) included header in the list
 of dependencies.
 
 Licensed under your choice of CC0 and WTFPL.
+
 
 # Quick Start
 
@@ -66,23 +67,26 @@ The above `Makefile` is the moral equivalent of
 A few things to note:
 
 1. cckiss supports compiling both C and C++. Any source file ending in
-lowercase `.c` is assumed to be C; all others are assumed C++ (there's
-no end to the list of C++ file extensions invented, so I just support
-them all).
+lowercase `.c` is assumed to be C; `.glsl` is glsl, and all others are
+assumed C++ (there's no end to the list of C++ file extensions
+invented, so I just support them all).
 
 2. cckiss appends `.o` (or `.s`) to the compiled file name, instead of
 replacing the extension. So `foo.c` becomes `cckiss/foo.c.o`, NOT
 `cckiss/foo.o`.
 
 3. cckiss strictly separates the preprocessing step from the compiling
-step, so, it's important that preprocessor flags (like `-I
-my/include/dir`) use the `CPPFLAGS` variable instead of `CFLAGS` or
-`CXXFLAGS`.
+step. `CPPFLAGS` is only passed to the preprocess stage, while both
+`CPPFLAGS` and either `CFLAGS` or `CXXFLAGS` are passed to the C or
+C++ compiler stage, respectively. (Note, this currently makes
+precompiled headers more-or-less unusable, a significant hole in what
+I've set up).
 
 4. You may want to provide a default target before including
 `cckiss/Makefile` -- otherwise, the default target for the project
 will be the `cckiss` executable itself, which is probably not what you
 want.
+
 
 # Requirements
 
@@ -92,6 +96,45 @@ whenever it includes a file (`#line` is also acceptable). cckiss scans
 for these directives in order to know the included dependencies of
 each source file. As far as I know, both `gcc` and `clang` do this
 correctly.
+
+
+# Experimental GLSL Support
+
+cckiss supports compiling GLSL files to object (or asm) files that embed
+a SPIR-V bytecode array. This is done for any target file of the form
+
+    cckiss/[file-name].glsl.[s|o]
+
+which is compiled from the source file
+
+    [file-name].glsl
+
+As with C files, include files are tracked and recompiling is only
+done if any include files (or the source file) has its timestamp
+updated.
+
+The glsl file is compiled into a C file declaring a `uint32_t` array
+of SPIR-V bytecode, along with a `size_t` declaring the code size in
+bytes. The array's name is `[file-name].glsl` with non alphanumeric
+characters replaced with `_`; the size is that variable name prefixed
+with `sizeof_`. For example, if the shader file is stored in
+
+    vk-shaders/raycast.frag.glsl
+
+Then the shader code and size can be accessed with the declarations
+
+    extern uint32_t vk_shaders_raycast_frag_glsl[];
+    extern size_t sizeof_vk_shaders_raycast_frag_glsl;
+
+GLSL compiling is affected by these Makefile variables
+
+`GLSLC`: glsl compiler, for now, assumed to be some version of
+`glslangValidator` (`glslc` uses an incompatible CLI).
+
+`GLSLARGS`: arguments passed to `GLSLC`.
+
+`CC`, `CCFLAGS`, `CPPFLAGS`: used for C compiler.
+
 
 # Motivation
 
@@ -126,6 +169,7 @@ to write: all I had to do was preprocess the file, grep out a list of
 header dependencies, and check for modifications in the listed files
 to know if a recompilation is needed.  Stupid Simple, what was I
 waiting for?
+
 
 # Implementation
 
@@ -163,6 +207,7 @@ have modification times before the modification time of the target file.
 However, if `B` is in the environment variable `MAKEFLAGS`, recompilation
 is done unconditionally, for consistency with `make`.
 
+
 # TODO (consider)
 
 The `-deps.txt` files include a lot of system headers. Consider providing an
@@ -175,3 +220,12 @@ files but are otherwise unsafe for general use. Could this be done by
 allowing meta-data in source files (e.g. a `CCKISS_ARG` preprocessor
 macro), or by providing a separate args file (e.g. `foo.c.cckiss` for
 `foo.c`)?
+
+The `-MD` option for `gcc` and `clang` can generate a list of
+dependency files, making the separate preprocess stage
+unneccessary. However, this is still needed for `glslangValidator`,
+which does not (as far as I can tell) support such a feature. `glslc`
+claims to support this flag, but it does not support compiling to a C
+file (and also does not recognize compound file extensions,
+e.g. `.frag.glsl`, a gratuitious incompatibility with
+`glslangValidator`).

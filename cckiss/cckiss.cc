@@ -508,9 +508,9 @@ void preprocess_and_make_deps_file(Args& args)
 
 // Given the command line args, name of a source file, and the name of
 // the preprocessed file, preprocess the named source file. Returns
-// the file descriptor of the preprocessed file. Assumes that CXX can
-// be run as a preprocessor with '-E' argument, and that it writes the
-// output to stdout (fd 1).
+// the file descriptor of the preprocessed file. Assumes that CXX or
+// GLSLC can be run as a preprocessor with '-E' argument, and that it
+// writes the output to stdout (fd 1).
 int preprocess_source_to_fd(Args& args)
 {
     // First, open the preprocessor output file.
