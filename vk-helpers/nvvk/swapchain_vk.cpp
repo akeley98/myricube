@@ -163,7 +163,8 @@ VkExtent2D SwapChain::update(int width, int height, bool vsync)
   swapchain.imageFormat              = m_surfaceFormat;
   swapchain.imageColorSpace          = m_surfaceColor;
   swapchain.imageExtent              = swapchainExtent;
-  swapchain.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  swapchain.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  // swapchain.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   swapchain.preTransform          = preTransform;
   swapchain.compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   swapchain.imageArrayLayers      = 1;

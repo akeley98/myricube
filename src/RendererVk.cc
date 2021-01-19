@@ -78,12 +78,12 @@ void destructor(RaycastStaging*);
 
 // These should be widely supported, but I can detect support if
 // needed later. No stencil buffer for now.
-constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_UNORM;
+constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_SRGB;
 constexpr auto depth_format = VK_FORMAT_D32_SFLOAT;
 
 // Image format for 3D images used to store chunk groups' voxels.
 // Need to check that it matches the bit assignments.
-constexpr auto chunk_group_voxels_image_format = VK_FORMAT_R8G8B8A8_UNORM;
+constexpr auto chunk_group_voxels_image_format = VK_FORMAT_R8G8B8A8_SRGB;
 static_assert(red_shift == 0);
 static_assert(green_shift == 8);
 static_assert(blue_shift == 16);
@@ -601,9 +601,9 @@ void createImage(
 
 
 
-// Create a vector of 3D images suitable for storing a chunk group's voxels,
-// paired with a corresponding image view. All voxels share one memory
-// allocation, returned through *p_memory.
+// Create a vector of 3D images suitable for storing a chunk group's
+// voxels, paired with a corresponding image view. All voxels share
+// one memory allocation, returned through *p_memory.
 std::vector<std::pair<VkImage, VkImageView>> create_chunk_group_images(
     VkPhysicalDevice physicalDevice,
     VkDevice device,
@@ -1021,7 +1021,7 @@ struct RaycastPipeline
 
     static constexpr uint32_t pool_sets = 59;
     static constexpr VkDescriptorPoolSize pool_size {
-        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         pool_sets };
 
     // A VkDescriptorPoolCreateInfo that describes creating a pool
@@ -1044,7 +1044,7 @@ struct RaycastPipeline
         // Only binding is the 3D image holding voxel data.
         VkDescriptorSetLayoutBinding voxels_binding {
             0,
-            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             1,
             VK_SHADER_STAGE_FRAGMENT_BIT,
             nullptr };
@@ -1416,6 +1416,9 @@ struct RendererVk :
     // allowing the aboves' destructors to run safely.
     FrameManager frame_manager;
 
+    // Sampler used to sample 3D chunk group voxel images.
+    VkSampler chunk_group_sampler;
+
     // Set in begin_frame.
     uint32_t width, height;
 
@@ -1533,10 +1536,18 @@ struct RendererVk :
             ctx,
             glfw_surface.surface,
             glfw_surface.initial_width,
-            glfw_surface.initial_height)
+            glfw_surface.initial_height,
+            swap_chain_image_format)
     {
         // As promised.
         thread_local_renderer = this;
+
+        // Set up the sampler.
+        VkSamplerCreateInfo sampler_info{};
+        sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        // Default params are okay. In particular, min/maxLod = 0 is good.
+        NVVK_CHECK(vkCreateSampler(
+            dev, &sampler_info, nullptr, &chunk_group_sampler));
 
         // Steal the queues from the ever-helpful nvvk::Context.
         // ctx.m_queueGCT is the same queue FrameManager is using.
@@ -1611,6 +1622,8 @@ struct RendererVk :
 
     ~RendererVk()
     {
+        vkDestroySampler(dev, chunk_group_sampler, nullptr);
+
         // By the time this destructor runs, RendererBase has
         // destroyed MeshStore and RaycastStore, stopping all worker
         // threads.
@@ -2221,7 +2234,7 @@ struct RendererVk :
                 block_size,
                 chunk_group_voxels_image_format,
                 VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 &memory_to_free.back());
 
@@ -2264,7 +2277,7 @@ struct RendererVk :
 
         // Bind descriptor set to point to the image.
         VkDescriptorImageInfo image_info {
-            VK_NULL_HANDLE,
+            chunk_group_sampler,
             entry->voxels_view,
             VK_IMAGE_LAYOUT_GENERAL };
         VkWriteDescriptorSet write {
@@ -2274,7 +2287,7 @@ struct RendererVk :
             0,
             0,
             1,
-            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             &image_info,
             nullptr,
             nullptr };
