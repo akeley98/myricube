@@ -1,3 +1,6 @@
+#ifndef MYRICUBE_FOG_BORDER_GLSL_
+#define MYRICUBE_FOG_BORDER_GLSL_
+
 #include "PushConstant.glsl"
 
 #define BORDER_WIDTH_LOW  0.075
@@ -7,7 +10,7 @@
 #define BORDER_DIST_HIGH 350
 #define DITHER_MASK 3
 #define DITHER_SCALAR (0.0035 / DITHER_MASK)
-#define FOG_SCALAR 1.125
+// #define FOG_SCALAR 1.125
 
 float logistic(float t, float k)
 {
@@ -23,12 +26,13 @@ vec3 fog_color_from_world_direction(vec3 world_direction)
     }
 
     world_direction = normalize(world_direction);
-    float t_horizon = logistic(world_direction.y + .25, -5.0);
-    float t_sunrise = logistic(world_direction.y - 1.5*world_direction.x, 0.8);
+    float t_horizon = logistic((world_direction.y + .25), -5.0);
+    float t_sunrise = logistic((world_direction.y - 1.5*world_direction.x), 0.8);
 
-    const vec3 earth_color = vec3(50/255., 42/255., 77/255.);
-    const vec3 sky_color = vec3(135/255., 211/255., 248/255.);
-    const vec3 sunrise_color = vec3(255/255., 173/255., 138/255.);
+    const vec3 earth_color = vec3(0.03, 0.023, 0.074);
+    const vec3 sky_color = vec3(0.242, 0.651, 0.939);
+    // const vec3 sunrise_color = vec3(1.0, 0.418, 0.254);
+    const vec3 sunrise_color = vec3(0.708, 0.445, 0.638);
 
     const ivec2 pixel = ivec2(gl_FragCoord.xy);
     const vec3 dither = vec3(
@@ -41,7 +45,10 @@ vec3 fog_color_from_world_direction(vec3 world_direction)
         earth_color, t_horizon) + dither;
 }
 
-// Utility function for adding fog and border effects (and setting alpha=1).
+// Utility function for adding fog and border effects (and setting
+// alpha=1).  This runs in srgb color space as my original magic
+// numbers and equations (that I don't undertand anymore) were tweaked
+// in srgb, not linear color. (TODO: I ignore this fact for now)
 vec4 fog_border_color(
     vec3 base_color, // The stored color of the voxel.
     float dist_squared, // Squared distance from eye to this fragment.
@@ -72,10 +79,14 @@ vec4 fog_border_color(
         * (1 / (magic_low - magic_high)),
         base_border_fade, 1.0);
 
-    // Fog fade depends on linear distance from camera.
+    float squared_dist_ratio = dist_squared/pc.pc.far_plane_squared;
+    float dist_ratio = sqrt(dist_squared/pc.pc.far_plane_squared);
     float raw_fog_fade =
         ((pc.pc.flags & MYRICUBE_FOG_BIT) != 0) ?
-        FOG_SCALAR * (1 - sqrt(dist_squared/pc.pc.far_plane_squared)) :
+        1.01357 * logistic(squared_dist_ratio - 0.5, -10.0) - 0.007 :
+        // 1.1 * logistic(squared_dist_ratio - 0.5, -6.0) - 0.05 :
+        // 1.1 * logistic(dist_ratio - 0.5, -6.0) - 0.05 :
+        // 2.164 * logistic(squared_dist_ratio - 0.5, -2.0) - 0.582 :
         1.0;
     float fog_fade = clamp(raw_fog_fade, 0.0, 1.0);
 
@@ -83,3 +94,5 @@ vec4 fog_border_color(
     return
     vec4(fog_fade * border_fade * base_color + (1-fog_fade) * fog_color, 1.0);
 }
+
+#endif

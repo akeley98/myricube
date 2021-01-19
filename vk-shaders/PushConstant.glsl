@@ -1,8 +1,8 @@
 // Common PushConstant structure shared between host vulkan code and
 // shaders. Need some preprocessor hackery to share this.
 
-#ifndef PushConstant_glsl_
-#define PushConstant_glsl_
+#ifndef MYRICUBE_PUSHCONSTANT_GLSL_
+#define MYRICUBE_PUSHCONSTANT_GLSL_
 
 #ifdef __cplusplus
 // Host code defines

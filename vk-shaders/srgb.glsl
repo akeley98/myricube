@@ -1,6 +1,6 @@
-float srgb_u8_table[256] = float[] (0.0, 0.000303526983549,
-0.000607053967098,
-0.000910580950647,
+#ifndef MYRICUBE_SRGB_GLSL_
+#define MYRICUBE_SRGB_GLSL_
+float srgb_u8_table[256] = float[] (0.0, 0.000303526983549, 0.000607053967098, 0.000910580950647,
 0.0012141079342,
 0.00151763491774,
 0.00182116190129,
@@ -257,3 +257,4 @@ float srgb_u8_table[256] = float[] (0.0, 0.000303526983549,
 float srgb_from_u8(uint r) {
     return srgb_u8_table[r & 255u];
 }
+#endif
