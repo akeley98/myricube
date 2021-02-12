@@ -16,6 +16,7 @@ OBJS=cckiss/src/myricube.cc.o \
      cckiss/apps/AxisTest.cc.o \
      cckiss/apps/Congestion.cc.o \
      cckiss/apps/MarloPlanet.cc.o \
+     cckiss/apps/MengerSponge.cc.o \
      cckiss/apps/RandomWalk.cc.o \
      cckiss/apps/Skygrid.cc.o \
      cckiss/apps/ViewWorld.cc.o \
