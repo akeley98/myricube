@@ -5,7 +5,7 @@
 
 #define BORDER_WIDTH_LOW  0.075
 #define BORDER_WIDTH_HIGH 0.45
-#define BORDER_FADE  0.75
+#define BORDER_FADE  0.65
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
 #define DITHER_MASK 3
