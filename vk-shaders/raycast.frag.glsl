@@ -15,16 +15,18 @@ layout(location=0) out vec4 out_color;
 #include "PushConstant.glsl"
 #include "fog_border.glsl"
 
-// group_size^3 3D image storing voxel colors for this chunk group.
-layout(binding=0, set=0, rgba8) uniform readonly image3D group_voxels;
+// group_size^3 3D texture storing voxel colors for this chunk group.
+layout(binding=0, set=0) uniform sampler3D group_voxels;
 
 vec4 read_group_voxel(ivec3 residue)
 {
+    ivec3 texture_size = textureSize(group_voxels, 0);
     ivec3 clamped_residue = clamp(
         residue,
         ivec3(0),
-        imageSize(group_voxels) - ivec3(1));
-    return imageLoad(group_voxels, clamped_residue);
+        texture_size - ivec3(1));
+    return texture(group_voxels, vec3(residue) / vec3(texture_size));
+    // TODO hard-wire group_size to save on division cost.
 }
 
 void raycast(

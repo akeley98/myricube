@@ -129,9 +129,10 @@ class FrameManager
 
     // Abstracts away most swap chain stuff. We store the width and
     // height of the actual swap chain image (which may differ from
-    // requested).
+    // requested), plus the color format used.
     nvvk::SwapChain m_swapChain;
     uint32_t m_width, m_height;
+    VkFormat m_colorFormat;
 
     // m_frameFences[0] is signalled when an even-numbered frame is
     // finished (by the device), m_frameFences[1] for odd.
@@ -174,12 +175,13 @@ class FrameManager
         VkInstance instance,
         VkPhysicalDevice physicalDevice, VkDevice device,
         VkSurfaceKHR surface, uint32_t width, uint32_t height,
-        VkQueue queue, uint32_t queueFamilyIndex) :
+        VkQueue queue, uint32_t queueFamilyIndex,
+        VkFormat colorFormat=VK_FORMAT_B8G8R8A8_UNORM) :
     m_instance(instance),
     m_physicalDevice(physicalDevice),
     m_device(device),
     m_presentQueue(queue),
-    m_width(width), m_height(height)
+    m_width(width), m_height(height), m_colorFormat(colorFormat)
     {
         this->constructor(surface, queueFamilyIndex);
     }
@@ -192,12 +194,13 @@ class FrameManager
     // (Consider glfwCreateWindowSurface and glfwGetFramebufferSize).
     FrameManager(
         nvvk::Context& ctx,
-        VkSurfaceKHR surface, uint32_t width, uint32_t height) :
+        VkSurfaceKHR surface, uint32_t width, uint32_t height,
+        VkFormat colorFormat=VK_FORMAT_B8G8R8A8_UNORM) :
     m_instance(ctx.m_instance),
     m_physicalDevice(ctx.m_physicalDevice),
     m_device(ctx.m_device),
     m_presentQueue((ctx.setGCTQueueWithPresent(surface), ctx.m_queueGCT.queue)),
-    m_width(width), m_height(height)
+    m_width(width), m_height(height), m_colorFormat(colorFormat)
     {
         // ^^^ Comma trick above keeps m_presentQueue as const.
         uint32_t queueFamilyIndex = ctx.m_queueGCT.familyIndex;
@@ -219,7 +222,7 @@ class FrameManager
             m_device, m_physicalDevice,
             m_presentQueue, queueFamilyIndex,
             surface,
-            VK_FORMAT_B8G8R8A8_UNORM); // Document format?
+            m_colorFormat);
 
         // This is needed as we promised we wouldn't block the whole
         // device (thread safety). No vkDeviceWaitIdle.
