@@ -11,7 +11,7 @@ using namespace myricube;
 static std::array<std::string, 24> marlon_name_lines;
 
 // Mystery code translated from Marlon's Python code.
-static void marlo(int radius, WorldHandle world_handle)
+static void marlo(int radius, WorldHandle world_handle, bool use_map=false)
 {
     VoxelWorld world(world_handle);
 
@@ -67,22 +67,33 @@ static void marlo(int radius, WorldHandle world_handle)
         return Voxel(255, 255, 255);
     };
 
-    for (int k = +radius; k >= -radius; --k) {
-        for (int j = -radius; j <= +radius; ++j) {
-            for (int i = -radius; i <= +radius; ++i) {
-                auto pos = glm::dvec3(i, j, k) * double(box / radius);
-                auto norm = l2norm(pos);
-                auto shell1 = relu(-std::abs(norm - 8) + 0.5);
-                auto shell2 = relu(-std::abs(norm - 12) + 0.5);
-                auto ret = shell1 + shell2;
-                ret += relu((noiser(pos*0.5) + 1)*.8
-                     - std::abs(2-std::abs(norm-10)))*(std::abs(norm-10)<2.0);
-                auto noise1 = noiser(-1020.0 + pos*0.2);
-                ret += (3.0-std::abs(norm-10.2)) <= 0 ? 0 : relu(-0.06 + noiser(pos*0.194));
-                ret *= relu(l2norm((pos - glm::dvec3(12.2,0,0)) * glm::dvec3(2,1,1))
-                            -3.2*(noise1+1) ) * relu(l2norm((pos-glm::dvec3(-8,0,0)) * glm::dvec3(2,1,1)) - 4*(noise1+1));
-                if (ret > 0) {
-                    world.set(glm::ivec3(i, j, k), voxel_from_norm(norm));
+    auto voxel_for_coord = [&] (uint32_t* out_voxel, glm::ivec3 coord)
+    {
+        auto pos = glm::dvec3(coord) * double(box / radius);
+        auto norm = l2norm(pos);
+        auto shell1 = relu(-std::abs(norm - 8) + 0.5);
+        auto shell2 = relu(-std::abs(norm - 12) + 0.5);
+        auto ret = shell1 + shell2;
+        ret += relu((noiser(pos*0.5) + 1)*.8
+             - std::abs(2-std::abs(norm-10)))*(std::abs(norm-10)<2.0);
+        auto noise1 = noiser(-1020.0 + pos*0.2);
+        ret += (3.0-std::abs(norm-10.2)) <= 0 ? 0 : relu(-0.06 + noiser(pos*0.194));
+        ret *= relu(l2norm((pos - glm::dvec3(12.2,0,0)) * glm::dvec3(2,1,1))
+                    -3.2*(noise1+1) ) * relu(l2norm((pos-glm::dvec3(-8,0,0)) * glm::dvec3(2,1,1)) - 4*(noise1+1));
+
+        *out_voxel = ret > 0 ? uint32_t(voxel_from_norm(norm)) : uint32_t(0);
+    };
+
+    if (use_map) {
+        world.map(glm::ivec3(-radius), glm::ivec3(+radius), voxel_for_coord);
+    }
+    else {
+        for (int k = +radius; k >= -radius; --k) {
+            for (int j = -radius; j <= +radius; ++j) {
+                for (int i = -radius; i <= +radius; ++i) {
+                    uint32_t voxel;
+                    voxel_for_coord(&voxel, {i, j, k});
+                    world.set(glm::ivec3(i, j, k), voxel);
                 }
             }
         }
@@ -105,13 +116,14 @@ static void marlo(int radius, WorldHandle world_handle)
 
 namespace myricube {
 
-class MarloPlanet : public App
+template <int Radius, bool UseMap>
+class MarloPlanetT : public App
 {
     VoxelWorld world;
     std::thread my_thread;
 
   public:
-    MarloPlanet() : my_thread(marlo, 300, world.get_handle())
+    MarloPlanetT() : my_thread(marlo, Radius, world.get_handle(), UseMap)
     {
         my_thread.detach();
     }
@@ -122,7 +134,11 @@ class MarloPlanet : public App
     }
 };
 
+using MarloPlanet = MarloPlanetT<300, false>;
+using MarloPlanetK = MarloPlanetT<512, true>;
+
 MYRICUBE_ADD_APP(MarloPlanet)
+MYRICUBE_ADD_APP(MarloPlanetK)
 
 } // end namespace
 
