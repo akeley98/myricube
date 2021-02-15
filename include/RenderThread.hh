@@ -15,6 +15,7 @@
 #include <thread>
 #include <utility>
 
+#include "EnvVar.hh"
 #include "window.hh"
 
 namespace myricube {
@@ -30,11 +31,16 @@ class RendererBase
     RenderThread* const p_back = nullptr;
     friend class RenderThread;
 
-    RendererBase(RenderThread* p_back_) : p_back(p_back_) { }
+    RendererBase(RenderThread* p_back_) : p_back(p_back_)
+    {
+        EnvVar64 min_frame_ms("myricube_frame_ms", 2);
+        min_frame_dt = min_frame_ms * 0.001;
+    }
     virtual void draw_frame() = 0;
     virtual void destroy_stores() = 0;
 
   private:
+    double min_frame_dt;
     inline void render_loop();
 };
 
@@ -149,12 +155,13 @@ void RendererBase::render_loop()
         }
 
         // Calculate (approximate) frame time. Require at least 2 ms
-        // between frames (workaround to system freeze bug).
+        // between frames (workaround to system freeze bug). Can
+        // be overrided with myricube_frame_ms environment variable.
         double now, dt;
         do {
             now = glfwGetTime();
             dt = now - previous_update;
-        } while (dt < 0.002);
+        } while (dt < min_frame_dt);
         previous_update = now;
 
         // Update FPS and frame time. Periodically report back to the
