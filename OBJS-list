@@ -41,12 +41,6 @@ VK_OBJS=cckiss/src/RendererVk.cc.o \
         cckiss/vk-helpers/nvvk/error_vk.cpp.o \
         cckiss/vk-helpers/nvvk/extensions_vk.cpp.o \
         cckiss/vk-helpers/nvvk/swapchain_vk.cpp.o \
-        cckiss/vk-shaders/mesh.vert.glsl.o \
-        cckiss/vk-shaders/mesh.frag.glsl.o \
-        cckiss/vk-shaders/raycast.vert.glsl.o \
-        cckiss/vk-shaders/raycast.frag.glsl.o \
-        cckiss/vk-shaders/background.vert.glsl.o \
-        cckiss/vk-shaders/background.frag.glsl.o \
 # (Empty line for backslash)
 
 # Objects only needed for Vulkan when OpenGL not used.

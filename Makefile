@@ -28,8 +28,9 @@ myricube-vk-bin: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS)
 myricube-gl-bin: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
 	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) -ldl -lpthread -o myricube-gl-bin
 
-myricube-gl-ninja: do-glfw-build
-	build/generate_ninja.py > build.ninja && ninja
+myricube-ninja: do-glfw-build
+	build/generate_ninja.py > build.ninja && \
+	ninja -v -t compdb cc cxx link > compile_commands.json
 
 myricube-windows:
 	cd windows64 && $(MAKE)

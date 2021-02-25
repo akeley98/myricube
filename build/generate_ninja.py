@@ -35,7 +35,23 @@ cxx_files = (
     "apps/ViewWorld.cc",
     "apps/FastNoise.cpp",
     "src/RendererGL.cc",
-    "src/DummyVk.cc",
+    "src/RendererVk.cc",
+    "vk-helpers/nvh/nvprint.cpp",
+    "vk-helpers/nvvk/context_vk.cpp",
+    "vk-helpers/nvvk/debug_util_vk.cpp",
+    "vk-helpers/nvvk/error_vk.cpp",
+    "vk-helpers/nvvk/extensions_vk.cpp",
+    "vk-helpers/nvvk/swapchain_vk.cpp",
+)
+
+# GLSL files to compile and place in myricube-data
+glsl_files = (
+    "vk-shaders/mesh.vert",
+    "vk-shaders/mesh.frag",
+    "vk-shaders/raycast.vert",
+    "vk-shaders/raycast.frag",
+    "vk-shaders/background.vert",
+    "vk-shaders/background.frag",
 )
 
 # Flags passed to C compiler
@@ -51,8 +67,11 @@ cflags = ' '.join((
 # Flags passed to C++ compiler
 cxxflags = cflags + " -std=c++17"
 
+# Flags passed to GLSL compiler
+glslflags = "-g"
+
 # Linker arguments
-linkerflags = "glfw-build/src/libglfw3.a -ldl -lpthread"
+linkerflags = "glfw-build/src/libglfw3.a -ldl -lpthread -lvulkan"
 
 
         ## PREFER TO MAKE CHANGES ABOVE THIS LINE ##
@@ -67,13 +86,15 @@ except ImportError:
     print("userconfig.py not found, using defaults.", file=sys.stderr)
     config = {}
 
-# C and C++ compilers, use defaults if not specified by user
+# C, C++, and glsl compilers, use defaults if not specified by user
 cc = config.get("cc", "cc")
 cxx = config.get("cxx", "c++")
+glslc = config.get("glslc", "glslc")
 
-# Additional C and C++ flags provided by the user
+# Additional flags provided by the user
 cflags = ' '.join((cflags, config.get("cflags", "")))
 cxxflags = ' '.join((cxxflags, config.get("cxxflags", "")))
+glslflags = ' '.join((glslflags, config.get("glslflags", "")))
 
 # Include path arguments
 cppflags = "-I " + " -I ".join(include_dirs)
@@ -92,9 +113,18 @@ rule cxx
   command = %s %s %s $in -c -o $out -MD -MF $out.d
 """ % (cxx, cppflags, cxxflags))
 
-# Invoke rules for compiling files, place stuff in build/ directory.
+# Rule for glslc files
+print("""
+rule glsl
+  depfile = $out.d
+  command = %s %s %s $in -c -o $out -MD -MF $out.d
+""" % (glslc, cppflags, glslflags))
+
+# Invoke rules for compiling files, place C/C++ stuff in build/
+# directory, GLSL stuff in myricube-data/
 for src in c_files: print("build build/%s.o: cc %s" % (src, src))
 for src in cxx_files: print("build build/%s.o: cxx %s" % (src, src))
+for src in glsl_files: print("build myricube-data/%s.spv: glsl %s" % (src, src))
 
 # Link files together.
 print("""
@@ -103,4 +133,4 @@ rule link
 """ % (cxx, linkerflags))
 
 objects = ["build/%s.o" % src for src in (c_files + cxx_files)]
-print("build myricube-gl-bin: link %s" % ' '.join(objects))
+print("build myricube-bin: link %s" % ' '.join(objects))

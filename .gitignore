@@ -13,3 +13,4 @@ shared_sources
 build.ninja
 build/*
 !build/generate_ninja.py
+windows64/myricube-data/vk-shaders

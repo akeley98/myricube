@@ -19,6 +19,7 @@
 #include "nvvk/context_vk.hpp"
 #include "EnvVar.hh"
 #include "FrameManager.hpp"
+#include "map.hh"
 
 #include "PushConstant.glsl"
 
@@ -412,18 +413,27 @@ struct ScopedRenderPass
 
 
 
-VkShaderModule createShaderModule(
-    VkDevice device,
-    const uint32_t* code,
-    size_t sizeof_code)
+// Compile shader module from the SPIR-V code loaded from the named
+// file in the data directory.
+VkShaderModule createShaderModule(VkDevice device, const std::string& filename)
 {
+    size_t array_size;
+    const uint32_t* p_code = map_file<uint32_t>(
+        expand_filename(filename), readonly_flag, &array_size);
+    if (p_code == nullptr) {
+        throw std::runtime_error("Failed to read " + filename);
+    }
+
     VkShaderModuleCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = sizeof_code;
-    createInfo.pCode = code;
+    createInfo.codeSize = uint32_t(array_size * 4);
+    createInfo.pCode = p_code;
 
     VkShaderModule shaderModule;
-    NVVK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule));
+    VkResult result = vkCreateShaderModule(
+        device, &createInfo, nullptr, &shaderModule);
+    unmap(p_code);
+    NVVK_CHECK(result);
 
     return shaderModule;
 }
@@ -856,13 +866,9 @@ struct MeshPipeline
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
         VkShaderModule vertShaderModule = createShaderModule(
-            device,
-            vk_shaders_mesh_vert_glsl,
-            sizeof_vk_shaders_mesh_vert_glsl);
+            device, "vk-shaders/mesh.vert.spv");
         VkShaderModule fragShaderModule = createShaderModule(
-            device,
-            vk_shaders_mesh_frag_glsl,
-            sizeof_vk_shaders_mesh_frag_glsl);
+            device, "vk-shaders/mesh.frag.spv");
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1075,13 +1081,9 @@ struct RaycastPipeline
             device, &pipelineLayoutInfo, nullptr, &pipeline_layout));
 
         VkShaderModule vertShaderModule = createShaderModule(
-            device,
-            vk_shaders_raycast_vert_glsl,
-            sizeof_vk_shaders_raycast_vert_glsl);
+            device, "vk-shaders/raycast.vert.spv");
         VkShaderModule fragShaderModule = createShaderModule(
-            device,
-            vk_shaders_raycast_frag_glsl,
-            sizeof_vk_shaders_raycast_frag_glsl);
+            device, "vk-shaders/raycast.frag.spv");
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1259,13 +1261,9 @@ struct BackgroundPipeline
         NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
 
         VkShaderModule vertShaderModule = createShaderModule(
-            device,
-            vk_shaders_background_vert_glsl,
-            sizeof_vk_shaders_background_vert_glsl);
+            device, "vk-shaders/background.vert.spv");
         VkShaderModule fragShaderModule = createShaderModule(
-            device,
-            vk_shaders_background_frag_glsl,
-            sizeof_vk_shaders_background_frag_glsl);
+            device, "vk-shaders/background.frag.spv");
 
         VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
