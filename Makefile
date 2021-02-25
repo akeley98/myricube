@@ -8,11 +8,11 @@ CXXFLAGS=$(CFLAGS) -std=c++17
 -include cckiss/Makefile
 -include OBJS-list
 
-glfw-cmake:
-	cd glfw-build && cmake ../glfw
+glfw-build/Makefile:
+	cd glfw-build && cmake ../glfw >../build/glfw-cmake.stdout
 
-glfw-build/src/libglfw3.a: glfw-cmake
-	cd glfw-build && $(MAKE)
+do-glfw-build: glfw-build/Makefile
+	cd glfw-build && $(MAKE) >../build/glfw-make.stdout 2>../build/glfw-make.stderr
 
 libmyricube-cvoxel.so: $(LIBOBJS)
 	$(CXX) $(LIBOBJS) -shared -o libmyricube-cvoxel.so
@@ -28,7 +28,7 @@ myricube-vk-bin: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS)
 myricube-gl-bin: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
 	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) -ldl -lpthread -o myricube-gl-bin
 
-myricube-gl-ninja:
+myricube-gl-ninja: do-glfw-build
 	build/generate_ninja.py > build.ninja && ninja
 
 myricube-windows:

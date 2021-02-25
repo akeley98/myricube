@@ -32,6 +32,8 @@
 #include <string.h>
 #include <vector>
 
+#include "map.hh"
+
 namespace myricube {
 
 // This is probably the data type you care about.
@@ -49,52 +51,6 @@ constexpr uint64_t chunk_group_base_magic_number = 587569177;
 // to detect files in the old endianness.
 constexpr uint64_t new_endian_magic = uint64_t(1) << 63;
 
-// /MEM:/ is the in_memory_prefix. Colons are not allowed in file
-// names on Windows and almost certainly not in the name of a
-// top-level directory on Unix.
-inline const filename_string get_in_memory_prefix()
-{
-#ifdef MYRICUBE_WINDOWS
-    return L"/MEM:/";
-#else
-    return "/MEM:/";
-#endif
-}
-
-template <typename String>
-inline bool starts_with_in_memory_prefix(const String& arg)
-{
-    filename_string in_memory_prefix = get_in_memory_prefix();
-    if (arg.size() < in_memory_prefix.size()) return false;
-    size_t index = 0;
-    for (auto c : in_memory_prefix) {
-        if (arg[index++] != c) return false;
-    }
-    return true;
-}
-
-inline filename_string add_in_memory_prefix(const filename_string& arg)
-{
-    if (starts_with_in_memory_prefix(arg)) return arg;
-
-    filename_string result = get_in_memory_prefix();
-    result.append(arg);
-    return result;
-}
-
-#ifdef MYRICUBE_WINDOWS
-inline filename_string add_in_memory_prefix(const std::string& arg)
-{
-    if (starts_with_in_memory_prefix(arg)) {
-        filename_string result;
-        result.reserve(arg.size());
-        for (char c : arg) result.push_back(wchar_t(c));
-        return result;
-    }
-
-    return filename_concat_c_str(get_in_memory_prefix(), arg.c_str());
-}
-#endif
 
 
 // Voxels are really represented as 32-bit packed ints now. This is
@@ -184,12 +140,12 @@ struct BinChunkGroupT
     //
     // If this chunk group is newly created on disk, remember to set
     // the corresponding BinGroupBitfield bit as well.
-    mutable std::atomic<uint64_t> revision_number = { 0 };
+    std::atomic<uint64_t> revision_number = { 0 };
 
     // Legacy binary compatibility, may be modified by old versions.
     uint64_t unused_dirty_flags = { 0 };
 
-    void mark_dirty() const
+    void mark_dirty()
     {
         revision_number++;
     }

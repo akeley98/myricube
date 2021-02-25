@@ -2,7 +2,7 @@
 # File that prints out the build.ninja file to build myricube.
 # ALL FILES LISTED MUST USE ONLY THE CHARACTERS [A-Z][a-z][0-9]_-./
 
-import os
+import sys
 
 # Include directories
 include_dirs = (
@@ -23,6 +23,7 @@ c_files = (
 cxx_files = (
     "src/myricube.cc",
     "src/app.cc",
+    "src/map.cc",
     "src/voxels.cc",
     "src/window.cc",
     "apps/AxisTest.cc",
@@ -57,9 +58,22 @@ linkerflags = "glfw-build/src/libglfw3.a -ldl -lpthread"
         ## PREFER TO MAKE CHANGES ABOVE THIS LINE ##
 
 
-# C and C++ compilers
-cc = os.environ.get("CC", "cc")
-cxx = os.environ.get("CXX", "c++")
+try:
+    import userconfig
+    config = userconfig.__dict__.get("config")
+    if type(config) is not dict:
+        raise TypeError("userconfig.py must provide a dict named config.")
+except ImportError:
+    print("userconfig.py not found, using defaults.", file=sys.stderr)
+    config = {}
+
+# C and C++ compilers, use defaults if not specified by user
+cc = config.get("cc", "cc")
+cxx = config.get("cxx", "c++")
+
+# Additional C and C++ flags provided by the user
+cflags = ' '.join((cflags, config.get("cflags", "")))
+cxxflags = ' '.join((cxxflags, config.get("cxxflags", "")))
 
 # Include path arguments
 cppflags = "-I " + " -I ".join(include_dirs)

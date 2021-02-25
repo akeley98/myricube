@@ -12,6 +12,7 @@
 OBJS=cckiss/src/myricube.cc.o \
      cckiss/src/window.cc.o \
      cckiss/src/app.cc.o \
+     cckiss/src/map.cc.o \
      cckiss/src/voxels.cc.o \
      cckiss/apps/AxisTest.cc.o \
      cckiss/apps/Congestion.cc.o \
