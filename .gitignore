@@ -8,3 +8,8 @@ cckiss/git
 apps/FastNoise.o
 log_nvprosample.txt
 shared_sources
+.ninja_deps
+.ninja_log
+build.ninja
+build/*
+!build/generate_ninja.py
