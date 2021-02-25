@@ -124,13 +124,17 @@ rule glsl
 # directory, GLSL stuff in myricube-data/
 for src in c_files: print("build build/%s.o: cc %s" % (src, src))
 for src in cxx_files: print("build build/%s.o: cxx %s" % (src, src))
-for src in glsl_files: print("build myricube-data/%s.spv: glsl %s" % (src, src))
+for src in glsl_files: print("build windows64/myricube-data/%s.spv: glsl %s"
+                             % (src, src))
 
-# Link files together.
+# Link files together, explicit dependency on C/C++ object files
+# and order-only dependencies on SPIR-V files.
 print("""
 rule link
   command = %s $in -o $out %s
 """ % (cxx, linkerflags))
 
 objects = ["build/%s.o" % src for src in (c_files + cxx_files)]
-print("build myricube-bin: link %s" % ' '.join(objects))
+shaders = ["windows64/myricube-data/%s.spv" % src for src in glsl_files]
+print("build myricube-bin: link %s || %s"
+      % (' '.join(objects), ' '.join(shaders)))
