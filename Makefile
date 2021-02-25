@@ -30,7 +30,7 @@ myricube-gl-bin: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
 
 myricube-ninja: do-glfw-build
 	build/generate_ninja.py > build.ninja && \
-	ninja -v -t compdb cc cxx link > compile_commands.json
+	ninja -v  && ninja -t compdb cc cxx link > compile_commands.json
 
 myricube-windows:
 	cd windows64 && $(MAKE)
