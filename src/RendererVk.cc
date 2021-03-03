@@ -21,6 +21,7 @@
 #include "FrameManager.hpp"
 #include "map.hh"
 
+#include "meshcommon.glsl"
 #include "PushConstant.glsl"
 
 #ifdef MYRICUBE_WINDOWS
@@ -83,12 +84,27 @@ constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_SRGB;
 constexpr auto depth_format = VK_FORMAT_D32_SFLOAT;
 
 // Image format for 3D images used to store chunk groups' voxels.
-// Need to check that it matches the bit assignments.
+// Need to check that it matches the bit assignments, in both
+// C++ (lowercase) and GLSL (uppercase).
 constexpr auto chunk_group_voxels_image_format = VK_FORMAT_R8G8B8A8_SRGB;
 static_assert(red_shift == 0);
+static_assert(red_shift == RED_SHIFT);
 static_assert(green_shift == 8);
+static_assert(green_shift == GREEN_SHIFT);
 static_assert(blue_shift == 16);
+static_assert(blue_shift == BLUE_SHIFT);
 // Assume little endian for now, the endian wars have finally ended.
+
+// Also check the other bit assignments match between C++ and GLSL.
+static_assert(x_shift == X_SHIFT);
+static_assert(y_shift == Y_SHIFT);
+static_assert(z_shift == Z_SHIFT);
+static_assert(pos_x_face_bit == POS_X_FACE_BIT);
+static_assert(pos_y_face_bit == POS_Y_FACE_BIT);
+static_assert(pos_z_face_bit == POS_Z_FACE_BIT);
+static_assert(neg_x_face_bit == NEG_X_FACE_BIT);
+static_assert(neg_y_face_bit == NEG_Y_FACE_BIT);
+static_assert(neg_z_face_bit == NEG_Z_FACE_BIT);
 
 constexpr VkImageSubresourceRange color_range {
     VK_IMAGE_ASPECT_COLOR_BIT,
@@ -265,8 +281,17 @@ struct ScopedContext : nvvk::Context
         }
         context_info.addDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
+        // Optional mesh/task shader.
+        VkPhysicalDeviceMeshShaderFeaturesNV mesh_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV };
+        context_info.addDeviceExtension(
+            VK_NV_MESH_SHADER_EXTENSION_NAME, true, &mesh_features);
+
         // Initialize the nvvk context.
         init(context_info);
+
+        // Check support for mesh/task shaders.
+        // TODO
 
         // Warn if validation disabled.
         if (!validation_enabled) {
@@ -836,7 +861,8 @@ const VkPipelineDynamicStateCreateInfo dynamic_state {
 // Dynamic viewport/scissor pipeline for mesh rendering. All we really
 // have to do here is load the vert/frag shader and hook up the
 // instanced voxels array. Everything else is just endless
-// boilerplate.
+// boilerplate. NOT using mesh/task shaders; mesh = drawing voxels as
+// triangles.
 struct MeshPipeline
 {
     // We manage these.
@@ -999,6 +1025,170 @@ struct MeshPipeline
     MeshPipeline(MeshPipeline&&) = delete;
 
     ~MeshPipeline()
+    {
+        vkDestroyPipeline(device, pipeline, nullptr);
+        vkDestroyPipelineLayout(device, layout, nullptr);
+    }
+
+    operator VkPipeline() const
+    {
+        return pipeline;
+    }
+};
+
+
+
+// Dynamic viewport/scissor pipeline for mesh rendering with task/mesh
+// shader pipeline.
+struct TaskMeshPipeline
+{
+    // We manage these.
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+
+    // Borrowed pointer.
+    VkDevice device;
+
+    TaskMeshPipeline(VkDevice dev_, VkRenderPass render_pass)
+    {
+        device = dev_;
+
+        // Boilerplate from vulkan-tutorial.com with some modifications.
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags =
+            VK_SHADER_STAGE_FRAGMENT_BIT
+            | VK_SHADER_STAGE_TASK_BIT_NV
+            | VK_SHADER_STAGE_MESH_BIT_NV;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(PushConstant);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 0;
+        pipelineLayoutInfo.pSetLayouts = nullptr;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        NVVK_CHECK(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &layout));
+
+        VkShaderModule taskShaderModule = createShaderModule(
+            device, "vk-shaders/mesh.task.spv");
+        VkShaderModule meshShaderModule = createShaderModule(
+            device, "vk-shaders/mesh.mesh.spv");
+        VkShaderModule fragShaderModule = createShaderModule(
+            device, "vk-shaders/mesh.frag.spv");
+
+        VkPipelineShaderStageCreateInfo taskShaderStageInfo{};
+        taskShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        taskShaderStageInfo.stage = VK_SHADER_STAGE_TASK_BIT_NV;
+        taskShaderStageInfo.module = taskShaderModule;
+        taskShaderStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo meshShaderStageInfo{};
+        meshShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        meshShaderStageInfo.stage = VK_SHADER_STAGE_MESH_BIT_NV;
+        meshShaderStageInfo.module = meshShaderModule;
+        meshShaderStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+        fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragShaderStageInfo.module = fragShaderModule;
+        fragShaderStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = {
+            taskShaderStageInfo, meshShaderStageInfo, fragShaderStageInfo };
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = 1.0f;
+        viewport.height = 1.0f;
+        viewport.minDepth = min_depth;
+        viewport.maxDepth = max_depth;
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = VkExtent2D{ 1, 1 };
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.depthClampEnable = VK_FALSE;
+        rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.depthBiasEnable = VK_FALSE;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.sampleShadingEnable = VK_FALSE;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.stencilTestEnable = VK_FALSE;
+
+        VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.logicOp = VK_LOGIC_OP_COPY;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+        colorBlending.blendConstants[0] = 0.0f;
+        colorBlending.blendConstants[1] = 0.0f;
+        colorBlending.blendConstants[2] = 0.0f;
+        colorBlending.blendConstants[3] = 0.0f;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.flags = 0;
+        pipelineInfo.stageCount = 3;
+        pipelineInfo.pStages = shaderStages;
+        pipelineInfo.pVertexInputState = nullptr; // Using task/mesh shader
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamic_state;
+        pipelineInfo.layout = layout;
+        pipelineInfo.renderPass = render_pass;
+        pipelineInfo.subpass = 0;
+        pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+        NVVK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline));
+
+        vkDestroyShaderModule(device, taskShaderModule, nullptr);
+        vkDestroyShaderModule(device, meshShaderModule, nullptr);
+        vkDestroyShaderModule(device, fragShaderModule, nullptr);
+    }
+
+    TaskMeshPipeline(TaskMeshPipeline&&) = delete;
+
+    ~TaskMeshPipeline()
     {
         vkDestroyPipeline(device, pipeline, nullptr);
         vkDestroyPipelineLayout(device, layout, nullptr);
@@ -1407,6 +1597,7 @@ struct RendererVk :
     ScopedRenderPass render_pass;
     Framebuffers framebuffers;
     MeshPipeline mesh_pipeline;
+    TaskMeshPipeline task_mesh_pipeline;
     RaycastPipeline raycast_pipeline;
     BackgroundPipeline background_pipeline;
 
@@ -1522,6 +1713,9 @@ struct RendererVk :
             dev,
             render_pass),
         mesh_pipeline(
+            dev,
+            render_pass),
+        task_mesh_pipeline( // TODO skip if not supported
             dev,
             render_pass),
         raycast_pipeline(
@@ -1854,6 +2048,15 @@ struct RendererVk :
     void draw_mesh_entries(
         const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries) override
     {
+        // draw_mesh_entries_traditional(entries);
+        draw_mesh_entries_task(entries);
+    }
+
+
+    // Traditional vertex shader implementation.
+    void draw_mesh_entries_traditional(
+        const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries)
+    {
         glm::mat4 vp = transforms.residue_vp_matrix;
         glm::vec3 eye_residue = transforms.eye_residue;
         glm::ivec3 eye_group = transforms.eye_group;
@@ -1863,14 +2066,6 @@ struct RendererVk :
             frame_cmd_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             mesh_pipeline);
-
-        // Set viewport and scissors.
-        VkViewport viewport {
-            0, 0, float(width), float(height), min_depth, max_depth };
-        vkCmdSetViewport(frame_cmd_buffer, 0, 1, &viewport);
-
-        VkRect2D scissor { { 0, 0 }, { uint32_t(width), uint32_t(height) } };
-        vkCmdSetScissor(frame_cmd_buffer, 0, 1, &scissor);
 
         // Ready to draw the entries.
         for (auto pair : entries) {
@@ -1923,6 +2118,50 @@ struct RendererVk :
         }
     }
 
+
+    // Task/mesh shader implementation
+    void draw_mesh_entries_task(
+        const std::vector<std::pair<MeshEntry*, glm::ivec3>>& entries)
+    {
+        glm::mat4 vp = transforms.residue_vp_matrix;
+        glm::vec3 eye_residue = transforms.eye_residue;
+        glm::ivec3 eye_group = transforms.eye_group;
+
+        // Bind the mesh-drawing pipeline.
+        vkCmdBindPipeline(
+            frame_cmd_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            task_mesh_pipeline);
+
+        for (auto pair : entries) {
+            MeshEntry& entry = *pair.first;
+            glm::ivec3 group_coord = pair.second;
+
+            // Push the push constant. We need to update the MVP and
+            // the eye position relative to this group.  The view
+            // matrix only takes into account the eye's residue
+            // coordinates, so the model position of the group
+            // actually needs to be shifted by the eye's group coord.
+            glm::vec3 model_offset = glm::vec3(group_coord - eye_group)
+                                   * float(group_size);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), model_offset);
+            push_constant.mvp = vp * m;
+            push_constant.eye_relative_group_origin = glm::vec4(
+                eye_residue - model_offset, 0);
+
+            vkCmdPushConstants(
+                frame_cmd_buffer,
+                task_mesh_pipeline.layout,
+                VK_SHADER_STAGE_FRAGMENT_BIT
+                | VK_SHADER_STAGE_TASK_BIT_NV
+                | VK_SHADER_STAGE_MESH_BIT_NV,
+                0, sizeof(PushConstant), &push_constant);
+
+            // Dispatch task shader.
+            vkCmdDrawMeshTasksNV(frame_cmd_buffer, 1, 0);
+        }
+    }
+
     // Implement the constructor and destructor for MeshEntry and
     // MeshStaging (basically just a device buffer of MeshVoxelVertex,
     // plus a host-mapped buffer for MeshStaging).  My plan is to
@@ -1953,6 +2192,7 @@ struct RendererVk :
             sizeof(MappedGroupMesh),
             block_size,
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+              | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
               | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             &memory_to_free.back());
 
@@ -2127,14 +2367,6 @@ struct RendererVk :
             frame_cmd_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             raycast_pipeline);
-
-        // Set viewport and scissor.
-        VkViewport viewport {
-            0, 0, float(width), float(height), min_depth, max_depth };
-        vkCmdSetViewport(frame_cmd_buffer, 0, 1, &viewport);
-
-        VkRect2D scissor { { 0, 0 }, { uint32_t(width), uint32_t(height) } };
-        vkCmdSetScissor(frame_cmd_buffer, 0, 1, &scissor);
 
         // Draw the raycast entries.
         for (auto pair : entries) {

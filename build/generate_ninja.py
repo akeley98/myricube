@@ -48,6 +48,8 @@ cxx_files = (
 glsl_files = (
     "vk-shaders/mesh.vert",
     "vk-shaders/mesh.frag",
+    "vk-shaders/mesh.mesh",
+    "vk-shaders/mesh.task",
     "vk-shaders/raycast.vert",
     "vk-shaders/raycast.frag",
     "vk-shaders/background.vert",
