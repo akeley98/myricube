@@ -47,4 +47,4 @@ VK_OBJS=cckiss/src/RendererVk.cc.o \
 GL_DUMMY_OBJS=cckiss/src/DummyGL.cc.o
 
 # Objects needed to build the ctypes library for iMyricube.py
-LIBOBJS=cckiss/src/cvoxel.cc.o cckiss/src/voxels.cc.o
+LIBOBJS=cckiss/src/cvoxel.cc.o cckiss/src/voxels.cc.o cckiss/src/map.cc.o
