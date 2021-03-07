@@ -105,6 +105,9 @@ static_assert(pos_z_face_bit == POS_Z_FACE_BIT);
 static_assert(neg_x_face_bit == NEG_X_FACE_BIT);
 static_assert(neg_y_face_bit == NEG_Y_FACE_BIT);
 static_assert(neg_z_face_bit == NEG_Z_FACE_BIT);
+static_assert(chunk_size == CHUNK_SIZE);
+static_assert(chunk_max_verts == CHUNK_MAX_VOXELS); // verts is historical, fix?
+static_assert(edge_chunks == EDGE_CHUNKS);
 
 constexpr VkImageSubresourceRange color_range {
     VK_IMAGE_ASPECT_COLOR_BIT,
@@ -296,6 +299,27 @@ struct ScopedContext : nvvk::Context
 
         // Check support for mesh/task shaders.
         // TODO
+
+        VkPhysicalDeviceMeshShaderPropertiesNV mesh_properties = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_NV,
+            nullptr };
+        VkPhysicalDeviceProperties2 properties2 = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &mesh_properties };
+        vkGetPhysicalDeviceProperties2(m_physicalDevice, &properties2);
+
+        fprintf(stderr, "maxDrawMeshTasksCount = %u\n", mesh_properties.maxDrawMeshTasksCount);
+        fprintf(stderr, "maxTaskWorkGroupInvocations = %u\n", mesh_properties.maxTaskWorkGroupInvocations);
+        fprintf(stderr, "maxTaskWorkGroupSize[0] = %u\n", mesh_properties.maxTaskWorkGroupSize[0]);
+        fprintf(stderr, "maxTaskTotalMemorySize = %u\n", mesh_properties.maxTaskTotalMemorySize);
+        fprintf(stderr, "maxTaskOutputCount = %u\n", mesh_properties.maxTaskOutputCount);
+        fprintf(stderr, "maxMeshWorkGroupInvocations = %u\n", mesh_properties.maxMeshWorkGroupInvocations);
+        fprintf(stderr, "maxMeshWorkGroupSize[0] = %u\n", mesh_properties.maxMeshWorkGroupSize[0]);
+        fprintf(stderr, "maxMeshTotalMemorySize = %u\n", mesh_properties.maxMeshTotalMemorySize);
+        fprintf(stderr, "maxMeshOutputVertices = %u\n", mesh_properties.maxMeshOutputVertices);
+        fprintf(stderr, "maxMeshOutputPrimitives = %u\n", mesh_properties.maxMeshOutputPrimitives);
+        fprintf(stderr, "maxMeshMultiviewViewCount = %u\n", mesh_properties.maxMeshMultiviewViewCount);
+        fprintf(stderr, "meshOutputPerVertexGranularity = %u\n", mesh_properties.meshOutputPerVertexGranularity);
+        fprintf(stderr, "meshOutputPerPrimitiveGranularity = %u\n", mesh_properties.meshOutputPerPrimitiveGranularity);
 
         // Warn if validation disabled.
         if (!validation_enabled) {
@@ -1103,8 +1127,8 @@ struct TaskMeshPipeline
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 0;
-        pipelineLayoutInfo.pSetLayouts = nullptr;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &set_layout;
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -2198,8 +2222,17 @@ struct RendererVk :
                 | VK_SHADER_STAGE_MESH_BIT_NV,
                 0, sizeof(PushConstant), &push_constant);
 
+            // Pass mesh data.
+            vkCmdBindDescriptorSets(
+                frame_cmd_buffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                task_mesh_pipeline.layout,
+                0, 1, &entry.descriptor,
+                0, nullptr);
+
             // Dispatch task shader.
-            vkCmdDrawMeshTasksNV(frame_cmd_buffer, 1, 0);
+            auto chunks_per_group = edge_chunks * edge_chunks * edge_chunks;
+            vkCmdDrawMeshTasksNV(frame_cmd_buffer, chunks_per_group, 0);
         }
     }
 
@@ -2351,6 +2384,7 @@ struct RendererVk :
                             &entry->draw_data[zL][yL][xL],
                             group_ptr->chunk_array[zL][yL][xL],
                             glm::ivec3(xL, yL, zL) * chunk_size);
+            b->map->draw_data[zL][yL][xL] = entry->draw_data[zL][yL][xL];
         }
         }
         }

@@ -63,24 +63,29 @@ struct MeshVoxelVertex
 // I'm desperate for GPU memory).
 constexpr size_t chunk_max_verts = chunk_size * chunk_size * chunk_size;
 
-// Bytes on GPU for storing the mesh (list of visible voxels) of one
-// chunk.
+// NOTE: These structs have their definitions duplicated in
+// meshcommon.glsl -- myricube wasn't really written with polyglot
+// files in mind, being OpenGL originally :/
+
+// Bytes on GPU for storing the mesh (list of visible voxels) of one chunk.
 struct MappedChunkMesh
 {
     MeshVoxelVertex verts[chunk_max_verts];
-};
-
-// An entire chunk group of MappedChunkMesh, [z][y][x] order as typical.
-struct MappedGroupMesh
-{
-    MappedChunkMesh chunks[edge_chunks][edge_chunks][edge_chunks];
+    // Needs to pack tightly, don't add more data.
 };
 
 // Extra data needed to interpret MappedChunkMesh correctly for drawing.
 struct ChunkDrawData
 {
-    size_t vert_count = 0; // Vertex (visible voxel) count i.e. # instances
-    PackedAABB aabb;       // AABB, for decide_chunk's benefit.
+    uint32_t vert_count = 0; // Vertex (visible voxel) count i.e. # instances
+    PackedAABB aabb;         // AABB, for decide_chunk's benefit.
+};
+
+// An entire chunk group of MappedChunkMesh, [z][y][x] order as typical.
+struct MappedGroupMesh
+{
+    MappedChunkMesh  chunks[edge_chunks][edge_chunks][edge_chunks];
+    ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks]; // Vk only
 };
 
 // Function for filling the above structures given a chunk. Requires

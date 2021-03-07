@@ -2,17 +2,155 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_NV_mesh_shader : enable
 
-layout(local_size_x=32) in;
-layout(max_vertices=4 * 32, max_primitives=2 * 32) out;
+#include "PushConstant.glsl"
+#include "meshcommon.glsl"
+#include "srgb.glsl"
+
+layout(local_size_x=MAX_MESH_VOXELS) in;
+layout(max_vertices=MAX_MESH_VERTICES, max_primitives=MAX_MESH_TRIANGLES) out;
 layout(triangles) out;
 
 layout(location=0) out vec3 v_color[];
 layout(location=1) out vec3 v_residue_coord[];
 layout(location=2) out vec2 v_uv[];
 
-#include "PushConstant.glsl"
+// Descriptor delivering the voxels in the chunk group.
+layout(set=0, binding=0) buffer MeshBuffer { GroupMesh mesh; };
+
+taskNV in Task
+{
+    uvec3 chunk_idx;
+    TaskInfo task_info_array[MAX_TASK_OUTPUTS];
+};
 
 void main()
+{
+    TaskInfo task_info = task_info_array[gl_WorkGroupID.x];
+    uint local_idx = gl_LocalInvocationID.x;
+
+    // Direct translation of vertex shader to mesh shader, TODO, improve.
+    if (local_idx < task_info.voxel_count) {
+        MeshVoxelVertex voxel =
+            mesh.chunks[chunk_idx.z][chunk_idx.y][chunk_idx.x]
+            .verts[local_idx + task_info.voxel_offset];
+
+        // Unpack the color.
+        float red   = srgb_from_u8((voxel.packed_color >> RED_SHIFT) & 255);
+        float green = srgb_from_u8((voxel.packed_color >> GREEN_SHIFT) & 255);
+        float blue  = srgb_from_u8((voxel.packed_color >> BLUE_SHIFT) & 255);
+        vec3  color = vec3(red, green, blue);
+
+        // Unpack the position and translate by mvp.
+        float x = float((voxel.packed_residue_face_bits >> X_SHIFT) & 255u);
+        float y = float((voxel.packed_residue_face_bits >> Y_SHIFT) & 255u);
+        float z = float((voxel.packed_residue_face_bits >> Z_SHIFT) & 255u);
+        vec3 model_space_position = vec3(x, y, z);
+        vec4 offset = pc.pc.mvp * vec4(model_space_position, 1);
+
+        // Fill in vertex buffer.
+        uint vert_offset = 8 * local_idx;
+        vec4 xc = pc.pc.mvp[0];
+        vec4 yc = pc.pc.mvp[1];
+        vec4 zc = pc.pc.mvp[2];
+        gl_MeshVerticesNV[vert_offset + 0].gl_Position = offset;
+        gl_MeshVerticesNV[vert_offset + 1].gl_Position = offset + xc;
+        gl_MeshVerticesNV[vert_offset + 2].gl_Position = offset +    yc;
+        gl_MeshVerticesNV[vert_offset + 3].gl_Position = offset + xc+yc;
+        gl_MeshVerticesNV[vert_offset + 4].gl_Position = offset +       zc;
+        gl_MeshVerticesNV[vert_offset + 5].gl_Position = offset + xc  + zc;
+        gl_MeshVerticesNV[vert_offset + 6].gl_Position = offset +   +yc+zc;
+        gl_MeshVerticesNV[vert_offset + 7].gl_Position = offset + xc+yc+zc;
+
+        v_color[vert_offset + 0] = color;
+        v_color[vert_offset + 1] = color;
+        v_color[vert_offset + 2] = color;
+        v_color[vert_offset + 3] = color;
+        v_color[vert_offset + 4] = color;
+        v_color[vert_offset + 5] = color;
+        v_color[vert_offset + 6] = color;
+        v_color[vert_offset + 7] = color;
+
+        v_residue_coord[vert_offset + 0] = model_space_position + vec3(0, 0, 0);
+        v_residue_coord[vert_offset + 1] = model_space_position + vec3(1, 0, 0);
+        v_residue_coord[vert_offset + 2] = model_space_position + vec3(0, 1, 0);
+        v_residue_coord[vert_offset + 3] = model_space_position + vec3(1, 1, 0);
+        v_residue_coord[vert_offset + 4] = model_space_position + vec3(0, 0, 1);
+        v_residue_coord[vert_offset + 5] = model_space_position + vec3(1, 0, 1);
+        v_residue_coord[vert_offset + 6] = model_space_position + vec3(0, 1, 1);
+        v_residue_coord[vert_offset + 7] = model_space_position + vec3(1, 1, 1);
+
+        // TODO UV
+        v_uv[vert_offset + 0] = vec2(0.5,0.5);
+        v_uv[vert_offset + 1] = vec2(0.5,0.5);
+        v_uv[vert_offset + 2] = vec2(0.5,0.5);
+        v_uv[vert_offset + 3] = vec2(0.5,0.5);
+        v_uv[vert_offset + 4] = vec2(0.5,0.5);
+        v_uv[vert_offset + 5] = vec2(0.5,0.5);
+        v_uv[vert_offset + 6] = vec2(0.5,0.5);
+        v_uv[vert_offset + 7] = vec2(0.5,0.5);
+
+        // Connect up the vertices, draw missing faces as degenerate
+        // triangles. TODO very un-mesh-shader-like.
+        uint prim_offset = 36 * local_idx;
+        for (uint i = 0; i < 36u; ++i) {
+            gl_PrimitiveIndicesNV[prim_offset + i] = 0;
+        }
+        if (0 != (voxel.packed_residue_face_bits & NEG_X_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 0]  = vert_offset + 0;
+            gl_PrimitiveIndicesNV[prim_offset + 1]  = vert_offset + 4;
+            gl_PrimitiveIndicesNV[prim_offset + 2]  = vert_offset + 2;
+            gl_PrimitiveIndicesNV[prim_offset + 3]  = vert_offset + 2;
+            gl_PrimitiveIndicesNV[prim_offset + 4]  = vert_offset + 4;
+            gl_PrimitiveIndicesNV[prim_offset + 5]  = vert_offset + 6;
+        }
+        if (0 != (voxel.packed_residue_face_bits & POS_X_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 6]  = vert_offset + 1;
+            gl_PrimitiveIndicesNV[prim_offset + 7]  = vert_offset + 3;
+            gl_PrimitiveIndicesNV[prim_offset + 8]  = vert_offset + 5;
+            gl_PrimitiveIndicesNV[prim_offset + 9]  = vert_offset + 3;
+            gl_PrimitiveIndicesNV[prim_offset + 10] = vert_offset + 7;
+            gl_PrimitiveIndicesNV[prim_offset + 11] = vert_offset + 5;
+        }
+        if (0 != (voxel.packed_residue_face_bits & NEG_Y_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 12] = vert_offset + 0;
+            gl_PrimitiveIndicesNV[prim_offset + 13] = vert_offset + 1;
+            gl_PrimitiveIndicesNV[prim_offset + 14] = vert_offset + 4;
+            gl_PrimitiveIndicesNV[prim_offset + 15] = vert_offset + 4;
+            gl_PrimitiveIndicesNV[prim_offset + 16] = vert_offset + 1;
+            gl_PrimitiveIndicesNV[prim_offset + 17] = vert_offset + 5;
+        }
+        if (0 != (voxel.packed_residue_face_bits & POS_Y_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 18] = vert_offset + 2;
+            gl_PrimitiveIndicesNV[prim_offset + 19] = vert_offset + 6;
+            gl_PrimitiveIndicesNV[prim_offset + 20] = vert_offset + 3;
+            gl_PrimitiveIndicesNV[prim_offset + 21] = vert_offset + 3;
+            gl_PrimitiveIndicesNV[prim_offset + 22] = vert_offset + 6;
+            gl_PrimitiveIndicesNV[prim_offset + 23] = vert_offset + 7;
+        }
+        if (0 != (voxel.packed_residue_face_bits & NEG_Z_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 24] = vert_offset + 0;
+            gl_PrimitiveIndicesNV[prim_offset + 25] = vert_offset + 2;
+            gl_PrimitiveIndicesNV[prim_offset + 26] = vert_offset + 1;
+            gl_PrimitiveIndicesNV[prim_offset + 27] = vert_offset + 1;
+            gl_PrimitiveIndicesNV[prim_offset + 28] = vert_offset + 2;
+            gl_PrimitiveIndicesNV[prim_offset + 29] = vert_offset + 3;
+        }
+        if (0 != (voxel.packed_residue_face_bits & POS_Z_FACE_BIT)) {
+            gl_PrimitiveIndicesNV[prim_offset + 30] = vert_offset + 4;
+            gl_PrimitiveIndicesNV[prim_offset + 31] = vert_offset + 5;
+            gl_PrimitiveIndicesNV[prim_offset + 32] = vert_offset + 6;
+            gl_PrimitiveIndicesNV[prim_offset + 33] = vert_offset + 6;
+            gl_PrimitiveIndicesNV[prim_offset + 34] = vert_offset + 5;
+            gl_PrimitiveIndicesNV[prim_offset + 35] = vert_offset + 7;
+        }
+
+        if (local_idx == 0) {
+            gl_PrimitiveCountNV = 12 * task_info.voxel_count;
+        }
+    }
+}
+
+void foo()
 {
     uint idx = gl_LocalInvocationID.x;
 
@@ -23,10 +161,16 @@ void main()
     gl_MeshVerticesNV[4 * idx + 2].gl_Position = offset + pc.pc.mvp * vec4(0, 0, 1, 1);
     gl_MeshVerticesNV[4 * idx + 3].gl_Position = offset + pc.pc.mvp * vec4(1, 0, 1, 1);
 
-    v_color[4 * idx + 0] = vec3(1, 0, 1);
-    v_color[4 * idx + 1] = vec3(1, 0, 1);
-    v_color[4 * idx + 2] = vec3(1, 0, 1);
-    v_color[4 * idx + 3] = vec3(1, 0, 1);
+    uint packed_color = mesh.chunks[0][0][0].verts[idx].packed_color;
+    float red   = srgb_from_u8((packed_color >> RED_SHIFT) & 255);
+    float green = srgb_from_u8((packed_color >> GREEN_SHIFT) & 255);
+    float blue  = srgb_from_u8((packed_color >> BLUE_SHIFT) & 255);
+    vec3 color  = vec3(red, green, blue);
+
+    v_color[4 * idx + 0] = color;
+    v_color[4 * idx + 1] = color;
+    v_color[4 * idx + 2] = color;
+    v_color[4 * idx + 3] = color;
 
     v_residue_coord[4 * idx + 0] = vec3(idx + 0, gl_WorkGroupID.x, 0);
     v_residue_coord[4 * idx + 1] = vec3(idx + 1, gl_WorkGroupID.x, 0);

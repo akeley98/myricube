@@ -1,10 +1,46 @@
+// One workgroup invocation dispatches mesh shader tasks needed to
+// draw one chunk of a chunk group.
 #version 460
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_NV_mesh_shader : enable
 
 layout(local_size_x=32) in;
 
+#include "meshcommon.glsl"
+#include "PushConstant.glsl"
+
+// Descriptor delivering the voxels in the chunk group.
+layout(set=0, binding=0) buffer MeshBuffer { GroupMesh mesh; };
+
+taskNV out Task
+{
+    // Chunk index within chunk group for this task shader to draw.
+    uvec3 chunk_idx;
+    // Instructions for each dispatched mesh shader group.
+    TaskInfo task_info_array[MAX_TASK_OUTPUTS];
+};
+
 void main()
 {
-    gl_TaskCountNV = 5;
+    // Each task shader handles one chunk.
+    chunk_idx.x = gl_WorkGroupID.x & (EDGE_CHUNKS - 1u);
+    chunk_idx.y = uint(gl_WorkGroupID.x / EDGE_CHUNKS) & (EDGE_CHUNKS - 1u);
+    chunk_idx.z = uint(gl_WorkGroupID.x / (EDGE_CHUNKS * EDGE_CHUNKS))
+                & (EDGE_CHUNKS - 1u);
+    ChunkDrawData draw_data =
+        mesh.draw_data[chunk_idx.z][chunk_idx.y][chunk_idx.x];
+
+    // Round up to calculate needed number of mesh shaders groups to
+    // dispatch, and divide up the voxels between them.
+    gl_TaskCountNV = (draw_data.voxel_count + MAX_MESH_VOXELS - 1)
+                   / MAX_MESH_VOXELS;
+    if (gl_TaskCountNV == 0) return;
+
+    for (uint i = 0; i < uint(gl_TaskCountNV); ++i) {
+        task_info_array[i].voxel_offset = i * MAX_MESH_VOXELS;
+        task_info_array[i].voxel_count  = MAX_MESH_VOXELS;
+    }
+    // Last one might not be fully used.
+    task_info_array[gl_TaskCountNV-1].voxel_count =
+        draw_data.voxel_count - (gl_TaskCountNV-1) * MAX_MESH_VOXELS;
 }

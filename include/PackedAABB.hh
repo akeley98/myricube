@@ -13,7 +13,7 @@ constexpr uint32_t y_shift = 8;
 constexpr uint32_t z_shift = 16;
 
 // For memory efficiency, the AABB of a chunk is stored in packed
-// format on the GPU.
+// format on the GPU. Duplicated in meshcommon.glsl
 struct PackedAABB
 {
     uint32_t packed_low;
