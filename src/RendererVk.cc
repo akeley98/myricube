@@ -117,6 +117,9 @@ struct MeshEntry
     // Buffer for the voxel instance list.
     VkBuffer buffer = VK_NULL_HANDLE;
 
+    // Descriptor set referring to above buffer.
+    VkDescriptorSet descriptor = VK_NULL_HANDLE;
+
     // Data needed to draw chunk[z][y][x] within this chunk group.
     ChunkDrawData draw_data[edge_chunks][edge_chunks][edge_chunks];
 
@@ -155,6 +158,7 @@ void swap(MeshEntry& left, MeshEntry& right) noexcept
 {
     using std::swap;
     swap(left.buffer, right.buffer);
+    swap(left.descriptor, right.descriptor);
     swap(left.draw_data, right.draw_data);
 }
 
@@ -1045,13 +1049,48 @@ struct TaskMeshPipeline
     // We manage these.
     VkPipeline pipeline;
     VkPipelineLayout layout;
+    VkDescriptorSetLayout set_layout; // Passes voxel-list buffer.
 
     // Borrowed pointer.
     VkDevice device;
 
+    static constexpr uint32_t pool_sets = 59;
+    static constexpr VkDescriptorPoolSize pool_size {
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        pool_sets };
+
+    // A VkDescriptorPoolCreateInfo that describes creating a pool
+    // with enough room for pool_sets-many descriptors for the raycast
+    // pipeline.
+    static constexpr VkDescriptorPoolCreateInfo descriptor_pool_info {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        nullptr,
+        0,
+        pool_sets,
+        1,
+        &pool_size };
+
     TaskMeshPipeline(VkDevice dev_, VkRenderPass render_pass)
     {
         device = dev_;
+
+        // Only binding is the buffer holding the voxel list.
+        VkDescriptorSetLayoutBinding voxels_binding {
+            0,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            1,
+            VK_SHADER_STAGE_ALL,
+            nullptr };
+
+        VkDescriptorSetLayoutCreateInfo set_info {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            nullptr,
+            0,
+            1,
+            &voxels_binding };
+
+        NVVK_CHECK(vkCreateDescriptorSetLayout(
+            device, &set_info, nullptr, &set_layout));
 
         // Boilerplate from vulkan-tutorial.com with some modifications.
         VkPushConstantRange pushConstantRange{};
@@ -1192,6 +1231,7 @@ struct TaskMeshPipeline
     {
         vkDestroyPipeline(device, pipeline, nullptr);
         vkDestroyPipelineLayout(device, layout, nullptr);
+        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
     }
 
     operator VkPipeline() const
@@ -1683,7 +1723,8 @@ struct RendererVk :
     std::vector<MappedBuffer<AABBs>>            unused_aabb_buffers;
     std::vector<std::pair<VkImage, VkImageView>>unused_voxel_images;
     std::vector<VkDescriptorPool>               descriptor_pools_to_free;
-    std::vector<VkDescriptorSet>                unused_descriptor_sets;
+    std::vector<VkDescriptorSet>                unused_mesh_desc;
+    std::vector<VkDescriptorSet>                unused_raycast_desc;
 
     // VkDeviceMemory we're using that is to be freed in the destructor.
     std::vector<VkDeviceMemory> memory_to_free;
@@ -2164,48 +2205,93 @@ struct RendererVk :
 
     // Implement the constructor and destructor for MeshEntry and
     // MeshStaging (basically just a device buffer of MeshVoxelVertex,
-    // plus a host-mapped buffer for MeshStaging).  My plan is to
-    // allocate big blocks of buffers (block = shared vulkan device
-    // memory) and only release the memory at the very end. Hence, I
-    // need to recycle buffers (in unused_mesh_buffers and
-    // unused_mesh_staging_buffers) to avoid an unbounded memory leak.
+    // plus a host-mapped buffer for MeshStaging and descriptor
+    // pointing to it).  My plan is to allocate big blocks of buffers
+    // (block = shared vulkan device memory) and only release the
+    // memory at the very end. Hence, I need to recycle buffers (in
+    // unused_mesh_buffers and unused_mesh_staging_buffers) to avoid
+    // an unbounded memory leak.
 
     // Construct the given MeshEntry. Only called by main thread.
     void constructor(MeshEntry* entry)
     {
-      restart:
+      alloc_buffer:
         // Recycle if possible.
         if (!unused_mesh_buffers.empty()) {
             entry->buffer = unused_mesh_buffers.back();
             unused_mesh_buffers.pop_back();
-            return;
+        }
+        else {
+            // Otherwise, we have to allocate a new block of buffers.
+            constexpr size_t block_size = 23;
+            memory_to_free.push_back(VK_NULL_HANDLE);
+            unused_mesh_buffers.reserve(
+                unused_mesh_buffers.size() + block_size);
+
+            auto buffers = create_device_buffer_array(
+                ctx.m_physicalDevice,
+                dev,
+                sizeof(MappedGroupMesh),
+                block_size,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+                  | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                  | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                &memory_to_free.back());
+
+            for (auto buffer : buffers) {
+                unused_mesh_buffers.push_back(buffer);
+            }
+            goto alloc_buffer;
         }
 
-        // Otherwise, we have to allocate a new block of buffers.
-        constexpr size_t block_size = 23;
-        memory_to_free.push_back(VK_NULL_HANDLE);
-        unused_mesh_buffers.reserve(unused_mesh_buffers.size() + block_size);
-
-        auto buffers = create_device_buffer_array(
-            ctx.m_physicalDevice,
-            dev,
-            sizeof(MappedGroupMesh),
-            block_size,
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-              | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-              | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            &memory_to_free.back());
-
-        for (auto buffer : buffers) {
-            unused_mesh_buffers.push_back(buffer);
+      alloc_descriptor:
+        // Recycle if possible.
+        if (!unused_mesh_desc.empty()) {
+            entry->descriptor = unused_mesh_desc.back();
+            unused_mesh_desc.pop_back();
         }
-        goto restart;
+        else {
+            auto pool_info = TaskMeshPipeline::descriptor_pool_info;
+            auto block_size = TaskMeshPipeline::pool_sets;
+            descriptor_pools_to_free.push_back(VK_NULL_HANDLE);
+            VkDescriptorPool* p_pool = &descriptor_pools_to_free.back();
+            unused_mesh_desc.reserve(unused_mesh_desc.size() + block_size);
+            NVVK_CHECK(vkCreateDescriptorPool(
+                dev, &pool_info, nullptr, p_pool));
+
+            VkDescriptorSetAllocateInfo set_info {
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                nullptr,
+                *p_pool,
+                1,
+                &task_mesh_pipeline.set_layout };
+
+            for (auto i = block_size; i != 0; --i) {
+                VkDescriptorSet set;
+                vkAllocateDescriptorSets(dev, &set_info, &set);
+                unused_mesh_desc.push_back(set);
+            }
+            goto alloc_descriptor;
+        }
+
+        // Bind descriptor set to point to the voxel buffer.
+        VkDescriptorBufferInfo buffer_info {
+            entry->buffer, 0, sizeof(MappedGroupMesh) };
+        VkWriteDescriptorSet write {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            nullptr,
+            entry->descriptor,
+            0, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            nullptr, &buffer_info, nullptr };
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
     }
 
     // Release resources of MeshEntry.  Only called by main thread.
     void destructor(MeshEntry* entry) noexcept
     {
-        unused_mesh_buffers.push_back( entry->buffer );
+        unused_mesh_buffers.push_back(entry->buffer);
+        unused_mesh_desc.push_back(entry->descriptor);
     }
 
     // Construct the given half of MeshStaging. Only called by main thread.
@@ -2476,17 +2562,17 @@ struct RendererVk :
 
         // Init the descriptor set.
       retry_set:
-        if (!unused_descriptor_sets.empty()) {
-            entry->voxels_descriptor = unused_descriptor_sets.back();
-            unused_descriptor_sets.pop_back();
+        if (!unused_raycast_desc.empty()) {
+            entry->voxels_descriptor = unused_raycast_desc.back();
+            unused_raycast_desc.pop_back();
         }
         else {
             auto pool_info = RaycastPipeline::descriptor_pool_info;
             auto block_size = RaycastPipeline::pool_sets;
             descriptor_pools_to_free.push_back(VK_NULL_HANDLE);
             VkDescriptorPool* p_pool = &descriptor_pools_to_free.back();
-            unused_descriptor_sets.reserve(
-                unused_descriptor_sets.size() + block_size);
+            unused_raycast_desc.reserve(
+                unused_raycast_desc.size() + block_size);
             NVVK_CHECK(vkCreateDescriptorPool(
                 dev, &pool_info, nullptr, p_pool));
 
@@ -2500,7 +2586,7 @@ struct RendererVk :
             for (auto i = block_size; i != 0; --i) {
                 VkDescriptorSet set;
                 vkAllocateDescriptorSets(dev, &set_info, &set);
-                unused_descriptor_sets.push_back(set);
+                unused_raycast_desc.push_back(set);
             }
             goto retry_set;
         }
@@ -2530,7 +2616,7 @@ struct RendererVk :
             { entry->aabb_buffer, entry->aabb_map } );
         unused_voxel_images.push_back(
             { entry->voxels_image, entry->voxels_view } );
-        unused_descriptor_sets.push_back(
+        unused_raycast_desc.push_back(
             { entry->voxels_descriptor } );
     }
 
