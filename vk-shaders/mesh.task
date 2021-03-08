@@ -4,10 +4,10 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_NV_mesh_shader : enable
 
-layout(local_size_x=32) in;
-
 #include "meshcommon.glsl"
 #include "PushConstant.glsl"
+
+layout(local_size_x=1) in;
 
 // Descriptor delivering the voxels in the chunk group.
 layout(set=0, binding=0) buffer MeshBuffer { GroupMesh mesh; };
@@ -29,6 +29,28 @@ void main()
                 & (EDGE_CHUNKS - 1u);
     ChunkDrawData draw_data =
         mesh.draw_data[chunk_idx.z][chunk_idx.y][chunk_idx.x];
+
+    // Unpack AABB and re-implement decide_chunk(...) == draw_mesh on
+    // GPU. Don't draw the chunk if the check doesn't pass.
+    uint packed_aabb_low = draw_data.packed_low;
+    uint packed_aabb_high = draw_data.packed_high;
+    vec3 aabb_low = vec3(
+        (packed_aabb_low >> X_SHIFT) & 255,
+        (packed_aabb_low >> Y_SHIFT) & 255,
+        (packed_aabb_low >> Z_SHIFT) & 255);
+    vec3 aabb_high = vec3(
+        (packed_aabb_high >> X_SHIFT) & 255,
+        (packed_aabb_high >> Y_SHIFT) & 255,
+        (packed_aabb_high >> Z_SHIFT) & 255);
+    vec3 floor_eye = floor(pc.pc.eye_relative_group_origin.xyz);
+    vec3 aabb_nearest = clamp(floor_eye, aabb_low, aabb_high);
+    vec3 disp = aabb_nearest - floor_eye;
+    float squared_dist = dot(disp, disp);
+    bool draw_mesh = squared_dist < pc.pc.raycast_thresh_squared - 1;
+    if (!draw_mesh) {
+        gl_TaskCountNV = 0;
+        return;
+    }
 
     // Round up to calculate needed number of mesh shaders groups to
     // dispatch, and divide up the voxels between them.
