@@ -1710,11 +1710,11 @@ struct RendererVk :
                     fprintf(stderr, "flush_transfer_cmd_buffer: no cmd buffer available\n");
                     cmd_buffer_fence_warning = true;
                 }
-                else {
-                    assert(result == VK_SUCCESS);
-                }
                 p_transfer_cmd_buffer = nullptr;
                 return;
+            }
+            else {
+                assert(result == VK_SUCCESS);
             }
         }
         // else {
