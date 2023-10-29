@@ -627,12 +627,16 @@ class RendererLogic : public RendererBase
     void draw_frame() override final
     {
         if (p_back->check_reset_invalidate_storage_flag()) {
+#if 1
+            destroy_stores();
+#else
             if (mesh_store != nullptr) {
                 mesh_store->invalidate();
             }
             if (raycast_store != nullptr) {
                 raycast_store->invalidate();
             }
+#endif
         }
 
         transforms = p_camera->get_transforms_vk(); // Use glClipControl.
