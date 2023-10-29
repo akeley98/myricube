@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <stdio.h>
 #include <thread>
 #include <vector>
 
@@ -91,6 +92,8 @@ template <typename MeshEntry,
 class RendererLogic : public RendererBase
 {
   protected:
+    static constexpr bool verbose = false;
+
     // Window, camera, world arguments used to launch the render thread.
     const std::shared_ptr<Window> p_window;
     const std::shared_ptr<SyncCamera> p_camera;
@@ -497,6 +500,9 @@ class RendererLogic : public RendererBase
         }
         }
 
+        if (verbose) {
+            fprintf(stderr, "Mesh entries:    %4u\n", unsigned(entries.size()));
+        }
         draw_mesh_entries(entries);
 
         // Handle requests for new chunk groups.
@@ -608,6 +614,9 @@ class RendererLogic : public RendererBase
         }
 
         // Draw all the raycast entries.
+        if (verbose) {
+            fprintf(stderr, "Raycast entries: %4u\n", unsigned(entries.size()));
+        }
         draw_raycast_entries(entries);
 
         // Now start filling the new staging buffers.
