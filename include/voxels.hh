@@ -464,9 +464,9 @@ class WorldCache
 {
     WorldHandle world;
 
-    // This limits the view distance to (31 * group_size) / 2
+    // This limits the view distance to (63 * group_size) / 2
     // otherwise we'll get horrible thrashing.
-    static constexpr int32_t modulus = 32;
+    static constexpr int32_t modulus = 64;
 
     // First, we need to store the bitfields corresponding to the
     // chunk groups we tried to read or modify. Every time we
