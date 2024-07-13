@@ -1,4 +1,5 @@
 #include "app.hh"
+#include "EnvVar.hh"
 #include "FastNoise.h"
 #include <array>
 #include <string>
@@ -7,8 +8,9 @@
 using namespace myricube;
 
 
-
-static std::array<std::string, 24> marlon_name_lines;
+namespace {
+extern std::array<std::string, 24> marlon_name_lines;
+}
 
 // Mystery code translated from Marlon's Python code.
 static void marlo(int radius, WorldHandle world_handle)
@@ -108,10 +110,13 @@ namespace myricube {
 class MarloPlanet : public App
 {
     VoxelWorld world;
+    int radius;
     std::thread my_thread;
 
   public:
-    MarloPlanet() : my_thread(marlo, 300, world.get_handle())
+    MarloPlanet()
+      : radius(int(EnvVar64("myricube_radius", 300)))
+      , my_thread(marlo, radius, world.get_handle())
     {
         my_thread.detach();
     }
@@ -128,7 +133,7 @@ MYRICUBE_ADD_APP(MarloPlanet)
 
 namespace {
 
-static std::array<std::string, 24> marlon_name_lines {
+std::array<std::string, 24> marlon_name_lines {
 "                                                                                                                                                                                                                                                                                        ",
 "                                                                                                                                                                                                                                                                                        ",
 "                                                            +++++++                                                  ++++                              ++++     ++++++++++++++++                                                                              ++++                      ",

@@ -4,6 +4,7 @@
 #define MYRICUBE_CAMERA_HH_
 
 #include "myricube.hh"
+#include "EnvVar.hh"
 
 #include <assert.h>
 #include <math.h>
@@ -70,7 +71,7 @@ class SyncCamera
     // Near and far plane for z-depth.
     // Far plane influences the chunk render distance.
     float near_plane = 0.1f;
-    int far_plane = 512;
+    int far_plane = default_far_plane();
 
     // Horizontal and vertical angle camera is pointed in.
     float theta = 1.5707f, phi = 1.5707f;
@@ -135,6 +136,11 @@ class SyncCamera
     {
         std::lock_guard guard(camera_mutex);
         near_plane = in;
+    }
+
+    static int default_far_plane()
+    {
+        return int(EnvVar64("myricube_far_plane", 512));
     }
 
     int get_far_plane() const
