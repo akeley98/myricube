@@ -574,9 +574,10 @@ class RendererLogic : public RendererBase
 
         // if (!disable_zcull_sort) {
         if (true) {
-            auto lt_depth = [] (const auto& left, const auto& right)
+            bool undermine = transforms.undermine_zcull;
+            auto lt_depth = [undermine] (const auto& left, const auto& right)
             {
-                return left.first < right.first;
+                return undermine ? left.first > right.first : left.first < right.first;
             };
             std::sort(group_coord_by_depth.begin(),
                       group_coord_by_depth.end(),

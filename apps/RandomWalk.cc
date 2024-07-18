@@ -5,7 +5,7 @@
 
 namespace myricube {
 
-template <bool InMemory>
+template <bool InMemory, bool HighContrast>
 class RandomWalkBase : public App
 {
     VoxelWorld world {
@@ -30,7 +30,13 @@ class RandomWalkBase : public App
                 case 4: y--; break;
                 case 5: z--; break;
             }
-            uint8_t green = uint8_t((rng() >> 25) + green_base);
+            uint8_t green;
+            if (HighContrast) {
+                green = int(rng()) >= 0 ? 255 : green_base;
+            }
+            else {
+                green = uint8_t((rng() >> 25) + green_base);
+            }
             Voxel voxel(red, green, blue);
             world.set(glm::ivec3(x, y, z), voxel);
         }
@@ -69,10 +75,12 @@ class RandomWalkBase : public App
     }
 };
 
-using RandomWalk = RandomWalkBase<false>;
-using RandomWalkMem = RandomWalkBase<true>;
+using RandomWalk = RandomWalkBase<false, false>;
+using RandomWalkMem = RandomWalkBase<true, false>;
+using RandomWalkHighContrastMem = RandomWalkBase<true, true>;
 
 MYRICUBE_ADD_APP(RandomWalk)
 MYRICUBE_ADD_APP(RandomWalkMem)
+MYRICUBE_ADD_APP(RandomWalkHighContrastMem)
 
 } // end namespace

@@ -386,6 +386,16 @@ void add_key_targets(Window& window, std::shared_ptr<SyncCamera> camera_arg)
         return !arg.repeat;
     };
     window.add_key_target("unload_gpu_storage", unload_gpu_storage);
+
+    KeyTarget toggle_undermine_zcull;
+    toggle_undermine_zcull.down = [&] (KeyArg) -> bool
+    {
+        const bool flag = !camera->get_undermine_zcull();
+        fprintf(stderr, "undermine_zcull: %i\n", flag);
+        camera->set_undermine_zcull(flag);
+        return true;
+    };
+    window.add_key_target("toggle_undermine_zcull", toggle_undermine_zcull);
 }
 
 // Given the full path of a key binds file, parse it for key bindings

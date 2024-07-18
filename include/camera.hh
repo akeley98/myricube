@@ -52,6 +52,7 @@ struct CameraTransforms
     // Maximum number of new chunk groups added to GPU memory per frame.
     int max_frame_new_chunk_groups;
 
+    bool undermine_zcull;
     int target_fragments;
     int frame_x, frame_y;
 };
@@ -89,6 +90,8 @@ class SyncCamera
     bool fog_enabled = true;
     bool black_fog = false;
     bool chunk_debug = false;
+
+    bool undermine_zcull = false;
 
     // Maximum number of fragments for the screen (integer
     // downsampling is done to meet this limit). Non-positive value
@@ -293,6 +296,18 @@ class SyncCamera
         target_fragments = in;
     }
 
+    bool get_undermine_zcull() const
+    {
+        std::lock_guard guard(camera_mutex);
+        return undermine_zcull;
+    }
+
+    void set_undermine_zcull(bool flag)
+    {
+        std::lock_guard guard(camera_mutex);
+        undermine_zcull = flag;
+    }
+
     // Move by the specified multiples of the normal right, up, and
     // forward vectors respectively.
     void frenet_move(float right, float up, float forward)
@@ -357,6 +372,7 @@ class SyncCamera
         t.use_black_fog = black_fog;
         t.chunk_debug = chunk_debug;
         t.max_frame_new_chunk_groups = max_frame_new_chunk_groups;
+        t.undermine_zcull = undermine_zcull;
         t.target_fragments = target_fragments;
         t.frame_x = frame_x;
         t.frame_y = frame_y;
