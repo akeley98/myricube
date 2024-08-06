@@ -10,8 +10,8 @@ class RandomWalkBase : public App
 {
     VoxelWorld world {
         InMemory
-        ? add_in_memory_prefix("RandomWalk/world.myricube")
-        : expand_filename("RandomWalk/world.myricube") };
+        ? add_in_memory_prefix("RandomWalk2/world.myricube")
+        : expand_filename("RandomWalk2/world.myricube") };
 
     std::mt19937 rng{19980724};
 
