@@ -83,17 +83,14 @@ struct ChunkDrawData
     PackedAABB aabb;       // AABB, for decide_chunk's benefit.
 };
 
-// Function for filling the above structures given a chunk. Requires
-// in addition the residue coordinate of the chunk's lower-left corner
-// (needed for positioning the AABB and voxel positions in the
-// containing chunk group's coordinate system).
+// Function for filling the above structures given a chunk.
 inline void fill_chunk_mesh(
     MappedChunkMesh* mesh_ptr,
     ChunkDrawData* draw_data_ptr,
-    const BinChunk& chunk,
-    glm::ivec3 chunk_residue)
+    const BinChunk& chunk)
 {
-    draw_data_ptr->aabb = PackedAABB(chunk, chunk_residue);
+    draw_data_ptr->aabb = PackedAABB(chunk);
+    glm::ivec3 chunk_residue = chunk.chunk_index * glm::ivec3(chunk_size);
 
     // Look up whether the voxel at the given coordinate
     // (relative to the lower-left of this chunk) is visible.

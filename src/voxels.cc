@@ -186,9 +186,7 @@ WorldHandle::WorldHandle(const filename_string& arg)
         unmap_if_disk_file<BinWorld>);
 
     // Finally check the magic number.
-    // Ignore the endian bit as that will be checked later.
-    auto xord = bin_world->magic_number ^ bin_world->expected_magic;
-    if ((xord & ~new_endian_magic) != 0) {
+    if (bin_world->magic_number != bin_world->expected_magic) {
         #ifdef MYRICUBE_WINDOWS
             fwprintf(stderr,
                 L"Incorrect magic number: %ls",
@@ -218,89 +216,6 @@ std::string group_coord_filename(glm::ivec3 group_coord)
     return result;
 }
 
-// Older versions of myricube used a different endianness for files.
-// I detected this by changing the magic number for new endianness
-// files.  I detect the old magic number here and fix the endianness
-// and magic number in-place if needed, but only if the user opted in
-// with a nonzero myricube_endian_fix environment variable (as this is
-// a potentially dangerous operation if interrupted).
-//
-// Return value: Return true if the endianness was wrong and we
-// corrected it.
-//
-// NOTE: This function is not actually const of course but it doesn't
-// matter since the actual files should all be read/write (they have
-// to be due to the dirty bits) and this is a hack anyway.
-static inline bool maybe_fix_endian(
-    const filename_string& filename,
-    const BinChunkGroup& group_const)
-{
-    BinChunkGroup& group = const_cast<BinChunkGroup&>(group_const);
-
-    auto old_magic_number = group.expected_magic & ~new_endian_magic;
-    if (group.magic_number != old_magic_number) {
-        return false;
-    }
-
-    thread_local EnvVar64 endian_fix_enabled("myricube_endian_fix", 0);
-
-    if (!endian_fix_enabled) {
-        #ifdef MYRICUBE_WINDOWS
-            fprintf(stderr, "Incorrect endianness: %ls\n", filename.c_str());
-            throw std::runtime_error("File had incorrect endianness"
-                "\nrun with environment variable myricube_endian_fix=1"
-                "\nto fix in-place (backup first!)");
-        #else
-            throw std::runtime_error("Incorrect endianness: " + filename
-                + "\nrun with environment variable myricube_endian_fix=1"
-                  "\nto fix in-place (backup first!)");
-        #endif
-    }
-
-    // I just realized the horrible things this function can do if run
-    // concurrently, so fix this here. This won't protect in case
-    // multiple myricube instances are running, but it's better than
-    // nothing (this function truly is a HORRIBLE hack, but I kinda
-    // need it now for bug-for-bug compatibility).
-    static std::mutex the_mutex;
-    std::lock_guard guard(the_mutex);
-    if (group.magic_number != old_magic_number) {
-        fprintf(stderr, "maybe_fix_endian: fixed by another thread\n");
-        return false;
-    }
-
-    for (int zH = 0; zH < edge_chunks; ++zH) {
-    for (int yH = 0; yH < edge_chunks; ++yH) {
-    for (int xH = 0; xH < edge_chunks; ++xH) {
-        BinChunk& chunk = group.chunk_array[zH][yH][xH];
-
-        for (int zL = 0; zL < chunk_size; ++zL) {
-        for (int yL = 0; yL < chunk_size; ++yL) {
-        for (int xL = 0; xL < chunk_size; ++xL) {
-            uint32_t* p_voxel = &chunk.voxel_array[zL][yL][xL];
-            uint32_t old_voxel = *p_voxel;
-            uint32_t new_voxel = 0;
-            new_voxel |= ((old_voxel >> 0) & 0xFF) << 24;
-            new_voxel |= ((old_voxel >> 8) & 0xFF) << 16;
-            new_voxel |= ((old_voxel >> 16) & 0xFF) << 8;
-            new_voxel |= ((old_voxel >> 24) & 0xFF) << 0;
-            *p_voxel = new_voxel;
-        }
-        }
-        }
-    }
-    }
-    }
-
-    group.magic_number |= new_endian_magic;
-    #ifdef MYRICUBE_WINDOWS
-        fprintf(stderr, "Fixed endianness of %ls\n", filename.c_str());
-    #else
-        fprintf(stderr, "Fixed endianness of %s\n", filename.c_str());
-    #endif
-    return true;
-}
-
 UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 {
     // Map the correct file for this chunk group.
@@ -319,8 +234,6 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
 
     // Check magic number and return.
     if (result->magic_number != result->expected_magic) {
-        bool okay = maybe_fix_endian(filename, *result);
-        if (okay) goto its_okay;
         #ifdef MYRICUBE_WINDOWS
             fwprintf(stderr,
                 L"Incorrect magic number: %ls",
@@ -330,7 +243,7 @@ UPtrMutChunkGroup WorldHandle::mut_chunk_group(glm::ivec3 group_coord)
             throw std::runtime_error("Incorrect magic number: " + filename);
         #endif
     }
-  its_okay:
+
     return result;
 }
 
@@ -344,8 +257,6 @@ UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
     if (result == nullptr) return nullptr;
 
     if (result->magic_number != result->expected_magic) {
-        bool okay = maybe_fix_endian(filename, *result);
-        if (okay) goto its_okay;
         #ifdef MYRICUBE_WINDOWS
             fwprintf(stderr,
                 L"Incorrect magic number: %ls\n", filename.c_str());
@@ -354,7 +265,7 @@ UPtrChunkGroup WorldHandle::view_chunk_group(glm::ivec3 group_coord) const
             throw std::runtime_error("Incorrect magic number: " + filename);
         #endif
     }
-  its_okay:
+
     return result;
 }
 

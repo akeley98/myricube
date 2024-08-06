@@ -135,44 +135,13 @@ struct Voxel
 
 
 
-// Chunk of voxels as it appears in binary on-disk.
-template <size_t ChunkSize>
-struct BinChunkT
-{
-    // Voxels (packed 32-bit color) in this chunk, in [z][y][x] order.
-    uint32_t voxel_array[ChunkSize][ChunkSize][ChunkSize] = { };
-
-    // Given the world or residue or in-chunk coordinate of a voxel
-    // within this chunk (masking makes all those coordinates the
-    // same), return said voxel.
-    uint32_t operator() (glm::ivec3 coord) const
-    {
-        return voxel_array[coord.z & (ChunkSize-1)]
-                          [coord.y & (ChunkSize-1)]
-                          [coord.x & (ChunkSize-1)];
-    }
-
-    // Set the voxel with the given world/residue/chunk coordinate.
-    void set(glm::ivec3 coord, uint32_t voxel)
-    {
-        voxel_array[coord.z & (ChunkSize-1)]
-                   [coord.y & (ChunkSize-1)]
-                   [coord.x & (ChunkSize-1)] = voxel;
-    }
-};
-
-using BinChunk = BinChunkT<chunk_size>;
-
-
-
 // Chunk group as it appears in binary on-disk.
 template <size_t EdgeChunks, size_t ChunkSize>
 struct BinChunkGroupT
 {
     static constexpr uint64_t expected_magic =
         chunk_group_base_magic_number |
-        uint64_t(EdgeChunks) << 32 |
-        uint64_t(ChunkSize) << 40 |
+        uint64_t(EdgeChunks * ChunkSize) << 32 |
         new_endian_magic;
 
     uint64_t magic_number = expected_magic;
@@ -194,8 +163,10 @@ struct BinChunkGroupT
         revision_number++;
     }
 
-    // Chunks within this chunk group, in [z][y][x] order.
-    BinChunkT<ChunkSize> chunk_array[EdgeChunks][EdgeChunks][EdgeChunks];
+    // Voxels (packed 32-bit color) in this chunk group, in [z][y][x] order.
+    uint32_t voxel_array[EdgeChunks * ChunkSize]
+                        [EdgeChunks * ChunkSize]
+                        [EdgeChunks * ChunkSize] = { };
 
     // Given the world or residue coordinate of a voxel in this chunk
     // group (again masking equalizes all those systems), return said
@@ -206,9 +177,7 @@ struct BinChunkGroupT
         auto residue_x = coord.x & group_mask;
         auto residue_y = coord.y & group_mask;
         auto residue_z = coord.z & group_mask;
-        return chunk_array[residue_z / ChunkSize]
-                          [residue_y / ChunkSize]
-                          [residue_x / ChunkSize] (coord);
+        return voxel_array[residue_z][residue_y][residue_x];
     }
 
     // Like above but set the voxel's value.
@@ -218,9 +187,7 @@ struct BinChunkGroupT
         auto residue_x = coord.x & group_mask;
         auto residue_y = coord.y & group_mask;
         auto residue_z = coord.z & group_mask;
-        return chunk_array[residue_z / ChunkSize]
-                          [residue_y / ChunkSize]
-                          [residue_x / ChunkSize].set(coord, voxel);
+        voxel_array[residue_z][residue_y][residue_x] = voxel;
     }
 };
 
@@ -228,6 +195,28 @@ using BinChunkGroup = BinChunkGroupT<edge_chunks, chunk_size>;
 
 static_assert(sizeof(BinChunkGroup) ==
     4096 + sizeof(uint32_t) * (group_size * group_size * group_size));
+
+
+// View of a chunk of voxels in chunk group.
+template <size_t EdgeChunks, size_t ChunkSize>
+struct BinChunkT
+{
+    const BinChunkGroupT<EdgeChunks, ChunkSize>* group;
+    glm::ivec3 chunk_index;
+
+    // Given the world or residue or in-chunk coordinate of a voxel
+    // within this chunk (masking makes all those coordinates the
+    // same), return said voxel.
+    uint32_t operator() (glm::ivec3 coord) const
+    {
+        return group->voxel_array
+                [(coord.z & (ChunkSize-1)) + chunk_index.z * ChunkSize]
+                [(coord.y & (ChunkSize-1)) + chunk_index.y * ChunkSize]
+                [(coord.x & (ChunkSize-1)) + chunk_index.x * ChunkSize];
+    }
+};
+
+using BinChunk = BinChunkT<edge_chunks, chunk_size>;
 
 
 
@@ -654,41 +643,24 @@ class VoxelWorld
         glm::ivec3 global_low = glm::min(corner0, corner1);
         glm::ivec3 global_high = glm::max(corner0, corner1);
 
-        // Run f for every voxel in the given chunk that overlaps with
-        // the caller-defined box. chunk_lower_left is the world
-        // coordinate of the lower-left-most voxel in the chunk.
-        auto map_chunk = [&] (BinChunk& chunk, glm::ivec3 chunk_lower_left)
+        // Run f for every voxel in the given chunk group that overlaps with
+        // the caller-defined box.
+        auto map_group = [&] (glm::ivec3 group_coord)
         {
+            glm::ivec3 group_lower_left = glm::ivec3(group_size * group_coord);
+            BinChunkGroup* group =
+                world_cache.get_entry(group_coord).chunk_group_ptr.get();
+
             glm::ivec3 local_low = glm::max(
-                glm::ivec3(0), global_low - chunk_lower_left);
+                glm::ivec3(0), global_low - group_lower_left);
             glm::ivec3 local_high = glm::min(
-                glm::ivec3(chunk_size-1), global_high - chunk_lower_left);
+                glm::ivec3(group_size-1), global_high - group_lower_left);
 
             for (int32_t z = local_low.z; z <= local_high.z; ++z) {
                 for (int32_t y = local_low.y; y <= local_high.y; ++y) {
                     for (int32_t x = local_low.x; x <= local_high.x; ++x) {
-                        glm::ivec3 coord = chunk_lower_left + glm::ivec3(x,y,z);
-                        f(&chunk.voxel_array[z][y][x], coord);
-                    }
-                }
-            }
-        };
-
-        // Given the group coordinate of a chunk group, map that chunk
-        // and run f on the voxels within that chunk that overlap with
-        // the caller-specified box. Also mark as dirty.
-        auto map_group = [&] (glm::ivec3 group_coord)
-        {
-            BinChunkGroup* group =
-                world_cache.get_entry(group_coord).chunk_group_ptr.get();
-
-            for (int z = 0; z < edge_chunks; ++z) {
-                for (int y = 0; y < edge_chunks; ++y) {
-                    for (int x = 0; x < edge_chunks; ++x) {
-                        BinChunk& chunk = group->chunk_array[z][y][x];
-                        glm::ivec3 chunk_lower_left = group_coord * group_size
-                                              + glm::ivec3(x,y,z) * chunk_size;
-                        map_chunk(chunk, chunk_lower_left);
+                        glm::ivec3 coord = group_lower_left + glm::ivec3(x,y,z);
+                        f(&group->voxel_array[z][y][x], coord);
                     }
                 }
             }

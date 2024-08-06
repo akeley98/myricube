@@ -55,10 +55,8 @@ const uint edge_chunks = uint(GROUP_SIZE / CHUNK_SIZE);
 layout(std430, binding=CHUNK_GROUP_VOXELS_PROGRAM_INDEX)
 readonly buffer ChunkGroupVoxels {
     uint voxel_colors
-        // chunk z/y/x in chunk group.
-        [edge_chunks][edge_chunks][edge_chunks]
-        // voxel z/y/x in chunk.
-        [CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE];
+        // voxel z/y/x in chunk group
+        [GROUP_SIZE][GROUP_SIZE][GROUP_SIZE];
 } chunk_group_voxels;
 
 // Texture (image) to write to.
@@ -70,8 +68,9 @@ void write_chunk(ivec3 chunk_index)
     for (uint z = gl_LocalInvocationID.z; z < uint(CHUNK_SIZE); z += gl_WorkGroupSize.z) {
     for (uint y = gl_LocalInvocationID.y; y < uint(CHUNK_SIZE); y += gl_WorkGroupSize.y) {
     for (uint x = gl_LocalInvocationID.x; x < uint(CHUNK_SIZE); x += gl_WorkGroupSize.x) {
-        uint packed_color = chunk_group_voxels.voxel_colors
-            [chunk_index.z][chunk_index.y][chunk_index.x][z][y][x];
+        uint packed_color = chunk_group_voxels.voxel_colors[chunk_index.z * CHUNK_SIZE + z]
+                                                           [chunk_index.y * CHUNK_SIZE + y]
+                                                           [chunk_index.x * CHUNK_SIZE + x];
         uvec4 color;
         color.r = 255u & packed_color >> RED_SHIFT;
         color.g = 255u & packed_color >> GREEN_SHIFT;

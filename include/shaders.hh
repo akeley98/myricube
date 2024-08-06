@@ -41,11 +41,8 @@ constexpr int chunk_group_voxels_binding_index = 0;
 // Data layout of said SSBO.
 struct ChunkGroupVoxels
 {
-    uint32_t voxel_colors
-        // chunk z/y/x in chunk group.
-        [edge_chunks][edge_chunks][edge_chunks]
-        // voxel z/y/x in chunk.
-        [chunk_size][chunk_size][chunk_size];
+    // voxel z/y/x in chunk group.
+    uint32_t voxel_colors [group_size][group_size][group_size];
 };
 
 // Image unit used by the staging compute shader, for the texture

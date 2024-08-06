@@ -428,8 +428,7 @@ struct RendererGL :
         for (int xL = 0; xL < edge_chunks; ++xL) {
             fill_chunk_mesh(&staging->vbo_map->chunks[zL][yL][xL],
                             &staging->draw_data[zL][yL][xL],
-                            group_ptr->chunk_array[zL][yL][xL],
-                            glm::ivec3(xL, yL, zL) * chunk_size);
+                            BinChunk{group_ptr, glm::ivec3(zL, yL, xL)});
         }
         }
         }
@@ -626,22 +625,18 @@ struct RendererGL :
     void worker_stage(
         RaycastStaging* stage, const BinChunkGroup* group_ptr) override
     {
+        const auto& source_voxels = group_ptr->voxel_array;
+        auto& device_voxels = stage->mapped_ssbo->voxel_colors;
+        auto sz = sizeof(uint32_t) * group_size*group_size*group_size;
+        assert(sz == sizeof(source_voxels));
+        assert(sz == sizeof(device_voxels));
+        memcpy(device_voxels, source_voxels, sz);
+
         for (int zL = 0; zL < edge_chunks; ++zL) {
         for (int yL = 0; yL < edge_chunks; ++yL) {
         for (int xL = 0; xL < edge_chunks; ++xL) {
-            // Load raw voxel data chunk-by-chunk onto the SSBO.
-            const BinChunk& bin_chunk = group_ptr->chunk_array[zL][yL][xL];
-            auto& source_chunk = bin_chunk.voxel_array;
-            auto& device_chunk =
-                stage->mapped_ssbo->voxel_colors[zL][yL][xL];
-            auto sz = sizeof(uint32_t) * chunk_size*chunk_size*chunk_size;
-            assert(sz == sizeof(source_chunk));
-            assert(sz == sizeof(device_chunk));
-            memcpy(device_chunk, source_chunk, sz);
-
-            // Also load the AABB for this chunk.
-            auto chunk_residue = glm::ivec3(xL, yL, zL) * chunk_size;
-            PackedAABB aabb(bin_chunk, chunk_residue);
+            // Load the AABB for this chunk.
+            PackedAABB aabb(BinChunk{group_ptr, glm::ivec3(xL, yL, zL)});
             stage->entry->mapped_aabb->aabb_array[zL][yL][xL] = aabb;
         }
         }
@@ -692,24 +687,13 @@ struct RendererGL :
     {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, staging->ssbo_name);
         glBindTexture(GL_TEXTURE_3D, staging->entry->texture_name);
-        auto& mapped_pbo = *staging->mapped_ssbo;
 
-        for (int x = 0; x < edge_chunks; ++x) {
-        for (int y = 0; y < edge_chunks; ++y) {
-        for (int z = 0; z < edge_chunks; ++z) {
-            auto offset =
-                reinterpret_cast<char*>(&mapped_pbo.voxel_colors[z][y][x])
-              - reinterpret_cast<char*>(&mapped_pbo.voxel_colors[0][0][0]);
-            glTexSubImage3D(
-                GL_TEXTURE_3D,
-                0,
-                x * chunk_size, y * chunk_size, z * chunk_size,
-                chunk_size, chunk_size, chunk_size,
-                GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV,
-                (void*) offset);
-        }
-        }
-        }
+        glTexSubImage3D(
+            GL_TEXTURE_3D,
+            0, 0, 0, 0,
+            group_size, group_size, group_size,
+            GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV,
+            0);
 
         static_assert(red_shift == 0, "fix GL_UNSIGNED_INT_8_8_8_8_REV");
         static_assert(green_shift == 8, "fix GL_UNSIGNED_INT_8_8_8_8_REV");

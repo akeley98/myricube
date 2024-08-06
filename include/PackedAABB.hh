@@ -41,11 +41,10 @@ struct PackedAABB
     }
 
     // Compute the AABB (in residue coordinates) of the given chunk.
-    // The residue coordinates of the lower corner of the chunk must
-    // also be given (as the AABB is relative to the chunk group's
-    // origin, not the chunk itself).
-    PackedAABB(const BinChunk& chunk, glm::ivec3 chunk_residue)
+    PackedAABB(const BinChunk& chunk)
     {
+        glm::ivec3 chunk_residue = chunk.chunk_index * chunk_size;
+
         // {xyz}_array[n] has visible_bit set iff there's some visible
         // voxel in the chunk with n == the voxel's {xyz} coordinate.
         uint32_t x_array[chunk_size] = { 0 };
@@ -57,7 +56,7 @@ struct PackedAABB
         for (size_t z = 0; z < chunk_size; ++z) {
             for (size_t y = 0; y < chunk_size; ++y) {
                 for (size_t x = 0; x < chunk_size; ++x) {
-                    uint32_t voxel = chunk.voxel_array[z][y][x];
+                    uint32_t voxel = chunk(glm::ivec3(x, y, z));
                     all_orrd |= voxel;
                     x_array[x] |= voxel;
                     y_array[y] |= voxel;
