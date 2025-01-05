@@ -209,11 +209,12 @@ struct RaycastEntry
 };
 
 
-
 struct MappedChunks
 {
-    BinChunk chunks[edge_chunks][edge_chunks][edge_chunks];
+    // voxel z/y/x in chunk group.
+    uint32_t voxel_colors[group_size][group_size][group_size];
 };
+
 
 // Staging buffer for the async cache of raycast chunk groups.
 struct RaycastStaging
@@ -2025,8 +2026,7 @@ struct RendererVk :
         for (int xL = 0; xL < edge_chunks; ++xL) {
             fill_chunk_mesh(&b->map->chunks[zL][yL][xL],
                             &entry->draw_data[zL][yL][xL],
-                            group_ptr->chunk_array[zL][yL][xL],
-                            glm::ivec3(xL, yL, zL) * chunk_size);
+                            BinChunk{group_ptr, glm::ivec3(xL, yL, zL)});
         }
         }
         }
@@ -2354,24 +2354,21 @@ struct RendererVk :
         RaycastStaging* staging, const BinChunkGroup* group_ptr) override
     {
         // Fill in the AABB buffer and voxel staging buffer.
+        const auto& source_voxels = group_ptr->voxel_array;
+        auto& device_voxels = staging->chunk_map->voxel_colors;
+        auto sz = sizeof(uint32_t) * group_size*group_size*group_size;
+        assert(sz == sizeof(source_voxels));
+        assert(sz == sizeof(device_voxels));
+        memcpy(device_voxels, source_voxels, sz);
+
         auto& aabb_array = staging->entry->aabb_map->aabb_array;
 
         for (int zL = 0; zL < edge_chunks; ++zL) {
         for (int yL = 0; yL < edge_chunks; ++yL) {
         for (int xL = 0; xL < edge_chunks; ++xL) {
-            // Load raw voxel data chunk-by-chunk onto the SSBO.
-            const BinChunk& bin_chunk = group_ptr->chunk_array[zL][yL][xL];
-            auto* p_source_chunk = &bin_chunk.voxel_array;
-            auto* p_device_chunk =
-                &staging->chunk_map->chunks[zL][yL][xL];
-            auto sz = sizeof(BinChunk);
-            assert(sz == sizeof(*p_source_chunk));
-            assert(sz == sizeof(*p_device_chunk));
-            memcpy(p_device_chunk, p_source_chunk, sz);
-
-            // Also load the AABB for this chunk.
-            auto chunk_residue = glm::ivec3(xL, yL, zL) * chunk_size;
-            PackedAABB aabb(bin_chunk, chunk_residue);
+            // Load the AABB for this chunk.
+            BinChunk bin_chunk{group_ptr, glm::ivec3(xL, yL, zL)};
+            PackedAABB aabb(bin_chunk);
             aabb_array[zL][yL][xL] = aabb;
         }
         }
@@ -2432,31 +2429,18 @@ struct RendererVk :
             0, nullptr,
             1, &barrier);
 
-        // Copy chunk-by-chunk from staging buffer to image.
-        VkBufferImageCopy regions[edge_chunks * edge_chunks * edge_chunks];
-        VkBufferImageCopy* pRegions = &regions[0];
-        for (int z = 0; z < edge_chunks; ++z) {
-        for (int y = 0; y < edge_chunks; ++y) {
-        for (int x = 0; x < edge_chunks; ++x) {
-            VkBufferImageCopy& region = *pRegions++;
-            region.bufferOffset =
-                reinterpret_cast<char*>(&staging->chunk_map->chunks[z][y][x])
-              - reinterpret_cast<char*>(&staging->chunk_map->chunks[0][0][0]);
-            region.bufferRowLength = chunk_size;
-            region.bufferImageHeight = chunk_size;
-            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            region.imageOffset = { x*chunk_size, y*chunk_size, z*chunk_size };
-            region.imageExtent = { chunk_size, chunk_size, chunk_size };
-        }
-        }
-        }
+        // Copy chunk group texture from staging buffer to image.
+        VkBufferImageCopy region{};
+        region.bufferRowLength = group_size;
+        region.bufferImageHeight = group_size;
+        region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        region.imageExtent = { group_size, group_size, group_size };
         vkCmdCopyBufferToImage(
             p_transfer_cmd_buffer->buffer,
             staging->chunk_buffer,
             staged_entry.voxels_image,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            edge_chunks * edge_chunks * edge_chunks,
-            &regions[0]);
+            1, &region);
 
         // Transition layout to general layout and transfer ownership
         // to the main queue family (used for graphics and swap chain
