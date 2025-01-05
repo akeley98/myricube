@@ -87,7 +87,7 @@ struct ChunkDrawData
 inline void fill_chunk_mesh(
     MappedChunkMesh* mesh_ptr,
     ChunkDrawData* draw_data_ptr,
-    const BinChunk& chunk)
+    BinChunkView chunk)
 {
     draw_data_ptr->aabb = PackedAABB(chunk);
     glm::ivec3 chunk_residue = chunk.chunk_index * glm::ivec3(chunk_size);

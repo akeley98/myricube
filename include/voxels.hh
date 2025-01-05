@@ -199,7 +199,7 @@ static_assert(sizeof(BinChunkGroup) ==
 
 // View of a chunk of voxels in chunk group.
 template <size_t EdgeChunks, size_t ChunkSize>
-struct BinChunkT
+struct BinChunkViewT
 {
     const BinChunkGroupT<EdgeChunks, ChunkSize>* group;
     glm::ivec3 chunk_index;
@@ -216,7 +216,7 @@ struct BinChunkT
     }
 };
 
-using BinChunk = BinChunkT<edge_chunks, chunk_size>;
+using BinChunkView = BinChunkViewT<edge_chunks, chunk_size>;
 
 
 

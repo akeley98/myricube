@@ -41,7 +41,7 @@ struct PackedAABB
     }
 
     // Compute the AABB (in residue coordinates) of the given chunk.
-    PackedAABB(const BinChunk& chunk)
+    PackedAABB(BinChunkView chunk)
     {
         glm::ivec3 chunk_residue = chunk.chunk_index * chunk_size;
 

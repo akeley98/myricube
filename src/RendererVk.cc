@@ -2026,7 +2026,7 @@ struct RendererVk :
         for (int xL = 0; xL < edge_chunks; ++xL) {
             fill_chunk_mesh(&b->map->chunks[zL][yL][xL],
                             &entry->draw_data[zL][yL][xL],
-                            BinChunk{group_ptr, glm::ivec3(xL, yL, zL)});
+                            BinChunkView{group_ptr, glm::ivec3(xL, yL, zL)});
         }
         }
         }
@@ -2367,8 +2367,7 @@ struct RendererVk :
         for (int yL = 0; yL < edge_chunks; ++yL) {
         for (int xL = 0; xL < edge_chunks; ++xL) {
             // Load the AABB for this chunk.
-            BinChunk bin_chunk{group_ptr, glm::ivec3(xL, yL, zL)};
-            PackedAABB aabb(bin_chunk);
+            PackedAABB aabb(BinChunkView{group_ptr, glm::ivec3(xL, yL, zL)});
             aabb_array[zL][yL][xL] = aabb;
         }
         }
