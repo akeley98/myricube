@@ -79,16 +79,15 @@ vec4 fog_border_color(
         * (1 / (magic_low - magic_high)),
         base_border_fade, 1.0);
 
-    float squared_dist_ratio = dist_squared/pc.pc.far_plane_squared;
-    float dist_ratio = sqrt(dist_squared/pc.pc.far_plane_squared);
-    float raw_fog_fade =
-        ((pc.pc.flags & MYRICUBE_FOG_BIT) != 0) ?
-        1.01357 * logistic(squared_dist_ratio - 0.5, -10.0) - 0.007 :
-        // 1.1 * logistic(squared_dist_ratio - 0.5, -6.0) - 0.05 :
-        // 1.1 * logistic(dist_ratio - 0.5, -6.0) - 0.05 :
-        // 2.164 * logistic(squared_dist_ratio - 0.5, -2.0) - 0.582 :
-        1.0;
-    float fog_fade = clamp(raw_fog_fade, 0.0, 1.0);
+    float fog_fade = 1.0;
+    if ((pc.pc.flags & MYRICUBE_FOG_BIT) != 0) {
+        const float F = 8;
+        float squared_dist_ratio = dist_squared/pc.pc.far_plane_squared;
+        float dist_ratio = sqrt(dist_squared/pc.pc.far_plane_squared);
+        const float scaled_dist = dist_ratio * (-2 - F) + F; // [1, 0] ->[-2, F]
+        float raw_fog_fade = 1.119 * logistic(scaled_dist, 1.0) - 0.119;
+        fog_fade = clamp(raw_fog_fade, 0.0, 1.0);
+    }
 
     // Apply fog and border effects.
     return
