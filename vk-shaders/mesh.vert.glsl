@@ -120,9 +120,9 @@ void main() {
     gl_Position = pc.pc.mvp * model_space_position;
 
     // Unpack the color.
-    float red   = srgb_from_u8((packed_color >> RED_SHIFT) & 255);
-    float green = srgb_from_u8((packed_color >> GREEN_SHIFT) & 255);
-    float blue  = srgb_from_u8((packed_color >> BLUE_SHIFT) & 255);
+    float red   = linear_from_srgb8((packed_color >> RED_SHIFT) & 255);
+    float green = linear_from_srgb8((packed_color >> GREEN_SHIFT) & 255);
+    float blue  = linear_from_srgb8((packed_color >> BLUE_SHIFT) & 255);
     v_color = vec3(red, green, blue);
 
     v_uv = uv_array[gl_VertexIndex];

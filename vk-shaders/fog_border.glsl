@@ -2,6 +2,7 @@
 #define MYRICUBE_FOG_BORDER_GLSL_
 
 #include "PushConstant.glsl"
+#include "srgb.glsl"
 
 #define BORDER_WIDTH_LOW  0.075
 #define BORDER_WIDTH_HIGH 0.45
@@ -15,6 +16,22 @@
 float logistic(float t, float k)
 {
     return 1.0 / (1 + exp(-k * t));
+}
+
+float dither_fog(float c, uint salt)
+{
+    // Copied pseudo random number generation code.
+    // http://www.jcgt.org/published/0009/03/02/
+    // Hash Functions for GPU Rendering, Mark Jarzynski, Marc Olano, NVIDIA
+    uvec3 v = uvec3(uvec2(gl_FragCoord.xy), salt);
+    v = v*1664525u + uvec3(1013904223u);
+    v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y;
+    v ^= v >> uvec3(16u);
+    v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y;
+
+    float bias = float((v.x >> 16) % 65536) * (1.0/65536);
+    uint srgb8 = srgb8_from_linear_bias(c, bias);
+    return linear_from_srgb8(srgb8);
 }
 
 // Convert world-space direction vector into a fog color. (i.e. this
@@ -90,8 +107,11 @@ vec4 fog_border_color(
     }
 
     // Apply fog and border effects.
-    return
-    vec4(fog_fade * border_fade * base_color + (1-fog_fade) * fog_color, 1.0);
+    vec3 color = fog_fade * border_fade * base_color + (1-fog_fade) * fog_color;
+    color.r = dither_fog(color.r, 19980724);
+    color.g = dither_fog(color.g, 20010106);
+    color.b = dither_fog(color.b, 757200);
+    return vec4(color, 1.0);
 }
 
 #endif
