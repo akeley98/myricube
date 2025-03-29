@@ -24,4 +24,12 @@ float linear_from_srgb8(uint arg)
                            pow((200.0F * u + 11.0F) * (1.0F / 211.0F), 2.4F);
 
 }
+
+vec3 linear_from_srgb8_vec(uvec3 arg)
+{
+    return vec3(linear_from_srgb8(arg.r),
+                linear_from_srgb8(arg.g),
+                linear_from_srgb8(arg.b));
+
+}
 #endif

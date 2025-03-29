@@ -58,7 +58,7 @@ void main()
 
     float dist_squared = dot(disp, disp);
     vec3 fog_color = fog_color_from_world_direction(disp);
-    out_color = fog_border_color(
+    out_color = fog_border_dither_color(
         voxel_color.rgb, dist_squared, uv, fog_color);
 }
 

@@ -78,7 +78,7 @@ void destructor(RaycastStaging*);
 
 // These should be widely supported, but I can detect support if
 // needed later. No stencil buffer for now.
-constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_SRGB;
+constexpr auto swap_chain_image_format = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr auto depth_format = VK_FORMAT_D32_SFLOAT;
 
 // Image format for 3D images used to store chunk groups' voxels.

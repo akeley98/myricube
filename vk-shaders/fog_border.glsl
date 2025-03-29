@@ -1,6 +1,7 @@
 #ifndef MYRICUBE_FOG_BORDER_GLSL_
 #define MYRICUBE_FOG_BORDER_GLSL_
 
+#include "dither.glsl"
 #include "PushConstant.glsl"
 #include "srgb.glsl"
 
@@ -9,29 +10,10 @@
 #define BORDER_FADE  0.75
 #define BORDER_DIST_LOW  100
 #define BORDER_DIST_HIGH 350
-#define DITHER_MASK 3
-#define DITHER_SCALAR (0.0035 / DITHER_MASK)
-// #define FOG_SCALAR 1.125
 
 float logistic(float t, float k)
 {
     return 1.0 / (1 + exp(-k * t));
-}
-
-float dither_fog(float c, uint salt)
-{
-    // Copied pseudo random number generation code.
-    // http://www.jcgt.org/published/0009/03/02/
-    // Hash Functions for GPU Rendering, Mark Jarzynski, Marc Olano, NVIDIA
-    uvec3 v = uvec3(uvec2(gl_FragCoord.xy), salt);
-    v = v*1664525u + uvec3(1013904223u);
-    v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y;
-    v ^= v >> uvec3(16u);
-    v.x += v.y*v.z; v.y += v.z*v.x; v.z += v.x*v.y;
-
-    float bias = float((v.x >> 16) % 65536) * (1.0/65536);
-    uint srgb8 = srgb8_from_linear_bias(c, bias);
-    return linear_from_srgb8(srgb8);
 }
 
 // Convert world-space direction vector into a fog color. (i.e. this
@@ -52,21 +34,17 @@ vec3 fog_color_from_world_direction(vec3 world_direction)
     const vec3 sunrise_color = vec3(0.708, 0.445, 0.638);
 
     const ivec2 pixel = ivec2(gl_FragCoord.xy);
-    const vec3 dither = vec3(
-        float(pixel.x & DITHER_MASK) * DITHER_SCALAR,
-        float((pixel.x ^ pixel.y) & DITHER_MASK) * DITHER_SCALAR,
-        float(pixel.y & DITHER_MASK) * DITHER_SCALAR);
 
     return mix(
         mix(sunrise_color, sky_color, t_sunrise),
-        earth_color, t_horizon) + dither;
+        earth_color, t_horizon);
 }
 
 // Utility function for adding fog and border effects (and setting
 // alpha=1).  This runs in srgb color space as my original magic
 // numbers and equations (that I don't undertand anymore) were tweaked
 // in srgb, not linear color. (TODO: I ignore this fact for now)
-vec4 fog_border_color(
+vec4 fog_border_dither_color(
     vec3 base_color, // The stored color of the voxel.
     float dist_squared, // Squared distance from eye to this fragment.
     vec2 uv, // "Texture coordinate"
@@ -108,10 +86,8 @@ vec4 fog_border_color(
 
     // Apply fog and border effects.
     vec3 color = fog_fade * border_fade * base_color + (1-fog_fade) * fog_color;
-    color.r = dither_fog(color.r, 19980724);
-    color.g = dither_fog(color.g, 20010106);
-    color.b = dither_fog(color.b, 757200);
-    return vec4(color, 1.0);
+    uvec3 srgb8 = srgb8_dither(color);
+    return vec4(vec3(srgb8) * (1 / 255.0), 1.0);
 }
 
 #endif

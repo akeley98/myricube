@@ -4,6 +4,7 @@
 layout(location=0) in vec2 normalized_screen_xy;
 layout(location=0) out vec4 color;
 
+#include "dither.glsl"
 #include "PushConstant.glsl"
 #include "fog_border.glsl"
 
@@ -21,5 +22,6 @@ void main() {
     vec3 frag_world_position = v.xyz / v.w;
     vec3 direction = frag_world_position - pc.pc.eye_relative_group_origin.xyz;
     vec3 fog_color = fog_color_from_world_direction(direction);
-    color = vec4(fog_color, 1.0);
+    uvec3 srgb8 = srgb8_dither(fog_color);
+    color = vec4(vec3(srgb8) * (1 / 255.0), 1.0);
 }
