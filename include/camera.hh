@@ -322,7 +322,7 @@ class SyncCamera
   private:
     // Convert camera data to actual camera transforms needed.
     // Projection matrix differs based on graphical API.
-    CameraTransforms get_transforms(bool OpenGL) const
+    CameraTransforms get_transforms(bool OpenGL, bool reverse_z) const
     {
         std::lock_guard guard(camera_mutex);
         CameraTransforms t;
@@ -348,19 +348,21 @@ class SyncCamera
             float(frame_x == 0 ? 1 : frame_x) /
             float(frame_y == 0 ? 1 : frame_y);
 
+        const float effective_near_plane = reverse_z ? far_plane : near_plane;
+        const float effective_far_plane = reverse_z ? near_plane : far_plane;
         if (OpenGL) {
             t.projection_matrix = glm::perspectiveRH_NO(
                 float(fovy_radians),
                 xy_ratio,
-                float(near_plane),
-                float(far_plane));
+                float(effective_near_plane),
+                float(effective_far_plane));
         }
         else {
             t.projection_matrix = glm::perspectiveRH_ZO(
                 float(fovy_radians),
                 xy_ratio,
-                float(near_plane),
-                float(far_plane));
+                float(effective_near_plane),
+                float(effective_far_plane));
             t.projection_matrix[1][1] *= -1.0f;
         }
 
@@ -381,14 +383,9 @@ class SyncCamera
     }
 
   public:
-    CameraTransforms get_transforms_gl() const
-    {
-        return get_transforms(true);
-    }
-
     CameraTransforms get_transforms_vk() const
     {
-        return get_transforms(false);
+        return get_transforms(false, true);
     }
 };
 

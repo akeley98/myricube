@@ -240,9 +240,10 @@ struct RendererGL :
     {
         p_window->gl_make_current(gladLoadGL);
 
-        glClearColor(0, 0, 0, 1);
+        glClearDepth(0);
+        glDepthFunc(GL_GREATER);  // Reversed Z
 
-        glDepthFunc(GL_LESS);
+        glClearColor(0, 0, 0, 1);
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);

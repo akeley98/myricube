@@ -948,7 +948,7 @@ struct MeshPipeline
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthStencil.depthTestEnable = VK_TRUE;
         depthStencil.depthWriteEnable = VK_TRUE;
-        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER;  // Reversed Z
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
@@ -1167,7 +1167,7 @@ struct RaycastPipeline
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthStencil.depthTestEnable = VK_TRUE;
         depthStencil.depthWriteEnable = VK_TRUE;
-        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER;  // Reversed Z
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
@@ -1334,7 +1334,7 @@ struct BackgroundPipeline
         depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthStencil.depthTestEnable = VK_FALSE;
         depthStencil.depthWriteEnable = VK_FALSE;
-        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER;  // Reversed Z
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
@@ -1786,7 +1786,7 @@ struct RendererVk :
         clear_color.float32[3] = 1.0f;
         std::array<VkClearValue, 2> clear_values{};
         clear_values[0].color = clear_color;            // Color attachment
-        clear_values[1].depthStencil = { max_depth, 0 };// Depth attachment
+        clear_values[1].depthStencil = { min_depth, 0 };// Depth (Reverse Z)
 
         // Write the frame-constant push constant fields.
         push_constant.flags = 0;
