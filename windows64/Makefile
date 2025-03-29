@@ -9,7 +9,7 @@ CFLAGS=  -Wall -Wextra -O3 -g -municode
 
 VK_LIB=~/.wine/drive_c/VulkanSDK/1.2.154.1/Lib/vulkan-1.lib
 
-default: myricube.exe myricube-gl.exe myricube-cvoxel.dll
+default: myricube.exe myricube-cvoxel.dll
 
 -include cckiss/Makefile
 -include ../OBJS-list
@@ -33,8 +33,8 @@ myricube.exe:  $(OBJS) $(GL_OBJS) $(VK_OBJS)
 myricube-vk.exe: $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS)
 	$(CXX)   $(OBJS) $(GL_DUMMY_OBJS) $(VK_OBJS) $(VK_LIB) $(W64_OPTIONS) -o myricube-vk.exe
 
-myricube-gl.exe: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
-	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) $(W64_OPTIONS) -o myricube-gl.exe
+# myricube-gl.exe: $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS)
+# 	$(CXX)   $(OBJS) $(GL_OBJS) $(VK_DUMMY_OBJS) $(W64_OPTIONS) -o myricube-gl.exe
 
 myricube-cvoxel.dll: $(LIBOBJS)
 	$(CXX) $(LIBOBJS) -municode -static -shared -o myricube-cvoxel.dll
