@@ -52,7 +52,7 @@ namespace myricube {
 // to be to switch from mesh to raycast graphics.
 // Keep as int to avoid rounding errors in distance culling.
 // Might make this configurable some day.
-constexpr int raycast_threshold = 160;
+constexpr int raycast_threshold = 42;
 
 // Slightly higher threshold than raycast_threshold. Chunk groups
 // within this distance to the camera have their meshes loaded even
@@ -445,8 +445,8 @@ class RendererLogic : public RendererBase
     {
         if (mesh_store == nullptr) {
             static constexpr AsyncCacheArgs args = {
-                3,    // modulus
-                8,    // associativity
+                2,    // modulus
+                2,    // associativity
                 32,   // staging buffers
                 1,    // worker threads
                 10,   // condvar timeout in milliseconds
