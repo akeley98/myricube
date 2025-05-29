@@ -446,7 +446,7 @@ class RendererLogic : public RendererBase
         if (mesh_store == nullptr) {
             static constexpr AsyncCacheArgs args = {
                 2,    // modulus
-                2,    // associativity
+                4,    // associativity
                 32,   // staging buffers
                 1,    // worker threads
                 10,   // condvar timeout in milliseconds
