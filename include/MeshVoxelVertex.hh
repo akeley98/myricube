@@ -57,66 +57,58 @@ struct MeshVoxelVertex
     }
 };
 
-// The maximum number of MeshVoxelVerts needed for one chunk.  For now
+// The maximum number of MeshVoxelVerts needed for one chunk group.
 // it's just the total number of voxels per chunk. I'm sure there's a
 // lower possible bound but for now I'll be conservative (even though
 // I'm desperate for GPU memory).
-constexpr size_t chunk_max_verts = chunk_size * chunk_size * chunk_size;
+constexpr size_t group_max_verts = group_size * group_size * group_size;
 
 // Bytes on GPU for storing the mesh (list of visible voxels) of one
-// chunk.
-struct MappedChunkMesh
-{
-    MeshVoxelVertex verts[chunk_max_verts];
-};
-
-// An entire chunk group of MappedChunkMesh, [z][y][x] order as typical.
+// chunk group.
 struct MappedGroupMesh
 {
-    MappedChunkMesh chunks[edge_chunks][edge_chunks][edge_chunks];
+    MeshVoxelVertex verts[group_max_verts];
 };
 
 // Extra data needed to interpret MappedChunkMesh correctly for drawing.
 struct ChunkDrawData
 {
-    size_t vert_count = 0; // Vertex (visible voxel) count i.e. # instances
+    // Vertex (visible voxel) counts( i.e. # instances)
+    // stored in MappedGroupMesh::verts[first_voxel : first_voxel+voxel_count]
+    uint32_t first_voxel = 0, voxel_count = 0;
+
     PackedAABB aabb;       // AABB, for decide_chunk's benefit.
 };
 
 // Function for filling the above structures given a chunk.
-inline void fill_chunk_mesh(
-    MappedChunkMesh* mesh_ptr,
-    ChunkDrawData* draw_data_ptr,
-    BinChunkView chunk)
+// Returns the number of voxels filled in MappedGroupMesh
+inline size_t fill_chunk_group_mesh(
+    MappedGroupMesh* mesh_ptr,
+    ChunkDrawData (&chunk_draw_data)[edge_chunks][edge_chunks][edge_chunks],  // [z][y][x]
+    const BinChunkGroup& chunk_group)
 {
-    draw_data_ptr->aabb = PackedAABB(chunk);
-    glm::ivec3 chunk_residue = chunk.chunk_index * glm::ivec3(chunk_size);
+    uint32_t total_voxels = 0;
 
     // Look up whether the voxel at the given coordinate
-    // (relative to the lower-left of this chunk) is visible.
-    // Act as if voxels outside the chunk are always invisible.
-    auto visible_block = [&chunk] (glm::ivec3 coord) -> bool
+    // (relative to the lower-left of this chunk group) is visible.
+    // Act as if voxels outside the chunk group are always invisible.
+    auto visible_block = [&chunk_group] (glm::ivec3 coord) -> bool
     {
-        if (coord.x < 0 or coord.x >= chunk_size
-         or coord.y < 0 or coord.y >= chunk_size
-         or coord.z < 0 or coord.z >= chunk_size) return false;
-        // Note: the masking in Chunk::operator () won't mess up
-        // this coord. (I'm kind of violating my own comment in
-        // Chunk::operator() because coord won't actually be in
-        // the chunk unless that chunk is at (0,0,0)).
-        return chunk(coord) & visible_bit;
+        if (coord.x < 0 or coord.x >= group_size
+         or coord.y < 0 or coord.y >= group_size
+         or coord.z < 0 or coord.z >= group_size) return false;
+        return chunk_group(coord) & visible_bit;
     };
 
-    auto visit_voxel = [
-        mesh_ptr, draw_data_ptr, &chunk, visible_block, chunk_residue]
-    (glm::ivec3 coord)
+    auto visit_voxel = [mesh_ptr, &chunk_group, visible_block, &total_voxels]
+    (glm::ivec3 coord, ChunkDrawData* draw_data_ptr)
     {
-        auto v = chunk(coord);
+        auto v = chunk_group(coord);
         if (0 == (v & visible_bit)) return;
 
-        uint8_t x = uint8_t(coord.x) + chunk_residue.x;
-        uint8_t y = uint8_t(coord.y) + chunk_residue.y;
-        uint8_t z = uint8_t(coord.z) + chunk_residue.z;
+        uint8_t x = uint8_t(coord.x);
+        uint8_t y = uint8_t(coord.y);
+        uint8_t z = uint8_t(coord.z);
 
         MeshVoxelVertex vert(v, x, y, z);
 
@@ -142,20 +134,37 @@ inline void fill_chunk_mesh(
 
         // Add this voxel only if it's visible.
         if ((vert.packed_residue_face_bits & all_face_bits) != 0) {
-            assert(draw_data_ptr->vert_count < chunk_max_verts);
-            mesh_ptr->verts[draw_data_ptr->vert_count++] = vert;
+            const auto idx = draw_data_ptr->first_voxel
+                             + draw_data_ptr->voxel_count++;
+            assert(idx < group_max_verts);
+            mesh_ptr->verts[idx] = vert;
+            assert(idx == total_voxels);
+            total_voxels++;
         }
     };
 
-    draw_data_ptr->vert_count = 0;
-
-    for (int z = 0; z < chunk_size; ++z) {
-        for (int y = 0; y < chunk_size; ++y) {
-            for (int x = 0; x < chunk_size; ++x) {
-                visit_voxel(glm::ivec3(x, y, z));
+    for (int zC = 0; zC < edge_chunks; ++zC) {
+        for (int yC = 0; yC < edge_chunks; ++yC) {
+            for (int xC = 0; xC < edge_chunks; ++xC) {
+                glm::ivec3 chunk_index(xC, yC, zC);
+                ChunkDrawData* draw_data_ptr = &chunk_draw_data[zC][yC][xC];
+                BinChunkView chunk_view{&chunk_group, chunk_index};
+                draw_data_ptr->first_voxel = total_voxels;
+                draw_data_ptr->voxel_count = 0;
+                draw_data_ptr->aabb = PackedAABB(chunk_view);
+                for (int zV = 0; zV < chunk_size; ++zV) {
+                    for (int yV = 0; yV < chunk_size; ++yV) {
+                        for (int xV = 0; xV < chunk_size; ++xV) {
+                            auto coord = glm::ivec3(xV, yV, zV)
+                                         + chunk_index * chunk_size;
+                            visit_voxel(coord, draw_data_ptr);
+                        }
+                    }
+                }
             }
         }
     }
+    return total_voxels;
 }
 
 } // end namespace

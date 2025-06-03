@@ -41,25 +41,6 @@ struct MeshEntry
     // Size in bytes of the vbo's data store on the GPU.
     static constexpr GLsizeiptr vbo_bytes = sizeof(MappedGroupMesh);
 
-    // Return the offset (in number of MeshVoxelVertex's, not bytes)
-    // into the VBO where the data from mesh_array[z][y][x] is copied
-    // into.
-    static unsigned vert_offset(unsigned x, unsigned y, unsigned z)
-    {
-        assert(x < edge_chunks and y < edge_chunks and z < edge_chunks);
-        unsigned chunk_idx = x + y*edge_chunks + z*edge_chunks*edge_chunks;
-        return chunk_idx * chunk_max_verts;
-    }
-
-    // Same as above, but return offset as count of bytes.
-    static GLsizeiptr byte_offset(unsigned x, unsigned y, unsigned z)
-    {
-        auto vert_sz = GLsizeiptr(sizeof(MeshVoxelVertex));
-        GLsizeiptr off = vert_offset(x, y, z) * vert_sz;
-        assert(size_t(off) < vbo_bytes);
-        return off;
-    }
-
     MeshEntry()
     {
         auto storage_flags = GL_MAP_WRITE_BIT
@@ -389,7 +370,7 @@ struct RendererGL :
                             continue;
                         }
 
-                        if (draw_data.vert_count == 0) continue;
+                        if (draw_data.voxel_count == 0) continue;
 
                         // Need to choose the base instance because
                         // every chunk's data is at a different offset
@@ -401,9 +382,8 @@ struct RendererGL :
                         glDrawArraysInstancedBaseInstance(
                             GL_TRIANGLES,
                             0, 36,
-                            draw_data.vert_count,
-                            entry.vert_offset(x, y, z));
-                            // ^^^ Instance offset, depends on chunk.
+                            draw_data.voxel_count,
+                            draw_data.first_voxel);
                         ++drawn_chunk_count;
                     }
                 }
@@ -424,15 +404,8 @@ struct RendererGL :
     void worker_stage(
         MeshStaging* staging, const BinChunkGroup* group_ptr) override
     {
-        for (int zL = 0; zL < edge_chunks; ++zL) {
-        for (int yL = 0; yL < edge_chunks; ++yL) {
-        for (int xL = 0; xL < edge_chunks; ++xL) {
-            fill_chunk_mesh(&staging->vbo_map->chunks[zL][yL][xL],
-                            &staging->draw_data[zL][yL][xL],
-                            BinChunkView{group_ptr, glm::ivec3(zL, yL, xL)});
-        }
-        }
-        }
+        fill_chunk_group_mesh(
+            staging->vbo_map, staging->draw_data, *group_ptr);
     }
 
     // Since MeshEntry and MeshStaging are actually the same,

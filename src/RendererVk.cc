@@ -108,25 +108,6 @@ struct MeshEntry
     // Size in bytes of the vbo's data store on the GPU.
     static constexpr size_t vbo_bytes = sizeof(MappedGroupMesh);
 
-    // Return the offset (in number of MeshVoxelVertex's, not bytes)
-    // into the VBO where the data from mesh_array[z][y][x] is copied
-    // into.
-    static unsigned vert_offset(unsigned x, unsigned y, unsigned z)
-    {
-        assert(x < edge_chunks and y < edge_chunks and z < edge_chunks);
-        unsigned chunk_idx = x + y*edge_chunks + z*edge_chunks*edge_chunks;
-        return chunk_idx * chunk_max_verts;
-    }
-
-    // Same as above, but return offset as count of bytes.
-    static VkDeviceSize byte_offset(unsigned x, unsigned y, unsigned z)
-    {
-        auto vert_sz = VkDeviceSize(sizeof(MeshVoxelVertex));
-        VkDeviceSize off = vert_offset(x, y, z) * vert_sz;
-        assert(size_t(off) < vbo_bytes);
-        return off;
-    }
-
     MeshEntry() { constructor(this); }
 
     MeshEntry(MeshEntry&& other) = delete;
@@ -148,6 +129,8 @@ struct MeshStagingHalf
 
     // Persistent coherent mapping of staging_buffer.
     MappedGroupMesh* map = nullptr;
+
+    uint32_t total_voxels = 0;
 };
 
 // MeshEntry plus two staging buffers.
@@ -1915,10 +1898,10 @@ struct RendererVk :
                     continue;
                 }
 
-                if (draw_data.vert_count == 0) continue;
+                if (draw_data.voxel_count == 0) continue;
                 // Draw with instance rendering (36 verts per voxel).
-                uint32_t instances = uint32_t(draw_data.vert_count);
-                uint32_t base = MeshEntry::vert_offset(x, y, z);
+                uint32_t instances = draw_data.voxel_count;
+                uint32_t base = draw_data.first_voxel;
                 vkCmdDraw(frame_cmd_buffer, 36, instances, 0, base);
             }
             }
@@ -2021,15 +2004,8 @@ struct RendererVk :
         MeshStagingHalf* b = staging->use_odd ? &staging->odd : &staging->even;
 
         MeshEntry* entry = &staging->entry;
-        for (int zL = 0; zL < edge_chunks; ++zL) {
-        for (int yL = 0; yL < edge_chunks; ++yL) {
-        for (int xL = 0; xL < edge_chunks; ++xL) {
-            fill_chunk_mesh(&b->map->chunks[zL][yL][xL],
-                            &entry->draw_data[zL][yL][xL],
-                            BinChunkView{group_ptr, glm::ivec3(xL, yL, zL)});
-        }
-        }
-        }
+        b->total_voxels = fill_chunk_group_mesh(
+                b->map, entry->draw_data, *group_ptr);
     }
 
     // Use the pre_frame_buffer to copy the staging vertex buffer to
@@ -2045,12 +2021,12 @@ struct RendererVk :
         VkBuffer src_buffer = b->staging_buffer;
         VkBuffer dst_buffer = staging->entry.buffer;
 
-        VkBufferCopy region { 0, 0, sizeof(MappedGroupMesh) };
-        vkCmdCopyBuffer(
-            pre_frame_buffer,
-            src_buffer,
-            dst_buffer,
-            1, &region);
+        VkBufferCopy region{
+            0, 0, b->total_voxels * sizeof(b->map->verts[0])};
+        if (region.size > 0) {
+            vkCmdCopyBuffer(
+                pre_frame_buffer, src_buffer, dst_buffer, 1, &region);
+        }
 
         VkBufferMemoryBarrier barrier {
             VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
